@@ -184,6 +184,11 @@ app.use((req, res, next) => {
 const admin = (req, res, next) =>
   req.user && req.user.role === 'admin' ? next()
     : req.method === 'GET' ? res.redirect('/login?next=/admin') : res.sendStatus(403);
+const adminish = (req, res, next) =>
+  req.user && (req.user.role === 'admin' || req.user.role === 'partial') ? next()
+    : req.method === 'GET' ? res.redirect('/login?next=/admin') : res.sendStatus(403);
+const isCentral = u => !!u && u.email === ADMIN_EMAIL;
+const central = (req, res, next) => isCentral(req.user) ? next() : res.sendStatus(403);
 
 const CSS = `:root{--bg:#12121c;--panel:rgba(32,48,96,.30);--line:rgba(56,176,248,.24);--fg:#eaf2ff;--mut:#93a0bd;--blue:#38b0f8;--blue2:#1c7fe0;--pink:#f000e8;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 html{background:var(--bg);scroll-padding-top:env(safe-area-inset-top,0px)}
@@ -241,7 +246,7 @@ footer{text-align:center;color:var(--mut);font-size:13px;padding:20px}
 
 const layout = (title, body, user) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title><style>${CSS}</style></head><body>
 <header class="top"><a class="brand" href="/"><span class="logo"></span>Studies Hub</a><nav>${user
-    ? `${user.role === 'admin' ? '<a class="btn ghost" href="/admin">Admin</a>' : ''}<form method="post" action="/logout"><button class="ghost">Log out</button></form>`
+    ? `${(user.role === 'admin' || user.role === 'partial') ? '<a class="btn ghost" href="/admin">Admin</a>' : ''}<form method="post" action="/logout"><button class="ghost">Log out</button></form>`
     : '<a class="btn ghost" href="/login">Log in</a><a class="btn" href="/signup">Sign up</a>'}</nav></header>
 <main>${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub</footer>${user && AI ? CHAT_HTML : ''}</body></html>`;
 
@@ -493,38 +498,62 @@ const back = msg => '/admin?msg=' + encodeURIComponent(msg);
 
 // ---------- dashboard body: what a logged-in visitor sees at "/" ----------
 function dashboardBody(req) {
-  const u = req.user, isAdmin = u.role === 'admin';
+  const u = req.user, central_ = isCentral(u), canUsers = u.role === 'admin', canPages = canUsers || u.role === 'partial';
   const count = sql => db.prepare(sql).get().n;
   const initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?');
   const tile = (href, icon, title, sub, extra = '') => `<a class="tile" href="${href}"${extra}><span class="stat">${icon}</span><h3>${title}</h3><span class="mut">${sub}</span></a>`;
   const shortcuts = [
     tile('/browse', '🌐', 'Browse pages', 'See everything that is live'),
     AI ? tile('#', '💬', 'Ask the assistant', 'Get quick answers', ' onclick="document.getElementById(\'ai-open\').click();return false"') : '',
-    isAdmin ? tile('/admin#upload', '⬆️', 'Upload a page', 'Add a new HTML file') : '',
-    isAdmin ? tile('/admin#pages', '🗂️', 'Manage pages', 'Replace, lock or delete') : '',
-    isAdmin ? tile('/admin#users', '👥', 'Users', 'Verify or remove accounts') : ''
+    canPages ? tile('/admin#upload', '⬆️', 'Upload a page', 'Add a new HTML file') : '',
+    canPages ? tile('/admin#pages', '🗂️', 'Manage pages', 'Replace, lock or delete') : '',
+    canUsers ? tile('/admin#users', '👥', 'Users', 'Verify, remove or set roles') : ''
   ].join('');
   const statRow = (rows) => `<div class="grid">${rows.map(([k, v]) => `<div class="tile"><span class="stat">${v}</span><span class="mut">${k}</span></div>`).join('')}</div>`;
-  const stats = isAdmin
+  const stats = canUsers
     ? statRow([['Pages', count('SELECT COUNT(*) n FROM pages')], ['Users', count('SELECT COUNT(*) n FROM users')], ['Waiting to verify', count('SELECT COUNT(*) n FROM users WHERE verified=0')]])
+    : canPages
+    ? statRow([['Pages', count('SELECT COUNT(*) n FROM pages')], ['Members-only', count('SELECT COUNT(*) n FROM pages WHERE members_only=1')]])
     : statRow([['Available to you', count('SELECT COUNT(*) n FROM pages')], ['Members-only', count('SELECT COUNT(*) n FROM pages WHERE members_only=1')], ["Added this week", count("SELECT COUNT(*) n FROM pages WHERE created_at >= datetime('now','-7 days')")]]);
   const recent = db.prepare('SELECT slug,title,members_only FROM pages ORDER BY id DESC LIMIT 5').all();
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
-  return `<div class="dash-hero"><div class="dash-top"><span class="avatar">${initial}</span><div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${isAdmin ? 'You are the admin. Manage the whole site from here.' : 'Everything you can do on Studies Hub, in one place.'}</p></div></div>
+  const subtitle = central_ ? 'You are the central admin. Manage the whole site from here.'
+    : canUsers ? 'You are an admin. Manage pages and users.'
+    : canPages ? 'You can upload and manage pages here.'
+    : 'Everything you can do on Studies Hub, in one place.';
+  return `<div class="dash-hero"><div class="dash-top"><span class="avatar">${initial}</span><div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}</p></div></div>
 <p style="margin:14px 0 0">${pill} <span class="mut">&middot; member since ${esc(String(u.created_at).slice(0, 10))}</span></p></div>
 ${stats}<h2 class="sec">Shortcuts</h2><div class="grid">${shortcuts}</div>
 <div class="row sec" style="align-items:baseline"><h2 style="margin:0">Recently added</h2><a href="/browse" class="mut">See all pages &rarr;</a></div>
 ${recent.length
     ? `<div class="grid">${recent.map(p => `<a class="tile" href="/p/${p.slug}"><span class="chip${p.members_only ? ' lock' : ''}">${p.members_only ? 'Members' : 'Open'}</span><h3>${esc(p.title)}</h3><span class="go">View page &rarr;</span></a>`).join('')}</div>`
     : '<p class="mut">Nothing published yet.</p>'}
-<h2 class="sec">Your account</h2><div class="card row"><div><b>${esc(u.name)}</b><br><span class="mut">${esc(u.email)} &middot; ${u.verified ? 'email verified' : 'email not verified'}</span></div><form method="post" action="/logout"><button class="ghost">Log out</button></form></div>`;
+<h2 class="sec">Your account</h2><div class="card"><form method="post" action="/account/name" class="row" style="gap:8px;flex-wrap:wrap"><input name="name" value="${esc(u.name)}" maxlength="80" required style="max-width:220px"><button class="ghost">Save name</button></form>
+<p class="mut" style="margin:6px 0 0">${esc(u.email)} &middot; ${u.verified ? 'email verified' : 'email not verified'}</p>
+<form method="post" action="/logout" style="margin-top:8px"><button class="ghost">Log out</button></form></div>`;
 }
+
+app.post('/account/name', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const name = String(req.body.name || '').trim().slice(0, 80);
+  if (!name) return res.redirect('/');
+  db.prepare('UPDATE users SET name=? WHERE id=?').run(name, req.user.id);
+  res.redirect('/');
+});
 
 app.get('/dashboard', (req, res) => res.redirect(req.user ? '/' : '/login'));
 
-app.get('/admin', admin, (req, res) => {
+app.get('/admin', adminish, (req, res) => {
+  const canUsers = req.user.role === 'admin', central_ = isCentral(req.user);
   const pages = db.prepare('SELECT * FROM pages ORDER BY id DESC').all();
-  const users = db.prepare('SELECT id,name,email,role,verified,created_at FROM users ORDER BY id DESC').all();
+  const roleLabel = { admin: 'Full admin', partial: 'Partial admin', user: 'User' };
+  const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${['user', 'partial', 'admin'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${roleLabel[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
+  const usersSection = canUsers ? (() => {
+    const users = db.prepare('SELECT id,name,email,role,verified,created_at FROM users ORDER BY id DESC').all();
+    return `<h3 id="users">Registered users (${users.length})</h3><div style="overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th>Role</th><th></th></tr>${users.map(u =>
+      `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${u.verified ? 'verified' : `<form method="post" action="/admin/users/${u.id}/verify"><button class="link">Unverified: verify now</button></form>`}</td><td>${u.email === ADMIN_EMAIL ? 'Central admin' : central_ ? roleSelect(u) : roleLabel[u.role] || 'User'}</td><td>${u.role === 'admin'
+        ? '' : `<form method="post" action="/admin/users/${u.id}/delete" onsubmit="return confirm('Remove this user?')"><button class="link">Remove</button></form>`}</td></tr>`).join('')}</table></div>`;
+  })() : '';
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload an HTML page</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
@@ -536,12 +565,10 @@ app.get('/admin', admin, (req, res) => {
 <form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" accept=".html,.htm" required style="width:auto"><button>Replace file</button></form>
 <form method="post" action="/admin/pages/${p.id}/delete" onsubmit="return confirm('Delete this page?')"><button class="link">Delete</button></form></div></div>`).join('')
     || '<p class="mut">No pages yet.</p>'}
-<h3 id="users">Registered users (${users.length})</h3><div style="overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th></th></tr>${users.map(u =>
-      `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${u.verified ? 'verified' : `<form method="post" action="/admin/users/${u.id}/verify"><button class="link">Unverified: verify now</button></form>`}</td><td>${u.role === 'admin' ? 'admin'
-        : `<form method="post" action="/admin/users/${u.id}/delete" onsubmit="return confirm('Remove this user?')"><button class="link">Remove</button></form>`}</td></tr>`).join('')}</table></div>`, req.user));
+${usersSection}`, req.user));
 });
 
-app.post('/admin/upload', admin, upload.single('file'), (req, res) => {
+app.post('/admin/upload', adminish, upload.single('file'), (req, res) => {
   if (!req.file) return res.redirect(back('Choose a file first.'));
   const base = req.file.originalname.replace(/\.html?$/i, '');
   const slug = uniqueSlug(slugify(base));
@@ -550,16 +577,16 @@ app.post('/admin/upload', admin, upload.single('file'), (req, res) => {
   res.redirect(back(`Published at /p/${slug}`));
 });
 
-app.post('/admin/pages/:id/replace', admin, upload.single('file'), (req, res) => {
+app.post('/admin/pages/:id/replace', adminish, upload.single('file'), (req, res) => {
   if (!req.file) return res.redirect(back('Choose a file first.'));
   db.prepare('UPDATE pages SET html=? WHERE id=?').run(req.file.buffer.toString('utf8'), req.params.id);
   res.redirect(back('File replaced.'));
 });
-app.post('/admin/pages/:id/toggle', admin, (req, res) => {
+app.post('/admin/pages/:id/toggle', adminish, (req, res) => {
   db.prepare('UPDATE pages SET members_only = 1 - members_only WHERE id=?').run(req.params.id);
   res.redirect('/admin');
 });
-app.post('/admin/pages/:id/delete', admin, (req, res) => {
+app.post('/admin/pages/:id/delete', adminish, (req, res) => {
   db.prepare('DELETE FROM pages WHERE id=?').run(req.params.id);
   res.redirect(back('Page deleted.'));
 });
@@ -571,6 +598,14 @@ app.post('/admin/users/:id/delete', admin, (req, res) => {
   db.prepare("DELETE FROM sessions WHERE user_id=?").run(req.params.id);
   db.prepare("DELETE FROM users WHERE id=? AND role!='admin'").run(req.params.id);
   res.redirect(back('User removed.'));
+});
+// Only the central admin (the ADMIN_EMAIL account) can grant or remove partial/full admin access,
+// and only for users who have already registered.
+app.post('/admin/users/:id/role', central, (req, res) => {
+  const role = ['user', 'partial', 'admin'].includes(req.body.role) ? req.body.role : 'user';
+  const target = db.prepare('SELECT email FROM users WHERE id=?').get(req.params.id);
+  if (target && target.email !== ADMIN_EMAIL) db.prepare('UPDATE users SET role=? WHERE id=?').run(role, req.params.id);
+  res.redirect(back('Role updated.'));
 });
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 5 MB)</p>`, req.user)));
