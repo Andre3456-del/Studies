@@ -17,11 +17,19 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', created_at TEXT DEFAULT CURRENT_TIMESTAMP, verified INTEGER NOT NULL DEFAULT 0, verify_hash TEXT, verify_expires INTEGER, verify_sent INTEGER);
 CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS pages(id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, html TEXT NOT NULL, members_only INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, page_id INTEGER NOT NULL, reference TEXT UNIQUE NOT NULL, amount INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, page_id));
 `);
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0']])
+for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
+// Upgrade older databases that predate paid/media pages
+const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
+for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['video_id', 'TEXT']])
+  if (!pageCols.includes(c)) db.exec(`ALTER TABLE pages ADD COLUMN ${c} ${def}`);
+const purchaseCols = db.prepare('PRAGMA table_info(purchases)').all().map(c => c.name);
+for (const [c, def] of [['status', "TEXT NOT NULL DEFAULT 'pending'"]])
+  if (!purchaseCols.includes(c)) db.exec(`ALTER TABLE purchases ADD COLUMN ${c} ${def}`);
 db.prepare("UPDATE users SET verified=1 WHERE role='admin'").run();
 db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
 
@@ -52,6 +60,12 @@ app.use(express.json({ limit: '20kb' }));
 const GOOGLE_ON = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const AI = process.env.GROQ_API_KEY ? 'groq' : process.env.ANTHROPIC_API_KEY ? 'claude' : null;
 const AI_MODEL = process.env.AI_MODEL || (AI === 'groq' ? 'llama-3.3-70b-versatile' : 'claude-haiku-4-5-20251001');
+const PRICE_NGN = Number(process.env.PRICE_NGN || 100);
+// Paid pages are unlocked by a direct bank transfer, confirmed by hand in /admin -- not a payment gateway.
+const BANK_NAME = process.env.BANK_NAME || 'OPay';
+const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || '7043309103';
+const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'Esseabasi Usen Inyangmme';
+const PRICE_KOBO = Math.round(PRICE_NGN * 100);
 const SECURE = process.env.NODE_ENV === 'production' ? '; Secure' : '';
 const baseUrl = req => process.env.BASE_URL || process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
 const buckets = new Map();
@@ -178,8 +192,17 @@ app.use((req, res, next) => {
   req.user = req.sid
     ? db.prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
     : null;
+  // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
+  // /admin has real data without writing to the database on every single request.
+  if (req.user && Date.now() - (req.user.last_seen || 0) > 20000) {
+    db.prepare('UPDATE users SET last_seen=? WHERE id=?').run(Date.now(), req.user.id);
+    req.user.last_seen = Date.now();
+  }
   next();
 });
+const ONLINE_MS = 2 * 60 * 1000; // a user counts as "online" if seen in the last 2 minutes
+const isOnline = u => !!u.last_seen && Date.now() - u.last_seen < ONLINE_MS;
+const presenceDot = u => `<span title="${isOnline(u) ? 'Online' : 'Offline'}" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${isOnline(u) ? '#22c55e' : '#ef4444'};margin-right:7px;vertical-align:middle"></span>`;
 
 const admin = (req, res, next) =>
   req.user && req.user.role === 'admin' ? next()
@@ -222,6 +245,7 @@ h1{font-size:clamp(28px,6vw,44px);line-height:1.15;margin:.2em 0}h2,h3{margin:.8
 .tile h3{margin:0;font-size:18px}.go{color:var(--blue);font-size:14px}
 .chip{align-self:flex-start;font-size:12px;padding:2px 10px;border-radius:99px;border:1px solid var(--line);color:var(--blue)}
 .chip.lock{color:#ff7cf5;border-color:rgba(240,0,232,.45)}
+.chip.pay{color:#ffd166;border-color:rgba(255,209,102,.5)}
 .auth{max-width:420px;margin:28px auto}.auth h1{font-size:30px;text-align:center}.auth>p{text-align:center}.auth .card button{width:100%}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:500}
 footer{text-align:center;color:var(--mut);font-size:13px;padding:20px}
@@ -281,22 +305,36 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 // ---------- public + auth routes ----------
 app.get('/', (req, res) => {
   if (req.user) return res.send(layout('Studies Hub', dashboardBody(req), req.user));
-  const pages = db.prepare('SELECT slug,title,members_only FROM pages ORDER BY id DESC').all();
+  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC').all();
   const hero = `<section class="hero"><p class="eyebrow">Welcome</p><h1>Explore our <span class="grad">pages</span></h1>
 <p class="lead">Browse what is live, or create a free account to unlock members-only content.</p><div class="cta"><a class="btn" href="/signup">Create account</a><a class="btn ghost" href="/login">Log in</a></div></section>`;
-  const grid = pages.length
-    ? `<div class="grid">${pages.map(p => `<a class="tile" href="/p/${p.slug}"><span class="chip${p.members_only ? ' lock' : ''}">${p.members_only ? 'Members' : 'Open'}</span><h3>${esc(p.title)}</h3><span class="go">View page &rarr;</span></a>`).join('')}</div>`
-    : '<p class="mut">Nothing published yet. Check back soon.</p>';
+  const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
   res.send(layout('Studies Hub', `${hero}<h2 class="sec">Pages</h2>${grid}`, req.user));
 });
 
 app.get('/browse', (req, res) => {
-  const pages = db.prepare('SELECT slug,title,members_only FROM pages ORDER BY id DESC').all();
-  const grid = pages.length
-    ? `<div class="grid">${pages.map(p => `<a class="tile" href="/p/${p.slug}"><span class="chip${p.members_only ? ' lock' : ''}">${p.members_only ? 'Members' : 'Open'}</span><h3>${esc(p.title)}</h3><span class="go">View page &rarr;</span></a>`).join('')}</div>`
-    : '<p class="mut">Nothing published yet. Check back soon.</p>';
+  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC').all();
+  const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
   res.send(layout('All pages', `<h1>All pages</h1>${grid}`, req.user));
 });
+
+function youtubeId(url) {
+  const m = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/))([a-zA-Z0-9_-]{11})/.exec(String(url || ''));
+  return m ? m[1] : null;
+}
+const hasPurchased = (userId, pageId) => !!db.prepare("SELECT 1 FROM purchases WHERE user_id=? AND page_id=? AND status='approved'").get(userId, pageId);
+const purchaseFor = (userId, pageId) => db.prepare('SELECT * FROM purchases WHERE user_id=? AND page_id=?').get(userId, pageId);
+function canViewPage(page, user) {
+  if (page.paid) return !!user && (user.role === 'admin' || user.role === 'partial' || hasPurchased(user.id, page.id));
+  if (page.members_only) return !!user;
+  return true;
+}
+const KIND_META = { html: ['🌐', 'Page'], cbt: ['📝', 'CBT'], pdf: ['📄', 'PDF'], doc: ['📃', 'Document'], video: ['▶️', 'Video'] };
+function pageCard(p) {
+  const [icon, label] = KIND_META[p.kind] || KIND_META.html;
+  const chip = p.paid ? `<span class="chip pay">₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view</span>` : p.members_only ? '<span class="chip lock">Members</span>' : '<span class="chip">Open</span>';
+  return `<a class="tile" href="/p/${p.slug}"><span class="stat">${icon}</span>${chip}<h3>${esc(p.title)}</h3><span class="go">${label} &middot; View &rarr;</span></a>`;
+}
 
 // Uploaded pages open full-screen with their own design. We only make sure they display well on phones
 // (charset + viewport tags if missing) and add one small "back" button so visitors are never stuck.
@@ -317,12 +355,65 @@ function preparePage(html, home) {
   return at >= 0 ? h.slice(0, at) + back + h.slice(at) : h + back;
 }
 
+function paywallBody(p, req) {
+  const price = ((p.price_kobo || PRICE_KOBO) / 100).toFixed(0);
+  const claim = req.user ? purchaseFor(req.user.id, p.id) : null;
+  const action = !req.user
+    ? `<a class="btn" href="/login?next=${encodeURIComponent('/p/' + p.slug)}">Log in to pay</a>`
+    : claim && claim.status === 'pending'
+    ? '<p class="pill pending">Payment claimed &mdash; waiting for confirmation</p><p class="mut">This is usually checked and unlocked by hand, so it can take a little while.</p>'
+    : `<div class="card" style="text-align:left;max-width:340px;margin:14px auto"><p class="mut" style="margin:0 0 6px">Pay by bank transfer to:</p>
+<p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p>
+<p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p>
+<form method="post" action="/pay/claim"><input type="hidden" name="slug" value="${esc(p.slug)}"><button style="width:100%">I have made this payment</button></form></div>`;
+  return `<div class="dash-hero"><p class="eyebrow" style="margin:0">Locked</p><h1 style="margin:.2em 0">${esc(p.title)}</h1><p class="mut" style="margin:0">This content needs a one-time payment to unlock.</p></div>
+<div class="card" style="text-align:center"><p style="font-size:32px;font-weight:700;margin:8px 0">₦${price}</p>${action}</div>`;
+}
+
 app.get('/p/:slug', (req, res) => {
-  const p = db.prepare('SELECT html,members_only FROM pages WHERE slug=?').get(req.params.slug);
+  const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
   if (!p) return res.status(404).send(layout('Not found', '<h2>Page not found</h2>', req.user));
-  if (p.members_only && !req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+  if (!canViewPage(p, req.user)) {
+    if (p.members_only && !p.paid) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+    return res.send(layout(p.title, paywallBody(p, req), req.user));
+  }
   res.setHeader('Cache-Control', 'private, no-cache');
-  res.type('html').send(preparePage(p.html, '/'));
+  if (p.kind === 'html' || p.kind === 'cbt') return res.type('html').send(preparePage(p.html, '/'));
+  if (p.kind === 'video') {
+    return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
+  }
+  // pdf / doc: a small wrapper page; the file itself streams from /p/:slug/raw
+  const embed = p.kind === 'pdf'
+    ? `<embed src="/p/${p.slug}/raw" type="application/pdf" style="width:100%;height:75vh;border:0;border-radius:12px">`
+    : `<p class="mut">Word documents open in your device's document app.</p>`;
+  res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
+});
+
+app.get('/p/:slug/raw', (req, res) => {
+  const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
+  if (!p || !p.file_data) return res.status(404).send('Not found');
+  if (!canViewPage(p, req.user)) return res.status(p.members_only && !p.paid ? 401 : 402).send('Not available');
+  res.setHeader('Content-Type', p.file_mime || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${p.kind === 'pdf' ? 'inline' : 'attachment'}; filename="${(p.file_name || p.slug).replace(/"/g, '')}"`);
+  res.send(Buffer.from(p.file_data));
+});
+
+app.post('/pay/claim', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.body.slug);
+  if (!page || !page.paid) return res.redirect('/');
+  const reference = `manual_${req.user.id}_${page.id}_${Date.now()}`;
+  db.prepare('INSERT OR IGNORE INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,?)')
+    .run(req.user.id, page.id, reference, page.price_kobo || PRICE_KOBO, 'pending');
+  res.redirect('/p/' + page.slug);
+});
+app.post('/admin/payments/:id/approve', admin, (req, res) => {
+  db.prepare("UPDATE purchases SET status='approved' WHERE id=?").run(req.params.id);
+  res.redirect(back('Payment approved -- unlocked for that user.'));
+});
+app.post('/admin/payments/:id/reject', admin, (req, res) => {
+  db.prepare('DELETE FROM purchases WHERE id=?').run(req.params.id);
+  res.redirect(back('Payment claim removed.'));
 });
 
 app.get('/signup', (req, res) => res.send(authForm('signup')));
@@ -493,7 +584,7 @@ app.post('/logout', (req, res) => {
 });
 
 // ---------- admin ----------
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 const back = msg => '/admin?msg=' + encodeURIComponent(msg);
 
 // ---------- dashboard body: what a logged-in visitor sees at "/" ----------
@@ -515,7 +606,7 @@ function dashboardBody(req) {
     : canPages
     ? statRow([['Pages', count('SELECT COUNT(*) n FROM pages')], ['Members-only', count('SELECT COUNT(*) n FROM pages WHERE members_only=1')]])
     : statRow([['Available to you', count('SELECT COUNT(*) n FROM pages')], ['Members-only', count('SELECT COUNT(*) n FROM pages WHERE members_only=1')], ["Added this week", count("SELECT COUNT(*) n FROM pages WHERE created_at >= datetime('now','-7 days')")]]);
-  const recent = db.prepare('SELECT slug,title,members_only FROM pages ORDER BY id DESC LIMIT 5').all();
+  const recent = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC LIMIT 5').all();
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
   const subtitle = central_ ? 'You are the central admin. Manage the whole site from here.'
     : canUsers ? 'You are an admin. Manage pages and users.'
@@ -525,9 +616,7 @@ function dashboardBody(req) {
 <p style="margin:14px 0 0">${pill} <span class="mut">&middot; member since ${esc(String(u.created_at).slice(0, 10))}</span></p></div>
 ${stats}<h2 class="sec">Shortcuts</h2><div class="grid">${shortcuts}</div>
 <div class="row sec" style="align-items:baseline"><h2 style="margin:0">Recently added</h2><a href="/browse" class="mut">See all pages &rarr;</a></div>
-${recent.length
-    ? `<div class="grid">${recent.map(p => `<a class="tile" href="/p/${p.slug}"><span class="chip${p.members_only ? ' lock' : ''}">${p.members_only ? 'Members' : 'Open'}</span><h3>${esc(p.title)}</h3><span class="go">View page &rarr;</span></a>`).join('')}</div>`
-    : '<p class="mut">Nothing published yet.</p>'}
+${recent.length ? `<div class="grid">${recent.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet.</p>'}
 <h2 class="sec">Your account</h2><div class="card"><form method="post" action="/account/name" class="row" style="gap:8px;flex-wrap:wrap"><input name="name" value="${esc(u.name)}" maxlength="80" required style="max-width:220px"><button class="ghost">Save name</button></form>
 <p class="mut" style="margin:6px 0 0">${esc(u.email)} &middot; ${u.verified ? 'email verified' : 'email not verified'}</p>
 <form method="post" action="/logout" style="margin-top:8px"><button class="ghost">Log out</button></form></div>`;
@@ -548,39 +637,90 @@ app.get('/admin', adminish, (req, res) => {
   const pages = db.prepare('SELECT * FROM pages ORDER BY id DESC').all();
   const roleLabel = { admin: 'Full admin', partial: 'Partial admin', user: 'User' };
   const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${['user', 'partial', 'admin'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${roleLabel[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
+  const paymentsSection = canUsers ? (() => {
+    const claims = db.prepare("SELECT p.*, u.name un, u.email ue, pg.title pt, pg.slug ps, pg.price_kobo FROM purchases p JOIN users u ON u.id=p.user_id JOIN pages pg ON pg.id=p.page_id WHERE p.status='pending' ORDER BY p.id DESC").all();
+    if (!claims.length) return '';
+    return `<h3 id="payments">Payment claims waiting for you (${claims.length})</h3>${claims.map(c => `<div class="card row"><div><b>${esc(c.un)}</b> <span class="mut">${esc(c.ue)}</span><br><span class="mut">₦${((c.price_kobo || PRICE_KOBO) / 100).toFixed(0)} for "${esc(c.pt)}"</span></div>
+<div class="row" style="gap:6px"><form method="post" action="/admin/payments/${c.id}/approve"><button>Approve</button></form><form method="post" action="/admin/payments/${c.id}/reject" onsubmit="return confirm('Reject this payment claim?')"><button class="link">Reject</button></form></div></div>`).join('')}`;
+  })() : '';
   const usersSection = canUsers ? (() => {
-    const users = db.prepare('SELECT id,name,email,role,verified,created_at FROM users ORDER BY id DESC').all();
+    const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen FROM users ORDER BY id DESC').all();
     return `<h3 id="users">Registered users (${users.length})</h3><div style="overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th>Role</th><th></th></tr>${users.map(u =>
-      `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${u.verified ? 'verified' : `<form method="post" action="/admin/users/${u.id}/verify"><button class="link">Unverified: verify now</button></form>`}</td><td>${u.email === ADMIN_EMAIL ? 'Central admin' : central_ ? roleSelect(u) : roleLabel[u.role] || 'User'}</td><td>${u.role === 'admin'
+      `<tr><td>${presenceDot(u)}${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${u.verified ? 'verified' : `<form method="post" action="/admin/users/${u.id}/verify"><button class="link">Unverified: verify now</button></form>`}</td><td>${u.email === ADMIN_EMAIL ? 'Central admin' : central_ ? roleSelect(u) : roleLabel[u.role] || 'User'}</td><td>${u.role === 'admin'
         ? '' : `<form method="post" action="/admin/users/${u.id}/delete" onsubmit="return confirm('Remove this user?')"><button class="link">Remove</button></form>`}</td></tr>`).join('')}</table></div>`;
   })() : '';
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload an HTML page</h3>
+<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
-<input type="file" name="file" accept=".html,.htm,text/html" required>
-<label><input type="checkbox" name="members_only" value="1"> Members only (login required)</label><br><button>Upload</button></form>
-<h3 id="pages">Pages (${pages.length})</h3>${pages.map(p => `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${esc(p.title)}</a><span class="mut">/p/${p.slug}</span></div>
+${canUsers ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">YouTube video</option></select>`
+    : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Only the central or a full admin can upload PDFs, Word documents, videos or CBT pages.</p>'}
+<div id="fileField"><input type="file" name="file" accept=".html,.htm,text/html"></div>
+${canUsers ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."></div>` : ''}
+<label><input type="checkbox" name="members_only" value="1"> Members only (login required)</label><br>
+${canUsers ? `<label><input type="radio" name="visibility" value="normal" checked> Normal view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><br>` : ''}
+<button>Upload</button></form>
+${canUsers ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input');function sync(){var isVideo=k.value==='video';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>` : ''}
+<h3 id="pages">Pages (${pages.length})</h3>${pages.map(p => {
+    const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
+    const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
+    const replaceCtrl = p.kind === 'video'
+      ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form>`
+      : `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>`;
+    return `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${pIcon} ${esc(p.title)}</a><span class="mut">/p/${p.slug} &middot; ${pLabel} &middot; ${status}</span></div>
 <div class="row" style="margin-top:10px">
 <form method="post" action="/admin/pages/${p.id}/toggle"><button class="link">${p.members_only ? '🔒 Members only — make open' : 'Open — make members only'}</button></form>
-<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" accept=".html,.htm" required style="width:auto"><button>Replace file</button></form>
-<form method="post" action="/admin/pages/${p.id}/delete" onsubmit="return confirm('Delete this page?')"><button class="link">Delete</button></form></div></div>`).join('')
+${replaceCtrl}
+<form method="post" action="/admin/pages/${p.id}/delete" onsubmit="return confirm('Delete this page?')"><button class="link">Delete</button></form></div></div>`;
+  }).join('')
     || '<p class="mut">No pages yet.</p>'}
-${usersSection}`, req.user));
+${paymentsSection}${usersSection}`, req.user));
 });
 
 app.post('/admin/upload', adminish, upload.single('file'), (req, res) => {
+  const kind = ['html', 'cbt', 'pdf', 'doc', 'video'].includes(req.body.kind) ? req.body.kind : 'html';
+  if (kind !== 'html' && req.user.role !== 'admin') return res.sendStatus(403);
+  const paid = req.user.role === 'admin' && req.body.visibility === 'paid' ? 1 : 0;
+  const membersOnly = req.body.members_only ? 1 : 0;
+  const title = (req.body.title || '').trim();
+
+  if (kind === 'video') {
+    const vid = youtubeId(req.body.video_url);
+    if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
+    const slug = uniqueSlug(slugify(title || 'video'));
+    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id) VALUES(?,?,?,?,?,?,?,?)')
+      .run(slug, title || 'Video', '', membersOnly, 'video', paid, PRICE_KOBO, vid);
+    return res.redirect(back(`Published at /p/${slug}`));
+  }
   if (!req.file) return res.redirect(back('Choose a file first.'));
-  const base = req.file.originalname.replace(/\.html?$/i, '');
+  const base = req.file.originalname.replace(/\.[a-z0-9]+$/i, '');
   const slug = uniqueSlug(slugify(base));
-  db.prepare('INSERT INTO pages(slug,title,html,members_only) VALUES(?,?,?,?)')
-    .run(slug, (req.body.title || '').trim() || base, req.file.buffer.toString('utf8'), req.body.members_only ? 1 : 0);
+  if (kind === 'pdf' || kind === 'doc') {
+    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(slug, title || base, '', membersOnly, kind, paid, PRICE_KOBO, req.file.buffer, req.file.mimetype, req.file.originalname);
+  } else {
+    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo) VALUES(?,?,?,?,?,?,?)')
+      .run(slug, title || base, req.file.buffer.toString('utf8'), membersOnly, kind, paid, PRICE_KOBO);
+  }
   res.redirect(back(`Published at /p/${slug}`));
 });
 
 app.post('/admin/pages/:id/replace', adminish, upload.single('file'), (req, res) => {
+  const page = db.prepare('SELECT kind FROM pages WHERE id=?').get(req.params.id);
+  if (!page) return res.redirect(back('Page not found.'));
+  if (page.kind !== 'html' && req.user.role !== 'admin') return res.sendStatus(403);
   if (!req.file) return res.redirect(back('Choose a file first.'));
-  db.prepare('UPDATE pages SET html=? WHERE id=?').run(req.file.buffer.toString('utf8'), req.params.id);
+  if (page.kind === 'pdf' || page.kind === 'doc') {
+    db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.file.originalname, req.params.id);
+  } else {
+    db.prepare('UPDATE pages SET html=? WHERE id=?').run(req.file.buffer.toString('utf8'), req.params.id);
+  }
   res.redirect(back('File replaced.'));
+});
+app.post('/admin/pages/:id/video', admin, (req, res) => {
+  const vid = youtubeId(req.body.video_url);
+  if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
+  db.prepare("UPDATE pages SET video_id=? WHERE id=? AND kind='video'").run(vid, req.params.id);
+  res.redirect(back('Video link updated.'));
 });
 app.post('/admin/pages/:id/toggle', adminish, (req, res) => {
   db.prepare('UPDATE pages SET members_only = 1 - members_only WHERE id=?').run(req.params.id);
@@ -608,6 +748,6 @@ app.post('/admin/users/:id/role', central, (req, res) => {
   res.redirect(back('Role updated.'));
 });
 
-app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 5 MB)</p>`, req.user)));
+app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
 app.listen(PORT, () => console.log(`Studies Hub running on http://localhost:${PORT}`));
