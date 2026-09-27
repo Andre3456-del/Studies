@@ -362,7 +362,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;</button><a class="brand" href="/"><span class="logo"></span>Studies Hub</a><span style="width:40px"></span></header>
-<main>${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub</footer>${user && AI ? CHAT_HTML : ''}
+<main>${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a></footer>${user && AI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 </body></html>`;
 };
@@ -409,6 +409,69 @@ app.get('/browse', (req, res) => {
   const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC').all();
   const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
   res.send(layout('All pages', `<h1>All pages</h1>${grid}`, req.user));
+});
+
+// Privacy policy -- public, no login needed. Describes what this app actually does, in plain language.
+// NOTE: this is a plain-language description of the app's real behavior, not legal advice -- have it
+// checked by a lawyer for your jurisdiction (e.g. Nigeria's NDPA) before you rely on it.
+app.get('/privacy', (req, res) => {
+  const updated = new Date().toISOString().slice(0, 10);
+  const contactEmail = process.env.EMAIL_FROM || ADMIN_EMAIL;
+  const emailProviders = [
+    process.env.GOOGLE_REFRESH_TOKEN ? 'Google (Gmail)' : null,
+    process.env.RESEND_API_KEY ? 'Resend' : null,
+    process.env.BREVO_API_KEY ? 'Brevo' : null,
+    process.env.SMTP_HOST ? 'our email server' : null,
+  ].filter(Boolean);
+  const aiProvider = AI === 'groq' ? 'Groq' : AI === 'claude' ? 'Anthropic' : null;
+  const body = `<div class="auth" style="max-width:720px"><h1>Privacy Policy</h1><p class="mut">Last updated ${updated}</p>
+
+<p>This page explains, in plain language, what Studies Hub collects and why. It covers what this site actually does today -- nothing more, nothing hidden.</p>
+
+<h2>What we collect</h2>
+<ul>
+<li><b>Account details:</b> your name and email address, and a password (we never store your actual password -- only a one-way scrambled/hashed version that can't be reversed).</li>
+<li>${GOOGLE_ON ? '<b>Google sign-in:</b> if you use "Continue with Google," Google shares your name, email address, and whether Google has verified that email -- we don\'t see or store your Google password.' : ''}</li>
+<li><b>Profile details you choose to add:</b> department, university, course, and a profile picture, from the Settings page.</li>
+<li><b>Activity used to run the site:</b> when you were last active (so other users can see if you're online), and, if you submit news or a payment claim, that submission and its status (pending/approved/rejected).</li>
+<li><b>Messages:</b> if you use Chat, your messages are stored so the conversation can be shown to you and the other person.</li>
+</ul>
+
+<h2>How we use it</h2>
+<ul>
+<li>To create and secure your account, verify your email, and let you reset your password.</li>
+<li>To personalize your dashboard and show your name/photo to people you chat with.</li>
+<li>To show your online/offline status to other logged-in members -- this is visible to other members of the site, not the public.</li>
+<li>To review content before it goes public: news you submit, and payment claims, are checked by an admin before they're approved.</li>
+</ul>
+
+<h2>Payments</h2>
+<p>Studies Hub does not use a card payment processor and does not collect your card or bank details. Some content is unlocked via manual bank transfer: we show our own account details, you pay directly through your own bank, and an admin manually confirms and unlocks the content. We don't see your banking information at any point in that process.</p>
+
+<h2>Chat and messages</h2>
+<p>Messages are stored encrypted (scrambled so a stolen copy of our database would be unreadable) -- but this is not "end-to-end" encryption. The site itself is still able to decrypt and read messages when needed, for example to display them to you or to look into abuse reports. Please don't send anything in chat you wouldn't want anyone but the recipient to ever see.</p>
+
+${aiProvider ? `<h2>The "Ask AI" assistant</h2><p>If you use the Ask AI assistant, your question and Studies Hub's reply are sent to ${aiProvider}, an outside AI provider, purely to generate that reply. We don't send your email, password, or profile details to them -- just the conversation you type.</p>` : ''}
+
+<h2>Cookies</h2>
+<p>We use one cookie to keep you logged in between visits. We don't use advertising or tracking cookies, and there are currently no ads on this site.</p>
+
+<h2>Who else sees your data</h2>
+<p>We share information only with the outside services that make the site work${emailProviders.length ? `, such as ${emailProviders.join(' and/or ')} for sending verification and password-reset emails` : ''}${GOOGLE_ON ? ', and Google for sign-in' : ''}${aiProvider ? `, and ${aiProvider} for the AI assistant` : ''}, plus our hosting provider, which stores the site's data on our behalf. We do not sell your data to anyone.</p>
+
+<h2>How long we keep it</h2>
+<p>We keep your account and its data for as long as your account exists. We don't currently have an automatic "delete my account" button -- if you'd like your data reviewed, corrected, or removed, contact us (below) and we'll handle it by hand.</p>
+
+<h2>Children</h2>
+<p>Studies Hub is intended for students old enough to independently create an account and is not directed at young children.</p>
+
+<h2>Changes to this policy</h2>
+<p>If how we handle your data changes meaningfully, we'll update this page and change the date above.</p>
+
+<h2>Contact us</h2>
+<p>Questions about your data, or a request to review/correct/delete it? Email <a href="mailto:${esc(contactEmail)}">${esc(contactEmail)}</a>.</p>
+</div>`;
+  res.send(layout('Privacy Policy', body, req.user));
 });
 
 // Public news feed -- no login needed, on purpose, so it works as a front door to the site.
