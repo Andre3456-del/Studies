@@ -1,5 +1,6 @@
 const express = require('express');
 const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 const bcrypt = require('bcryptjs');
 const { DatabaseSync } = require('node:sqlite'); // built into Node 22.13+, nothing to compile
 const crypto = require('crypto');
@@ -21,15 +22,21 @@ CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, user_id INTEGER NOT
 `);
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER']])
+for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
 for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['video_id', 'TEXT']])
   if (!pageCols.includes(c)) db.exec(`ALTER TABLE pages ADD COLUMN ${c} ${def}`);
+db.exec('CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL, body_enc BLOB NOT NULL, iv BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+db.exec('CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id)');
 const purchaseCols = db.prepare('PRAGMA table_info(purchases)').all().map(c => c.name);
 for (const [c, def] of [['status', "TEXT NOT NULL DEFAULT 'pending'"]])
   if (!purchaseCols.includes(c)) db.exec(`ALTER TABLE purchases ADD COLUMN ${c} ${def}`);
+db.exec("CREATE TABLE IF NOT EXISTS news(id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, image_url TEXT, author_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
+const newsCols = db.prepare('PRAGMA table_info(news)').all().map(c => c.name);
+if (!newsCols.includes('status')) db.exec("ALTER TABLE news ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'");
 db.prepare("UPDATE users SET verified=1 WHERE role='admin'").run();
 db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
 
@@ -66,6 +73,29 @@ const BANK_NAME = process.env.BANK_NAME || 'OPay';
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || '7043309103';
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'Esseabasi Usen Inyangmme';
 const PRICE_KOBO = Math.round(PRICE_NGN * 100);
+
+// Messages are encrypted at rest with AES-256-GCM, so a stolen copy of the database file is unreadable.
+// The key auto-generates once and lives in this database from then on -- MESSAGE_KEY can override it.
+let storedKey = db.prepare("SELECT value FROM secrets WHERE key='message_key'").get();
+if (!storedKey) {
+  const generated = crypto.randomBytes(32).toString('base64');
+  db.prepare("INSERT INTO secrets(key,value) VALUES('message_key',?)").run(generated);
+  storedKey = { value: generated };
+}
+const MESSAGE_KEY = Buffer.from(process.env.MESSAGE_KEY || storedKey.value, 'base64');
+function encryptMsg(text) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', MESSAGE_KEY, iv);
+  const body_enc = Buffer.concat([cipher.update(text, 'utf8'), cipher.final(), cipher.getAuthTag()]);
+  return { body_enc, iv };
+}
+function decryptMsg(body_enc, iv) {
+  const buf = Buffer.from(body_enc), tag = buf.subarray(buf.length - 16), enc = buf.subarray(0, buf.length - 16);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', MESSAGE_KEY, Buffer.from(iv));
+  decipher.setAuthTag(tag);
+  try { return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8'); }
+  catch { return '[unreadable message]'; }
+}
 const SECURE = process.env.NODE_ENV === 'production' ? '; Secure' : '';
 const baseUrl = req => process.env.BASE_URL || process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
 const buckets = new Map();
@@ -190,7 +220,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
+    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -266,13 +296,76 @@ footer{text-align:center;color:var(--mut);font-size:13px;padding:20px}
 .ai-log{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
 .ai-m{max-width:85%;padding:8px 12px;border-radius:12px;font-size:15px;white-space:pre-wrap;overflow-wrap:anywhere}
 .ai-m.me{align-self:flex-end;background:linear-gradient(135deg,#5bc8ff,var(--blue2));color:#04101f}.ai-m.bot{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
-.ai-form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}.ai-form input,.ai-form button{margin:0}`;
+.ai-form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}.ai-form input,.ai-form button{margin:0}
+.menu-btn{background:none;border:0;color:var(--fg);font-size:22px;line-height:1;cursor:pointer;padding:4px 6px;box-shadow:none;width:auto}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .2s;z-index:29}.scrim.show{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;bottom:0;left:0;width:min(280px,82vw);background:#0e0e18;border-right:1px solid var(--line);z-index:30;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .22s ease;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.drawer.open{transform:translateX(0)}
+.drawer-top{display:flex;align-items:center;gap:10px;padding:16px 16px 10px}
+.drawer-user{display:flex;align-items:center;gap:10px;padding:6px 16px 14px}
+.drawer-av-img{width:40px;height:40px;border-radius:50%;object-fit:cover;flex:none}
+.drawer-label{color:var(--mut);letter-spacing:2px;font-size:11px;text-transform:uppercase;padding:6px 16px;margin:6px 0 0}
+.drawer-item{display:flex;align-items:center;gap:12px;padding:12px 16px;color:var(--fg);font-weight:500}
+.drawer-item span{width:22px;text-align:center;font-size:17px}
+.drawer-item:hover{background:rgba(56,176,248,.08);text-decoration:none}
+.drawer-item.active{background:rgba(56,176,248,.14);color:var(--blue);border-right:3px solid var(--blue)}
+.drawer-bottom{margin-top:auto;border-top:1px solid var(--line);padding:6px 0}
+.news-card{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin:14px 0}
+.news-img{width:100%;aspect-ratio:16/9;object-fit:cover;background:linear-gradient(135deg,rgba(56,176,248,.25),rgba(240,0,232,.18))}
+.news-body{padding:14px 16px}
+.news-body h3{margin:2px 0 6px;font-size:17px;line-height:1.3}
+.news-meta{color:var(--mut);font-size:12px;display:flex;gap:8px;align-items:center}
+.chat-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;color:var(--fg)}
+.chat-item:hover{background:var(--panel);text-decoration:none}
+.chat-item .av{position:relative;flex:none}
+.chat-item .av .dot{position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg)}
+.chat-item .meta{min-width:0;flex:1}
+.chat-item .meta b{display:block}
+.chat-item .meta span{display:block;font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-label{color:var(--mut);letter-spacing:2px;font-size:11px;text-transform:uppercase;margin:18px 0 6px}
+.thread{display:flex;flex-direction:column;gap:8px;padding:6px 2px 90px}
+.bubble{max-width:78%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;word-wrap:break-word}
+.bubble.me{align-self:flex-end;background:linear-gradient(135deg,#5bc8ff,var(--blue) 60%);color:#04101f;border-bottom-right-radius:4px}
+.bubble.them{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:4px}
+.bubble time{display:block;font-size:11px;opacity:.65;margin-top:3px}
+.chat-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line);max-width:1000px;margin:0 auto}
+.chat-bar input{margin:0;flex:1}.chat-bar button{margin:0}
+.chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:6px 0 12px;z-index:5}`;
 
-const layout = (title, body, user) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title><style>${CSS}</style></head><body>
-<header class="top"><a class="brand" href="/"><span class="logo"></span>Studies Hub</a><nav>${user
-    ? `${(user.role === 'admin' || user.role === 'partial') ? '<a class="btn ghost" href="/admin">Admin</a>' : ''}<form method="post" action="/logout"><button class="ghost">Log out</button></form>`
-    : '<a class="btn ghost" href="/login">Log in</a><a class="btn" href="/signup">Sign up</a>'}</nav></header>
-<main>${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub</footer>${user && AI ? CHAT_HTML : ''}</body></html>`;
+const navItems = user => {
+  const canPages = !!user && (user.role === 'admin' || user.role === 'partial');
+  const canUsers = !!user && user.role === 'admin';
+  return [
+    { href: '/', icon: '🏠', label: user ? 'Dashboard' : 'Home' },
+    { href: '/news', icon: '📰', label: 'News' },
+    { href: '/browse', icon: '🌐', label: 'Browse pages' },
+    ...(user ? [{ href: '/chat', icon: '💬', label: 'Chat' }] : []),
+    ...(canPages ? [{ href: '/admin#upload', icon: '⬆️', label: 'Upload' }] : []),
+    ...(canUsers ? [{ href: '/admin#users', icon: '👥', label: 'Users' }] : []),
+  ];
+};
+const layout = (title, body, user) => {
+  const avatarBit = user
+    ? (user.avatar_mime ? `<img src="/avatar/${user.id}" class="drawer-av-img" alt="">` : `<span class="avatar" style="width:40px;height:40px;font-size:15px">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)
+    : '';
+  const drawerNav = navItems(user).map(i => `<a class="drawer-item" href="${i.href}"><span>${i.icon}</span>${esc(i.label)}</a>`).join('');
+  const drawerBottom = user
+    ? `<a class="drawer-item" href="/settings"><span>⚙️</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item" style="width:100%;text-align:left;background:none;color:inherit;box-shadow:none;font:inherit;border:0;cursor:pointer"><span>🚪</span>Log out</button></form>`
+    : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title><style>${CSS}</style></head><body>
+<div id="scrim" class="scrim"></div>
+<nav id="drawer" class="drawer">
+<div class="drawer-top"><span class="logo"></span><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
+${user ? `<div class="drawer-user">${avatarBit}<div><b>${esc(user.name)}</b><br><span class="mut" style="font-size:12px">${esc(user.email)}</span></div></div>` : ''}
+<p class="drawer-label">MAIN MENU</p>
+${drawerNav}
+<div class="drawer-bottom">${drawerBottom}</div>
+</nav>
+<header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;</button><a class="brand" href="/"><span class="logo"></span>Studies Hub</a><span style="width:40px"></span></header>
+<main>${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub</footer>${user && AI ? CHAT_HTML : ''}
+<script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
+</body></html>`;
+};
 
 const authForm = (kind, err = '', next = '') => {
   const login = kind === 'login';
@@ -316,6 +409,121 @@ app.get('/browse', (req, res) => {
   const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC').all();
   const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
   res.send(layout('All pages', `<h1>All pages</h1>${grid}`, req.user));
+});
+
+// Public news feed -- no login needed, on purpose, so it works as a front door to the site.
+const timeAgo = iso => {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso + 'Z').getTime()) / 60000));
+  if (mins < 60) return `${mins || 1}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  return `${Math.round(hrs / 24)}d`;
+};
+app.get('/news', (req, res) => {
+  const items = db.prepare("SELECT n.*, u.name AS author FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
+  const cards = items.map(n => `<div class="news-card">${n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>'}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut" style="margin:0 0 8px">${esc(n.body)}</p><div class="news-meta"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></div>`).join('');
+  const submitForm = req.user
+    ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input name="image_url" placeholder="Image URL (optional)"><textarea name="body" placeholder="What's happening?" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
+    : '';
+  res.send(layout('News', `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || '<p class="mut">No news yet. Check back soon.</p>'}`, req.user));
+});
+app.post('/news', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/news');
+  const title = String(req.body.title || '').trim().slice(0, 140);
+  const body = String(req.body.body || '').trim().slice(0, 600);
+  if (!title || !body) return res.redirect('/news?msg=' + encodeURIComponent('Enter a headline and a summary.'));
+  db.prepare("INSERT INTO news(title,body,image_url,author_id,status) VALUES(?,?,?,?,'pending')")
+    .run(title, body, (req.body.image_url || '').trim() || null, req.user.id);
+  res.redirect('/news?msg=' + encodeURIComponent("Thanks -- we'll review it shortly."));
+});
+
+// ---------- chat: encrypted messages between any two users ----------
+const avatarOr = u => u.avatar_mime ? `<img src="/avatar/${u.id}" class="av" style="width:44px;height:44px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:44px;height:44px;font-size:16px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
+const lastMessageWith = (me, other) => db.prepare('SELECT * FROM messages WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?) ORDER BY id DESC LIMIT 1').get(me, other, other, me);
+
+app.get('/chat', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/chat');
+  const me = req.user.id;
+  const others = db.prepare('SELECT id,name,avatar_mime,last_seen FROM users WHERE id != ? ORDER BY name').all(me);
+  const talkedTo = new Set(db.prepare('SELECT DISTINCT CASE WHEN sender_id=? THEN recipient_id ELSE sender_id END o FROM messages WHERE sender_id=? OR recipient_id=?').all(me, me, me).map(r => r.o));
+  const online = others.filter(isOnline);
+  const offlineHistory = others.filter(u => !isOnline(u) && talkedTo.has(u.id));
+  const row = (u, sub) => `<a class="chat-item" href="/chat/${u.id}"><span class="av-wrap" style="position:relative">${avatarOr(u)}<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${isOnline(u) ? '#22c55e' : '#ef4444'}"></span></span><span class="meta"><b>${esc(u.name)}</b><span>${sub}</span></span></a>`;
+  const onlineList = online.map(u => row(u, 'Online now')).join('') || '<p class="mut">No one else is online right now.</p>';
+  const historyList = offlineHistory.map(u => { const m = lastMessageWith(me, u.id); return row(u, m ? `${decryptMsg(m.body_enc, m.iv).slice(0, 40)} &middot; ${timeAgo(m.created_at)}` : 'Offline'); }).join('');
+  res.send(layout('Chat', `<h1>Chat</h1><p class="chat-label">Online</p>${onlineList}${historyList ? `<p class="chat-label">Recent chats</p>${historyList}` : ''}`, req.user));
+});
+
+app.get('/chat/:id', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+  const otherId = Number(req.params.id);
+  if (otherId === req.user.id) return res.redirect('/chat');
+  const other = db.prepare('SELECT id,name,avatar_mime,last_seen FROM users WHERE id=?').get(otherId);
+  if (!other) return res.status(404).send(layout('Not found', '<h2>User not found</h2>', req.user));
+  const rows = db.prepare('SELECT * FROM messages WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?) ORDER BY id ASC').all(req.user.id, otherId, otherId, req.user.id);
+  const lastId = rows.length ? rows[rows.length - 1].id : 0;
+  const bubbles = rows.map(m => `<div class="bubble ${m.sender_id === req.user.id ? 'me' : 'them'}">${esc(decryptMsg(m.body_enc, m.iv))}<time>${new Date(m.created_at + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>`).join('');
+  res.send(layout(other.name, `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a>${avatarOr(other)}<div><b>${esc(other.name)}</b><br><span class="mut" style="font-size:12px">${isOnline(other) ? 'Online' : 'Offline'}</span></div></div>
+<div id="thread" class="thread" data-last-id="${lastId}">${bubbles || '<p class="mut">Say hello 👋</p>'}</div>
+<form id="sendForm" class="chat-bar"><input id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required><button>Send</button></form>
+<script>(function(){var myId=${req.user.id},otherId=${otherId},thread=document.getElementById('thread'),form=document.getElementById('sendForm'),input=document.getElementById('msgInput');var lastId=parseInt(thread.dataset.lastId,10)||0;function esc(t){var d=document.createElement('div');d.textContent=t;return d.innerHTML}function bubble(m){var d=document.createElement('div');d.className='bubble '+(m.from===myId?'me':'them');var body=document.createElement('span');body.textContent=m.body;d.appendChild(body);var t=document.createElement('time');t.textContent=new Date(m.created_at+'Z').toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});d.appendChild(t);thread.appendChild(d);thread.scrollTop=thread.scrollHeight}function poll(){fetch('/api/messages/poll?with='+otherId+'&after='+lastId).then(function(r){return r.json()}).then(function(j){(j.messages||[]).forEach(function(m){bubble(m);lastId=m.id})}).catch(function(){})}thread.scrollTop=thread.scrollHeight;setInterval(poll,3000);form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;input.value='';fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:otherId,body:text})}).then(function(r){return r.json()}).then(function(j){if(j.id){bubble({id:j.id,from:myId,body:text,created_at:j.created_at});lastId=j.id}})})})()</script>`, req.user));
+});
+
+app.post('/api/messages/send', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const to = Number(req.body && req.body.to);
+  const text = String((req.body && req.body.body) || '').trim().slice(0, 2000);
+  if (!to || to === req.user.id || !text) return res.status(400).json({ error: 'Invalid message.' });
+  if (!db.prepare('SELECT 1 FROM users WHERE id=?').get(to)) return res.status(404).json({ error: 'User not found.' });
+  const { body_enc, iv } = encryptMsg(text);
+  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,body_enc,iv) VALUES(?,?,?,?)').run(req.user.id, to, body_enc, iv);
+  const row = db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid);
+  res.json({ id: info.lastInsertRowid, created_at: row.created_at });
+});
+
+app.get('/api/messages/poll', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const withId = Number(req.query.with), after = Number(req.query.after) || 0;
+  if (!withId) return res.status(400).json({ error: 'Missing conversation.' });
+  const rows = db.prepare('SELECT * FROM messages WHERE id>? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id ASC')
+    .all(after, req.user.id, withId, withId, req.user.id);
+  res.json({ messages: rows.map(m => ({ id: m.id, from: m.sender_id, body: decryptMsg(m.body_enc, m.iv), created_at: m.created_at })) });
+});
+
+app.get('/avatar/:id', (req, res) => {
+  const row = db.prepare('SELECT avatar_data, avatar_mime FROM users WHERE id=?').get(req.params.id);
+  if (!row || !row.avatar_data) return res.sendStatus(404);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Content-Type', row.avatar_mime || 'application/octet-stream');
+  res.send(Buffer.from(row.avatar_data));
+});
+
+app.get('/settings', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/settings');
+  const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  const avatarPreview = u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:64px;height:64px">` : `<span class="avatar" style="width:64px;height:64px;font-size:22px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
+  res.send(layout('Settings', `<h1>Settings</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+<div class="card row" style="align-items:center;gap:16px">${avatarPreview}<form method="post" action="/settings/avatar" enctype="multipart/form-data" style="flex:1;min-width:180px"><input type="file" name="file" accept="image/png,image/jpeg,image/webp" required><button class="ghost">Upload picture</button></form></div>
+<form method="post" action="/settings" class="card">
+<label class="mut">Name</label><input name="name" value="${esc(u.name)}" maxlength="80" required>
+<label class="mut">Department</label><input name="department" value="${esc(u.department || '')}" maxlength="120">
+<label class="mut">University</label><input name="university" value="${esc(u.university || '')}" maxlength="120">
+<label class="mut">Course</label><input name="course" value="${esc(u.course || '')}" maxlength="120">
+<button>Save</button></form>`, req.user));
+});
+app.post('/settings', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const name = String(req.body.name || '').trim().slice(0, 80) || req.user.name;
+  const clean = v => String(v || '').trim().slice(0, 120) || null;
+  db.prepare('UPDATE users SET name=?, department=?, university=?, course=? WHERE id=?')
+    .run(name, clean(req.body.department), clean(req.body.university), clean(req.body.course), req.user.id);
+  res.redirect('/settings?msg=' + encodeURIComponent('Saved.'));
+});
+app.post('/settings/avatar', upload.single('file'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  if (!req.file || !/^image\//.test(req.file.mimetype)) return res.redirect('/settings?msg=' + encodeURIComponent('Choose an image file.'));
+  db.prepare('UPDATE users SET avatar_data=?, avatar_mime=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.user.id);
+  res.redirect('/settings?msg=' + encodeURIComponent('Picture updated.'));
 });
 
 function youtubeId(url) {
@@ -584,7 +792,6 @@ app.post('/logout', (req, res) => {
 });
 
 // ---------- admin ----------
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 const back = msg => '/admin?msg=' + encodeURIComponent(msg);
 
 // ---------- dashboard body: what a logged-in visitor sees at "/" ----------
@@ -619,6 +826,7 @@ ${stats}<h2 class="sec">Shortcuts</h2><div class="grid">${shortcuts}</div>
 ${recent.length ? `<div class="grid">${recent.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet.</p>'}
 <h2 class="sec">Your account</h2><div class="card"><form method="post" action="/account/name" class="row" style="gap:8px;flex-wrap:wrap"><input name="name" value="${esc(u.name)}" maxlength="80" required style="max-width:220px"><button class="ghost">Save name</button></form>
 <p class="mut" style="margin:6px 0 0">${esc(u.email)} &middot; ${u.verified ? 'email verified' : 'email not verified'}</p>
+<p style="margin:8px 0 0"><a href="/settings">Profile picture, department, university &amp; course &rarr;</a></p>
 <form method="post" action="/logout" style="margin-top:8px"><button class="ghost">Log out</button></form></div>`;
 }
 
@@ -649,6 +857,13 @@ app.get('/admin', adminish, (req, res) => {
       `<tr><td>${presenceDot(u)}${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${u.verified ? 'verified' : `<form method="post" action="/admin/users/${u.id}/verify"><button class="link">Unverified: verify now</button></form>`}</td><td>${u.email === ADMIN_EMAIL ? 'Central admin' : central_ ? roleSelect(u) : roleLabel[u.role] || 'User'}</td><td>${u.role === 'admin'
         ? '' : `<form method="post" action="/admin/users/${u.id}/delete" onsubmit="return confirm('Remove this user?')"><button class="link">Remove</button></form>`}</td></tr>`).join('')}</table></div>`;
   })() : '';
+  const pendingNews = canUsers ? db.prepare("SELECT n.*, u.name un, u.email ue FROM news n JOIN users u ON u.id = n.author_id WHERE n.status='pending' ORDER BY n.id DESC").all() : [];
+  const pendingNewsSection = pendingNews.length ? `<h3 id="pending-news">News waiting for you (${pendingNews.length})</h3>${pendingNews.map(n => `<div class="card"><b>${esc(n.title)}</b> <span class="mut">by ${esc(n.un)} (${esc(n.ue)})</span><p class="mut" style="margin:6px 0">${esc(n.body)}</p>
+<div class="row" style="gap:6px"><form method="post" action="/admin/news/${n.id}/approve"><button>Approve</button></form><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Reject this news item?')"><button class="link">Reject</button></form></div></div>`).join('')}` : '';
+  const newsItems = db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all();
+  const newsSection = `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
+<form class="card" method="post" action="/admin/news"><input name="title" placeholder="Headline" required maxlength="140"><input name="image_url" placeholder="Image URL (optional)"><textarea name="body" placeholder="Short summary" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
+${newsItems.map(n => `<div class="card row"><span class="mut">${esc(n.title)}</span><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}`;
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
@@ -673,7 +888,7 @@ ${replaceCtrl}
 <form method="post" action="/admin/pages/${p.id}/delete" onsubmit="return confirm('Delete this page?')"><button class="link">Delete</button></form></div></div>`;
   }).join('')
     || '<p class="mut">No pages yet.</p>'}
-${paymentsSection}${usersSection}`, req.user));
+${newsSection}${paymentsSection}${usersSection}`, req.user));
 });
 
 app.post('/admin/upload', adminish, upload.single('file'), (req, res) => {
@@ -721,6 +936,22 @@ app.post('/admin/pages/:id/video', admin, (req, res) => {
   if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
   db.prepare("UPDATE pages SET video_id=? WHERE id=? AND kind='video'").run(vid, req.params.id);
   res.redirect(back('Video link updated.'));
+});
+app.post('/admin/news', adminish, (req, res) => {
+  const title = String(req.body.title || '').trim().slice(0, 140);
+  const body = String(req.body.body || '').trim().slice(0, 600);
+  if (!title || !body) return res.redirect(back('Enter a headline and a summary.'));
+  db.prepare('INSERT INTO news(title,body,image_url,author_id,status) VALUES(?,?,?,?,?)')
+    .run(title, body, (req.body.image_url || '').trim() || null, req.user.id, 'approved');
+  res.redirect(back('News posted.'));
+});
+app.post('/admin/news/:id/approve', admin, (req, res) => {
+  db.prepare("UPDATE news SET status='approved' WHERE id=?").run(req.params.id);
+  res.redirect(back('News approved.'));
+});
+app.post('/admin/news/:id/delete', adminish, (req, res) => {
+  db.prepare('DELETE FROM news WHERE id=?').run(req.params.id);
+  res.redirect(back('News deleted.'));
 });
 app.post('/admin/pages/:id/toggle', adminish, (req, res) => {
   db.prepare('UPDATE pages SET members_only = 1 - members_only WHERE id=?').run(req.params.id);
