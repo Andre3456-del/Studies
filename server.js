@@ -37,6 +37,10 @@ for (const [c, def] of [['status', "TEXT NOT NULL DEFAULT 'pending'"]])
 db.exec("CREATE TABLE IF NOT EXISTS news(id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, image_url TEXT, author_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
 const newsCols = db.prepare('PRAGMA table_info(news)').all().map(c => c.name);
 if (!newsCols.includes('status')) db.exec("ALTER TABLE news ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'");
+// image_url stays only so news posted before this fix still shows its picture -- every new submission uses
+// image_data/image_mime instead (a real uploaded image file, not a pasted link).
+if (!newsCols.includes('image_data')) db.exec('ALTER TABLE news ADD COLUMN image_data BLOB');
+if (!newsCols.includes('image_mime')) db.exec('ALTER TABLE news ADD COLUMN image_mime TEXT');
 db.prepare("UPDATE users SET verified=1 WHERE role='admin'").run();
 db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
 
@@ -484,19 +488,28 @@ const timeAgo = iso => {
 };
 app.get('/news', (req, res) => {
   const items = db.prepare("SELECT n.*, u.name AS author FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
-  const cards = items.map(n => `<div class="news-card">${n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>'}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut" style="margin:0 0 8px">${esc(n.body)}</p><div class="news-meta"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></div>`).join('');
+  const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
+  const cards = items.map(n => `<div class="news-card">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut" style="margin:0 0 8px">${esc(n.body)}</p><div class="news-meta"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></div>`).join('');
   const submitForm = req.user
-    ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input name="image_url" placeholder="Image URL (optional)"><textarea name="body" placeholder="What's happening?" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
+    ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
     : '';
   res.send(layout('News', `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || '<p class="mut">No news yet. Check back soon.</p>'}`, req.user));
 });
-app.post('/news', (req, res) => {
+app.get('/news-image/:id', (req, res) => {
+  const row = db.prepare('SELECT image_data, image_mime FROM news WHERE id=?').get(req.params.id);
+  if (!row || !row.image_data) return res.sendStatus(404);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('Content-Type', row.image_mime || 'application/octet-stream');
+  res.send(Buffer.from(row.image_data));
+});
+app.post('/news', upload.single('image'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/news');
   const title = String(req.body.title || '').trim().slice(0, 140);
   const body = String(req.body.body || '').trim().slice(0, 600);
   if (!title || !body) return res.redirect('/news?msg=' + encodeURIComponent('Enter a headline and a summary.'));
-  db.prepare("INSERT INTO news(title,body,image_url,author_id,status) VALUES(?,?,?,?,'pending')")
-    .run(title, body, (req.body.image_url || '').trim() || null, req.user.id);
+  if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect('/news?msg=' + encodeURIComponent('That file is not an image.'));
+  db.prepare("INSERT INTO news(title,body,image_data,image_mime,author_id,status) VALUES(?,?,?,?,?,'pending')")
+    .run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id);
   res.redirect('/news?msg=' + encodeURIComponent("Thanks -- we'll review it shortly."));
 });
 
@@ -921,12 +934,13 @@ app.get('/admin', adminish, (req, res) => {
         ? '' : `<form method="post" action="/admin/users/${u.id}/delete" onsubmit="return confirm('Remove this user?')"><button class="link">Remove</button></form>`}</td></tr>`).join('')}</table></div>`;
   })() : '';
   const pendingNews = canUsers ? db.prepare("SELECT n.*, u.name un, u.email ue FROM news n JOIN users u ON u.id = n.author_id WHERE n.status='pending' ORDER BY n.id DESC").all() : [];
-  const pendingNewsSection = pendingNews.length ? `<h3 id="pending-news">News waiting for you (${pendingNews.length})</h3>${pendingNews.map(n => `<div class="card"><b>${esc(n.title)}</b> <span class="mut">by ${esc(n.un)} (${esc(n.ue)})</span><p class="mut" style="margin:6px 0">${esc(n.body)}</p>
+  const newsThumb = n => n.image_data ? `<img src="/news-image/${n.id}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;float:left;margin-right:10px">` : '';
+  const pendingNewsSection = pendingNews.length ? `<h3 id="pending-news">News waiting for you (${pendingNews.length})</h3>${pendingNews.map(n => `<div class="card" style="overflow:hidden">${newsThumb(n)}<b>${esc(n.title)}</b> <span class="mut">by ${esc(n.un)} (${esc(n.ue)})</span><p class="mut" style="margin:6px 0">${esc(n.body)}</p>
 <div class="row" style="gap:6px"><form method="post" action="/admin/news/${n.id}/approve"><button>Approve</button></form><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Reject this news item?')"><button class="link">Reject</button></form></div></div>`).join('')}` : '';
   const newsItems = db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all();
   const newsSection = `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
-<form class="card" method="post" action="/admin/news"><input name="title" placeholder="Headline" required maxlength="140"><input name="image_url" placeholder="Image URL (optional)"><textarea name="body" placeholder="Short summary" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
-${newsItems.map(n => `<div class="card row"><span class="mut">${esc(n.title)}</span><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}`;
+<form class="card" method="post" action="/admin/news" enctype="multipart/form-data"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="Short summary" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
+${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}`;
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
@@ -1000,12 +1014,13 @@ app.post('/admin/pages/:id/video', admin, (req, res) => {
   db.prepare("UPDATE pages SET video_id=? WHERE id=? AND kind='video'").run(vid, req.params.id);
   res.redirect(back('Video link updated.'));
 });
-app.post('/admin/news', adminish, (req, res) => {
+app.post('/admin/news', adminish, upload.single('image'), (req, res) => {
   const title = String(req.body.title || '').trim().slice(0, 140);
   const body = String(req.body.body || '').trim().slice(0, 600);
   if (!title || !body) return res.redirect(back('Enter a headline and a summary.'));
-  db.prepare('INSERT INTO news(title,body,image_url,author_id,status) VALUES(?,?,?,?,?)')
-    .run(title, body, (req.body.image_url || '').trim() || null, req.user.id, 'approved');
+  if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect(back('That file is not an image.'));
+  db.prepare('INSERT INTO news(title,body,image_data,image_mime,author_id,status) VALUES(?,?,?,?,?,?)')
+    .run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id, 'approved');
   res.redirect(back('News posted.'));
 });
 app.post('/admin/news/:id/approve', admin, (req, res) => {
