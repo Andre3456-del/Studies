@@ -315,9 +315,11 @@ footer{text-align:center;color:var(--mut);font-size:13px;padding:20px}
 .drawer-item.active{background:rgba(56,176,248,.14);color:var(--blue);border-right:3px solid var(--blue)}
 .drawer-bottom{margin-top:auto;border-top:1px solid var(--line);padding:6px 0}
 .news-card{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin:14px 0}
+a.news-card{color:inherit;text-decoration:none;display:flex}
 .news-img{width:100%;aspect-ratio:16/9;object-fit:cover;background:linear-gradient(135deg,rgba(56,176,248,.25),rgba(240,0,232,.18))}
 .news-body{padding:14px 16px}
 .news-body h3{margin:2px 0 6px;font-size:17px;line-height:1.3}
+.news-body p, .news-full{white-space:pre-wrap;word-wrap:break-word}
 .news-meta{color:var(--mut);font-size:12px;display:flex;gap:8px;align-items:center}
 .chat-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;color:var(--fg)}
 .chat-item:hover{background:var(--panel);text-decoration:none}
@@ -340,7 +342,8 @@ const navItems = user => {
   const canPages = !!user && (user.role === 'admin' || user.role === 'partial');
   const canUsers = !!user && user.role === 'admin';
   return [
-    { href: '/', icon: '🏠', label: user ? 'Dashboard' : 'Home' },
+    { href: '/', icon: '🏠', label: 'Home' },
+    ...(user ? [{ href: '/dashboard', icon: '📊', label: 'Dashboard' }] : []),
     { href: '/news', icon: '📰', label: 'News' },
     { href: '/browse', icon: '🌐', label: 'Browse pages' },
     ...(user ? [{ href: '/chat', icon: '💬', label: 'Chat' }] : []),
@@ -400,14 +403,10 @@ const resendForm = (email = '') => `<form method="post" action="/resend" class="
 const checkEmailPage = email => notice('Check your email', `We sent a verification link to ${email}. Click it to activate your account (it expires in 24 hours).`, resendForm(email));
 
 // ---------- public + auth routes ----------
-app.get('/', (req, res) => {
-  if (req.user) return res.send(layout('Studies Hub', dashboardBody(req), req.user));
-  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC').all();
-  const hero = `<section class="hero"><p class="eyebrow">Welcome</p><h1>Explore our <span class="grad">pages</span></h1>
-<p class="lead">Browse what is live, or create a free account to unlock members-only content.</p><div class="cta"><a class="btn" href="/signup">Create account</a><a class="btn ghost" href="/login">Log in</a></div></section>`;
-  const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
-  res.send(layout('Studies Hub', `${hero}<h2 class="sec">Pages</h2>${grid}`, req.user));
-});
+// News is the front door of the whole site now: whoever you are, and whether you're logged in
+// or not, "/" and "/news" show the same thing -- the news feed. Everything else (dashboard,
+// browse pages, admin, chat, settings) lives one tap away in the navigation drawer instead.
+app.get('/', (req, res) => res.send(layout('Studies Hub', newsFeedBody(req), req.user)));
 
 app.get('/browse', (req, res) => {
   const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC').all();
@@ -486,21 +485,30 @@ const timeAgo = iso => {
   if (hrs < 24) return `${hrs}h`;
   return `${Math.round(hrs / 24)}d`;
 };
-app.get('/news', (req, res) => {
+function newsFeedBody(req) {
   const items = db.prepare("SELECT n.*, u.name AS author FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
   const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
-  const cards = items.map(n => `<div class="news-card">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut" style="margin:0 0 8px">${esc(n.body)}</p><div class="news-meta"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></div>`).join('');
+  const cards = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut" style="margin:0 0 8px">${esc(n.body)}</p><div class="news-meta"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`).join('');
   const submitForm = req.user
     ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
     : '';
-  res.send(layout('News', `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || '<p class="mut">No news yet. Check back soon.</p>'}`, req.user));
-});
+  return `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || '<p class="mut">No news yet. Check back soon.</p>'}`;
+}
+app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));
 app.get('/news-image/:id', (req, res) => {
   const row = db.prepare('SELECT image_data, image_mime FROM news WHERE id=?').get(req.params.id);
   if (!row || !row.image_data) return res.sendStatus(404);
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   res.setHeader('Content-Type', row.image_mime || 'application/octet-stream');
   res.send(Buffer.from(row.image_data));
+});
+// The bigger, tap-through view of one news item: full picture, and the text exactly as it was
+// typed or pasted -- real line breaks kept (via the .news-full CSS rule), nothing squashed together.
+app.get('/news/:id', (req, res) => {
+  const n = db.prepare("SELECT n.*, u.name AS author FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.id=? AND n.status='approved'").get(req.params.id);
+  if (!n) return res.status(404).send(layout('Not found', '<h2>News item not found</h2><p><a href="/news">Back to News</a></p>', req.user));
+  const img = n.image_data ? `<img src="/news-image/${n.id}" style="width:100%;border-radius:14px;margin-bottom:16px">` : n.image_url ? `<img src="${esc(n.image_url)}" style="width:100%;border-radius:14px;margin-bottom:16px">` : '';
+  res.send(layout(n.title, `<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${esc(n.body)}</p><div class="news-meta" style="margin-top:14px"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div>`, req.user));
 });
 app.post('/news', upload.single('image'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/news');
@@ -909,12 +917,15 @@ ${recent.length ? `<div class="grid">${recent.map(pageCard).join('')}</div>` : '
 app.post('/account/name', (req, res) => {
   if (!req.user) return res.sendStatus(401);
   const name = String(req.body.name || '').trim().slice(0, 80);
-  if (!name) return res.redirect('/');
+  if (!name) return res.redirect('/dashboard');
   db.prepare('UPDATE users SET name=? WHERE id=?').run(name, req.user.id);
-  res.redirect('/');
+  res.redirect('/dashboard');
 });
 
-app.get('/dashboard', (req, res) => res.redirect(req.user ? '/' : '/login'));
+app.get('/dashboard', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/dashboard');
+  res.send(layout('Dashboard', dashboardBody(req), req.user));
+});
 
 app.get('/admin', adminish, (req, res) => {
   const canUsers = req.user.role === 'admin', central_ = isCentral(req.user);
