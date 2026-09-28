@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, user_id INTEGER NOT
 `);
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT']])
+for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -31,6 +31,13 @@ for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTE
 db.exec('CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL, body_enc BLOB NOT NULL, iv BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
 db.exec('CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id)');
+// Voice notes and stickers ride on the same messages table (kind = text | voice | sticker); their media is encrypted too.
+const msgCols = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
+for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'text'"], ['media_enc', 'BLOB'], ['media_iv', 'BLOB'], ['media_mime', 'TEXT'], ['media_ms', 'INTEGER']])
+  if (!msgCols.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
+// Each member's personal sticker board.
+db.exec('CREATE TABLE IF NOT EXISTS stickers(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+db.exec('CREATE INDEX IF NOT EXISTS stickers_user ON stickers(user_id)');
 const purchaseCols = db.prepare('PRAGMA table_info(purchases)').all().map(c => c.name);
 for (const [c, def] of [['status', "TEXT NOT NULL DEFAULT 'pending'"]])
   if (!purchaseCols.includes(c)) db.exec(`ALTER TABLE purchases ADD COLUMN ${c} ${def}`);
@@ -99,6 +106,17 @@ function decryptMsg(body_enc, iv) {
   decipher.setAuthTag(tag);
   try { return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8'); }
   catch { return '[unreadable message]'; }
+}
+// Same AES-256-GCM, for raw bytes (voice notes and sticker images).
+function encryptBytes(buf) {
+  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', MESSAGE_KEY, iv);
+  return { enc: Buffer.concat([cipher.update(buf), cipher.final(), cipher.getAuthTag()]), iv };
+}
+function decryptBytes(enc, iv) {
+  const buf = Buffer.from(enc), tag = buf.subarray(buf.length - 16), body = buf.subarray(0, buf.length - 16);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', MESSAGE_KEY, Buffer.from(iv));
+  decipher.setAuthTag(tag);
+  try { return Buffer.concat([decipher.update(body), decipher.final()]); } catch { return null; }
 }
 const SECURE = process.env.NODE_ENV === 'production' ? '; Secure' : '';
 const baseUrl = req => process.env.BASE_URL || process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
@@ -224,7 +242,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
+    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -238,12 +256,26 @@ const ONLINE_MS = 2 * 60 * 1000; // a user counts as "online" if seen in the las
 const isOnline = u => !!u.last_seen && Date.now() - u.last_seen < ONLINE_MS;
 const presenceDot = u => `<span title="${isOnline(u) ? 'Online' : 'Offline'}" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${isOnline(u) ? '#22c55e' : '#ef4444'};margin-right:7px;vertical-align:middle"></span>`;
 
-const admin = (req, res, next) =>
-  req.user && req.user.role === 'admin' ? next()
-    : req.method === 'GET' ? res.redirect('/login?next=/admin') : res.sendStatus(403);
-const adminish = (req, res, next) =>
-  req.user && (req.user.role === 'admin' || req.user.role === 'partial') ? next()
-    : req.method === 'GET' ? res.redirect('/login?next=/admin') : res.sendStatus(403);
+// Roles: user | partial (HTML pages only) | content (all file types) | news | support (login help) | admin (everything).
+// Only the central admin (the ADMIN_EMAIL account) can hand these out.
+const ROLES = ['user', 'partial', 'content', 'news', 'support', 'admin'];
+const ROLE_LABEL = { user: 'User', partial: 'Partial admin (HTML pages)', content: 'Files admin', news: 'News admin', support: 'Login-help admin', admin: 'Full admin' };
+const can = {
+  full: u => !!u && u.role === 'admin',
+  pages: u => !!u && ['admin', 'partial', 'content'].includes(u.role),
+  allKinds: u => !!u && ['admin', 'content'].includes(u.role),
+  news: u => !!u && ['admin', 'news'].includes(u.role),
+  support: u => !!u && ['admin', 'support'].includes(u.role),
+  anyAdmin: u => !!u && ROLES.includes(u.role) && u.role !== 'user',
+};
+const guard = ok => (req, res, next) =>
+  ok(req.user) ? next() : req.method === 'GET' ? res.redirect('/login?next=/admin') : res.sendStatus(403);
+const admin = guard(can.full);
+const adminish = guard(can.anyAdmin);
+const pagesAdmin = guard(can.pages);
+const filesAdmin = guard(can.allKinds);
+const newsAdmin = guard(can.news);
+const supportAdmin = guard(can.support);
 const isCentral = u => !!u && u.email === ADMIN_EMAIL;
 const central = (req, res, next) => isCentral(req.user) ? next() : res.sendStatus(403);
 
@@ -336,22 +368,47 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .bubble time{display:block;font-size:11px;opacity:.65;margin-top:3px}
 .chat-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line);max-width:1000px;margin:0 auto}
 .chat-bar input{margin:0;flex:1}.chat-bar button{margin:0}
-.chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:6px 0 12px;z-index:5}`;
+.chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:6px 0 12px;z-index:5}
+.news-body p.news-snip{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:0 0 8px}
+.role-tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;border:1px solid rgba(240,0,232,.45);color:#ff9cf7;margin-left:6px;vertical-align:middle;line-height:1.5}
+.pv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+.pv{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;color:var(--fg);transition:.2s}
+.pv:hover{transform:translateY(-3px);border-color:var(--blue);text-decoration:none}
+.pv-img{width:100%;aspect-ratio:16/9;object-fit:cover;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,rgba(56,176,248,.25),rgba(240,0,232,.18))}
+.pv-icon{font-size:40px}
+.pv-body{padding:10px 12px}.pv-body h3{margin:6px 0 2px;font-size:15px;line-height:1.3}
+.prof{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.bubble audio{display:block;width:230px;max-width:100%;height:38px}
+.sticker-msg{max-width:60%;display:flex;flex-direction:column;gap:2px}
+.sticker-msg.me{align-self:flex-end;align-items:flex-end}.sticker-msg.them{align-self:flex-start;align-items:flex-start}
+.sticker-msg img{width:150px;max-width:100%;max-height:150px;object-fit:contain}
+.sticker-msg time{font-size:11px;opacity:.65}
+.save-st{font-size:12px;color:var(--blue)}
+.chat-bar[hidden],.chat-panel[hidden]{display:none}
+.chat-bar .ic{padding:9px 12px;font-size:18px;line-height:1;background:transparent;border:1px solid var(--line);color:var(--fg);box-shadow:none}
+.chat-bar.rec{align-items:center}.rec-dot{width:10px;height:10px;border-radius:50%;background:#ef4444;animation:blink 1s infinite}@keyframes blink{50%{opacity:.25}}
+.chat-panel{position:fixed;left:0;right:0;bottom:calc(66px + env(safe-area-inset-bottom,0px));max-width:1000px;margin:0 auto;height:230px;display:flex;flex-direction:column;background:#161628;border-top:1px solid var(--line);z-index:6}
+.ptabs{display:flex;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line)}.ptabs button{margin:0;padding:5px 12px;font-size:14px}.ptabs button.on{background:rgba(56,176,248,.15)}
+.pbody{flex:1;overflow-y:auto;padding:8px 10px}.pbody[hidden]{display:none}
+.ecats{display:flex;gap:4px;margin-bottom:6px}.ecats button{background:none;box-shadow:none;padding:2px 8px;margin:0;font-size:20px;color:inherit}
+.egrid{display:flex;flex-wrap:wrap;gap:2px}.egrid button{background:none;box-shadow:none;padding:4px;margin:0;font-size:26px;line-height:1.1;color:inherit}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px}
+.st{position:relative}.st img{width:100%;aspect-ratio:1;object-fit:contain;background:rgba(255,255,255,.04);border-radius:10px;cursor:pointer}
+.st-x{position:absolute;top:-4px;right:-4px;width:20px;height:20px;padding:0;margin:0;border-radius:50%;font-size:13px;line-height:20px;background:#2a2a44;color:#fff;box-shadow:none}
+.st-add{display:inline-block;margin:0 0 8px;cursor:pointer}.st-add input{display:none}
+body.panel-open .thread{padding-bottom:310px}`;
 
-const navItems = user => {
-  const canPages = !!user && (user.role === 'admin' || user.role === 'partial');
-  const canUsers = !!user && user.role === 'admin';
-  return [
-    { href: '/', icon: '🏠', label: 'Home' },
-    ...(user ? [{ href: '/dashboard', icon: '📊', label: 'Dashboard' }] : []),
-    { href: '/news', icon: '📰', label: 'News' },
-    { href: '/browse', icon: '🌐', label: 'Browse pages' },
-    ...(user ? [{ href: '/chat', icon: '💬', label: 'Chat' }] : []),
-    ...(canPages ? [{ href: '/admin#upload', icon: '⬆️', label: 'Upload' }] : []),
-    ...(canUsers ? [{ href: '/admin#users', icon: '👥', label: 'Users' }] : []),
-  ];
-};
-const layout = (title, body, user) => {
+const navItems = user => [
+  { href: '/', icon: '🏠', label: 'Home' },
+  ...(user ? [{ href: '/dashboard', icon: '📊', label: 'Dashboard' }] : []),
+  { href: '/news', icon: '📰', label: 'News' },
+  { href: '/browse', icon: '🌐', label: 'Browse pages' },
+  ...(user ? [{ href: '/chat', icon: '💬', label: 'Chat' }] : []),
+  ...(can.pages(user) ? [{ href: '/admin#upload', icon: '⬆️', label: 'Upload' }, { href: '/admin#pages', icon: '🗂️', label: 'Manage pages' }] : []),
+  ...(can.news(user) ? [{ href: '/admin#news', icon: '📢', label: 'Manage news' }] : []),
+  ...(can.support(user) ? [{ href: '/admin#users', icon: '👥', label: can.full(user) ? 'Users' : 'Login help' }] : []),
+];
+const layout = (title, body, user, opts = {}) => {
   const avatarBit = user
     ? (user.avatar_mime ? `<img src="/avatar/${user.id}" class="drawer-av-img" alt="">` : `<span class="avatar" style="width:40px;height:40px;font-size:15px">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)
     : '';
@@ -369,7 +426,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;</button><a class="brand" href="/"><span class="logo"></span>Studies Hub</a><span style="width:40px"></span></header>
-<main>${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a></footer>${user && AI ? CHAT_HTML : ''}
+<main>${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a></footer>${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 </body></html>`;
 };
@@ -406,7 +463,7 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 // News is the front door of the whole site now: whoever you are, and whether you're logged in
 // or not, "/" and "/news" show the same thing -- the news feed. Everything else (dashboard,
 // browse pages, admin, chat, settings) lives one tap away in the navigation drawer instead.
-app.get('/', (req, res) => res.send(layout('Studies Hub', newsFeedBody(req), req.user)));
+app.get('/', (req, res) => res.send(layout('Studies Hub', newsFeedBody(req, true), req.user)));
 
 app.get('/browse', (req, res) => {
   const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC').all();
@@ -435,24 +492,24 @@ app.get('/privacy', (req, res) => {
 <ul>
 <li><b>Account details:</b> your name and email address, and a password (we never store your actual password -- only a one-way scrambled/hashed version that can't be reversed).</li>
 <li>${GOOGLE_ON ? '<b>Google sign-in:</b> if you use "Continue with Google," Google shares your name, email address, and whether Google has verified that email -- we don\'t see or store your Google password.' : ''}</li>
-<li><b>Profile details you choose to add:</b> department, university, course, and a profile picture, from the Settings page.</li>
+<li><b>Profile details you choose to add:</b> department, university, course, a profile picture and, if an admin has allowed it, a role or title (like "Director of Socials"), from the Settings page. Other logged-in members can see these on your profile, and your title shows beside your name on news you post.</li>
 <li><b>Activity used to run the site:</b> when you were last active (so other users can see if you're online), and, if you submit news or a payment claim, that submission and its status (pending/approved/rejected).</li>
-<li><b>Messages:</b> if you use Chat, your messages are stored so the conversation can be shown to you and the other person.</li>
+<li><b>Messages:</b> if you use Chat, your text messages, voice notes and stickers are stored so the conversation can be shown to you and the other person. If you build a sticker board, the pictures you add to it are stored for you.</li>
 </ul>
 
 <h2>How we use it</h2>
 <ul>
 <li>To create and secure your account, verify your email, and let you reset your password.</li>
-<li>To personalize your dashboard and show your name/photo to people you chat with.</li>
+<li>To personalize your dashboard and show your name, photo and profile details to other logged-in members.</li>
 <li>To show your online/offline status to other logged-in members -- this is visible to other members of the site, not the public.</li>
-<li>To review content before it goes public: news you submit, and payment claims, are checked by an admin before they're approved.</li>
+<li>To review content before it goes public: news you submit, and payment claims, are checked by an admin before they're approved. Some admins only handle one job (files, news, or helping people who can't log in); helping with login can include sending you a verification link or a password-reset code by email, or signing you out of your devices.</li>
 </ul>
 
 <h2>Payments</h2>
 <p>Studies Hub does not use a card payment processor and does not collect your card or bank details. Some content is unlocked via manual bank transfer: we show our own account details, you pay directly through your own bank, and an admin manually confirms and unlocks the content. We don't see your banking information at any point in that process.</p>
 
 <h2>Chat and messages</h2>
-<p>Messages are stored encrypted (scrambled so a stolen copy of our database would be unreadable) -- but this is not "end-to-end" encryption. The site itself is still able to decrypt and read messages when needed, for example to display them to you or to look into abuse reports. Please don't send anything in chat you wouldn't want anyone but the recipient to ever see.</p>
+<p>Text messages, voice notes and stickers sent in chat are stored encrypted (scrambled so a stolen copy of our database would be unreadable) -- but this is not "end-to-end" encryption. The site itself is still able to decrypt and read messages when needed, for example to display them to you or to look into abuse reports. Please don't send anything in chat you wouldn't want anyone but the recipient to ever see.</p>
 
 ${aiProvider ? `<h2>The "Ask AI" assistant</h2><p>If you use the Ask AI assistant, your question and Studies Hub's reply are sent to ${aiProvider}, an outside AI provider, purely to generate that reply. We don't send your email, password, or profile details to them -- just the conversation you type.</p>` : ''}
 
@@ -485,30 +542,39 @@ const timeAgo = iso => {
   if (hrs < 24) return `${hrs}h`;
   return `${Math.round(hrs / 24)}d`;
 };
-function newsFeedBody(req) {
-  const items = db.prepare("SELECT n.*, u.name AS author FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
+// home = true: just the news cards, nothing else -- no heading, no share form -- so the front page is only news.
+// home = false (the /news section): heading, the "Share something" form for logged-in members, then the cards.
+function newsFeedBody(req, home = false) {
+  const items = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
   const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
-  const cards = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut" style="margin:0 0 8px">${esc(n.body)}</p><div class="news-meta"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`).join('');
+  const cards = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`).join('');
+  const empty = '<p class="mut">No news yet. Check back soon.</p>';
+  if (home) return cards || empty;
   const submitForm = req.user
     ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
-    : '';
-  return `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || '<p class="mut">No news yet. Check back soon.</p>'}`;
+    : '<p class="mut"><a href="/login?next=/news">Log in</a> to share something.</p>';
+  return `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || empty}`;
 }
 app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));
 app.get('/news-image/:id', (req, res) => {
   const row = db.prepare('SELECT image_data, image_mime FROM news WHERE id=?').get(req.params.id);
   if (!row || !row.image_data) return res.sendStatus(404);
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   res.setHeader('Content-Type', row.image_mime || 'application/octet-stream');
   res.send(Buffer.from(row.image_data));
 });
 // The bigger, tap-through view of one news item: full picture, and the text exactly as it was
 // typed or pasted -- real line breaks kept (via the .news-full CSS rule), nothing squashed together.
 app.get('/news/:id', (req, res) => {
-  const n = db.prepare("SELECT n.*, u.name AS author FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.id=? AND n.status='approved'").get(req.params.id);
+  const n = db.prepare("SELECT n.*, u.id AS author_uid, u.name AS author, u.title AS author_title, u.avatar_mime FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.id=? AND n.status='approved'").get(req.params.id);
   if (!n) return res.status(404).send(layout('Not found', '<h2>News item not found</h2><p><a href="/news">Back to News</a></p>', req.user));
   const img = n.image_data ? `<img src="/news-image/${n.id}" style="width:100%;border-radius:14px;margin-bottom:16px">` : n.image_url ? `<img src="${esc(n.image_url)}" style="width:100%;border-radius:14px;margin-bottom:16px">` : '';
-  res.send(layout(n.title, `<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${esc(n.body)}</p><div class="news-meta" style="margin-top:14px"><span>${esc(n.author || 'Studies Hub')}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div>`, req.user));
+  const who = n.author_uid ? avatarOr({ id: n.author_uid, name: n.author, avatar_mime: n.avatar_mime }, 40) : '';
+  const nameHtml = n.author_uid && req.user ? `<a href="/u/${n.author_uid}"><b>${esc(n.author)}</b></a>` : `<b>${esc(n.author || 'Studies Hub')}</b>`;
+  const posted = `<div class="row" style="justify-content:flex-start;gap:10px;margin-top:16px">${who}<div>${nameHtml}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}<br><span class="mut" style="font-size:12px">${timeAgo(n.created_at)} ago</span></div></div>`;
+  res.send(layout(n.title, `<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${esc(n.body)}</p>${posted}</div>`, req.user));
 });
 app.post('/news', upload.single('image'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/news');
@@ -521,8 +587,25 @@ app.post('/news', upload.single('image'), (req, res) => {
   res.redirect('/news?msg=' + encodeURIComponent("Thanks -- we'll review it shortly."));
 });
 
+// A member's profile: what they've chosen to share (department, university, course, their title) plus their approved news.
+app.get('/u/:id', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+  const u = db.prepare('SELECT id,name,title,avatar_mime,department,university,course,last_seen FROM users WHERE id=?').get(Number(req.params.id));
+  if (!u) return res.status(404).send(layout('Not found', '<h2>Member not found</h2>', req.user));
+  const facts = [['Department', u.department], ['University', u.university], ['Course', u.course]].filter(r => r[1])
+    .map(r => `<tr><td class="mut">${r[0]}</td><td>${esc(r[1])}</td></tr>`).join('');
+  const posts = db.prepare("SELECT id,title,created_at FROM news WHERE author_id=? AND status='approved' ORDER BY id DESC LIMIT 5").all(u.id);
+  const me = u.id === req.user.id;
+  res.send(layout(u.name, `<p class="mut" style="margin:0 0 12px"><a href="javascript:history.back()">&larr; Back</a></p>
+<div class="card"><div class="prof">${avatarOr(u, 88)}<div><h1 style="margin:0;font-size:26px">${esc(u.name)}</h1>${u.title ? `<span class="role-tag" style="margin:4px 0 0">${esc(u.title)}</span>` : ''}<div class="mut" style="margin-top:6px">${presenceDot(u)}${isOnline(u) ? 'Online now' : 'Offline'}</div></div></div>
+${facts ? `<table style="margin-top:14px">${facts}</table>` : '<p class="mut" style="margin:14px 0 0">No department, university or course added yet.</p>'}
+<p style="margin:14px 0 0">${me ? '<a class="btn ghost" href="/settings">Edit my profile</a>' : `<a class="btn" href="/chat/${u.id}">Message ${esc(u.name.split(' ')[0])}</a>`}</p></div>
+${posts.length ? `<h3>News from ${esc(u.name.split(' ')[0])}</h3>${posts.map(p => `<div class="card row"><a href="/news/${p.id}">${esc(p.title)}</a><span class="mut">${timeAgo(p.created_at)}</span></div>`).join('')}` : ''}`, req.user));
+});
+
 // ---------- chat: encrypted messages between any two users ----------
-const avatarOr = u => u.avatar_mime ? `<img src="/avatar/${u.id}" class="av" style="width:44px;height:44px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:44px;height:44px;font-size:16px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
+const avatarOr = (u, size = 44) => u.avatar_mime ? `<img src="/avatar/${u.id}" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
+const byline = n => `${esc(n.author || 'Studies Hub')}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}`;
 const lastMessageWith = (me, other) => db.prepare('SELECT * FROM messages WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?) ORDER BY id DESC LIMIT 1').get(me, other, other, me);
 
 app.get('/chat', (req, res) => {
@@ -534,23 +617,111 @@ app.get('/chat', (req, res) => {
   const offlineHistory = others.filter(u => !isOnline(u) && talkedTo.has(u.id));
   const row = (u, sub) => `<a class="chat-item" href="/chat/${u.id}"><span class="av-wrap" style="position:relative">${avatarOr(u)}<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${isOnline(u) ? '#22c55e' : '#ef4444'}"></span></span><span class="meta"><b>${esc(u.name)}</b><span>${sub}</span></span></a>`;
   const onlineList = online.map(u => row(u, 'Online now')).join('') || '<p class="mut">No one else is online right now.</p>';
-  const historyList = offlineHistory.map(u => { const m = lastMessageWith(me, u.id); return row(u, m ? `${decryptMsg(m.body_enc, m.iv).slice(0, 40)} &middot; ${timeAgo(m.created_at)}` : 'Offline'); }).join('');
+  const historyList = offlineHistory.map(u => { const m = lastMessageWith(me, u.id); return row(u, m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'Offline'); }).join('');
   res.send(layout('Chat', `<h1>Chat</h1><p class="chat-label">Online</p>${onlineList}${historyList ? `<p class="chat-label">Recent chats</p>${historyList}` : ''}`, req.user));
 });
 
+const CHAT_JS = `(function(){
+var myId=__MY__,otherId=__OTHER__;
+var thread=document.getElementById('thread'),form=document.getElementById('sendForm'),input=document.getElementById('msgInput');
+var panel=document.getElementById('panel'),pBtn=document.getElementById('panelBtn'),micBtn=document.getElementById('micBtn');
+var recBar=document.getElementById('recBar'),recTime=document.getElementById('recTime'),recSend=document.getElementById('recSend'),recCancel=document.getElementById('recCancel');
+var pEmoji=document.getElementById('pEmoji'),pStickers=document.getElementById('pStickers'),ec=document.getElementById('ecats'),eg=document.getElementById('egrid'),sg=document.getElementById('sgrid'),stFile=document.getElementById('stFile');
+var lastId=parseInt(thread.getAttribute('data-last-id'),10)||0,seen={};
+Array.prototype.forEach.call(thread.querySelectorAll('[data-id]'),function(n){seen[n.getAttribute('data-id')]=1});
+function fmt(iso){return new Date(iso+'Z').toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+function dur(ms){var t=Math.round((ms||0)/1000);return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2)}
+function stamp(t){var iso=t.getAttribute('data-t');if(iso)t.textContent=(t.getAttribute('data-pre')||'')+fmt(iso)}
+function el(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e}
+function toBottom(){window.scrollTo(0,document.body.scrollHeight)}
+function bubble(m){
+  if(seen[m.id])return;seen[m.id]=1;
+  var hello=thread.querySelector('.hello');if(hello)hello.parentNode.removeChild(hello);
+  var mine=m.from===myId,side=mine?'me':'them',d,t=el('time');t.setAttribute('data-t',m.created_at);
+  if(m.kind==='voice'){d=el('div','bubble '+side);var a=document.createElement('audio');a.controls=true;a.preload='none';a.src='/api/messages/media/'+m.id;d.appendChild(a);t.setAttribute('data-pre','🎤 '+dur(m.ms)+' · ')}
+  else if(m.kind==='sticker'){d=el('div','sticker-msg '+side);var im=document.createElement('img');im.src='/api/messages/media/'+m.id;im.alt='sticker';d.appendChild(im);if(!mine){var sb=el('button','link save-st','+ Save sticker');sb.type='button';sb.setAttribute('data-save',m.id);d.appendChild(sb)}}
+  else{d=el('div','bubble '+side);d.appendChild(el('span',null,m.body))}
+  d.setAttribute('data-id',m.id);d.appendChild(t);stamp(t);thread.appendChild(d);toBottom();
+}
+Array.prototype.forEach.call(thread.querySelectorAll('time[data-t]'),stamp);
+function poll(){fetch('/api/messages/poll?with='+otherId+'&after='+lastId).then(function(r){return r.json()}).then(function(j){(j.messages||[]).forEach(function(m){bubble(m);if(m.id>lastId)lastId=m.id})}).catch(function(){})}
+function post(url,obj,cb){fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id)cb(j);else alert((j&&j.error)||'Could not send.')}).catch(function(){alert('Could not send. Check your connection.')})}
+toBottom();setInterval(poll,3000);
+form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;input.value='';post('/api/messages/send',{to:otherId,body:text},function(j){bubble({id:j.id,from:myId,kind:'text',body:text,created_at:j.created_at});if(j.id>lastId)lastId=j.id})});
+
+/* ---- emoji + stickers panel ---- */
+var EMO={'😀':'😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😜 🤪 😎 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🤭 🤫 😶 😐 😑 😬 🙄 😯 😴 🤤 😷 🤒 🤕 🤢 🤮 🤧 😈 💀 👻 🤡',
+'👍':'👍 👎 👌 🤞 🤟 🤘 🤙 👈 👉 👆 👇 ✋ 🤚 👋 🤝 🙏 👏 🙌 👐 🤲 💪 🫶',
+'❤️':'❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💔 💕 💞 💓 💗 💖 💘 💝 ✨ ⭐ 🌟 🔥 💯 💥 💫 🎉 🎊 🎁 🏆 🥇',
+'🍔':'🍔 🍕 🌭 🍟 🍗 🍖 🍚 🍜 🍝 🍞 🧀 🥚 🍳 🥞 🍩 🍪 🎂 🍰 🍫 🍬 🍭 🍿 ☕ 🍵 🥤 🍺 🍻 🍎 🍌 🍉 🍇 🍓 🍍 🥭',
+'📚':'📚 📖 📝 🎓 🏫 💻 📱 🎧 🎵 🎶 ⚽ 🏀 🎮 🚀 ✈️ 🚗 🏠 ⏰ 📅 💡 🔔 ✅ ❌ ⚠️ ❓ ❗ 💬'};
+function ins(ch){var s=typeof input.selectionStart==='number'?input.selectionStart:input.value.length,e=typeof input.selectionEnd==='number'?input.selectionEnd:s;input.value=input.value.slice(0,s)+ch+input.value.slice(e);var p=s+ch.length;input.focus();try{input.setSelectionRange(p,p)}catch(_){}}
+function showCat(k){eg.innerHTML='';EMO[k].split(' ').forEach(function(ch){var b=el('button',null,ch);b.type='button';b.addEventListener('click',function(){ins(ch)});eg.appendChild(b)})}
+Object.keys(EMO).forEach(function(k){var b=el('button',null,k);b.type='button';b.addEventListener('click',function(){showCat(k)});ec.appendChild(b)});
+showCat(Object.keys(EMO)[0]);
+function tab(name){var isE=name==='emoji';pEmoji.hidden=!isE;pStickers.hidden=isE;Array.prototype.forEach.call(panel.querySelectorAll('[data-tab]'),function(b){b.className=(b.getAttribute('data-tab')===name?'ghost on':'ghost')});if(!isE)loadStickers()}
+Array.prototype.forEach.call(panel.querySelectorAll('[data-tab]'),function(b){b.addEventListener('click',function(){tab(b.getAttribute('data-tab'))})});
+pBtn.addEventListener('click',function(){panel.hidden=!panel.hidden;document.body.classList.toggle('panel-open',!panel.hidden);if(!panel.hidden){tab('emoji');toBottom()}});
+function sendSticker(id){post('/api/messages/sticker',{to:otherId,sticker_id:id},function(j){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at});if(j.id>lastId)lastId=j.id;panel.hidden=true;document.body.classList.remove('panel-open')})}
+function loadStickers(){fetch('/api/stickers').then(function(r){return r.json()}).then(function(j){
+  sg.innerHTML='';var list=j.stickers||[];
+  if(!list.length){sg.appendChild(el('p','mut','No stickers yet. Add a picture to start your sticker board.'));return}
+  list.forEach(function(s){var w=el('div','st'),im=document.createElement('img');im.src='/api/stickers/'+s.id;im.alt='sticker';im.addEventListener('click',function(){sendSticker(s.id)});
+    var x=el('button','st-x','×');x.type='button';x.addEventListener('click',function(){if(confirm('Delete this sticker from your board?'))fetch('/api/stickers/'+s.id+'/delete',{method:'POST'}).then(loadStickers)});
+    w.appendChild(im);w.appendChild(x);sg.appendChild(w)})}).catch(function(){})}
+stFile.addEventListener('change',function(){var f=stFile.files&&stFile.files[0];if(!f)return;var fd=new FormData();fd.append('sticker',f,f.name);
+  fetch('/api/stickers',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(!j||!j.id)alert((j&&j.error)||'Could not add that sticker.');stFile.value='';loadStickers()}).catch(function(){alert('Could not add that sticker.')})});
+thread.addEventListener('click',function(e){var b=e.target.closest?e.target.closest('[data-save]'):null;if(!b)return;
+  fetch('/api/stickers/from-message/'+b.getAttribute('data-save'),{method:'POST'}).then(function(r){return r.json()}).then(function(j){b.textContent=(j&&j.ok)?'✓ Saved to your stickers':((j&&j.error)||'Could not save');b.disabled=true}).catch(function(){b.textContent='Could not save'})});
+
+/* ---- voice notes: tap the mic to record, tap Send to deliver ---- */
+var rec=null,chunks=[],stream=null,t0=0,tick=null,cancelled=false;
+function pickMime(){var c=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus'];for(var i=0;i<c.length;i++){if(window.MediaRecorder&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(c[i]))return c[i]}return ''}
+function stopTracks(){if(stream){stream.getTracks().forEach(function(t){t.stop()});stream=null}}
+function endRec(){clearInterval(tick);recBar.hidden=true;form.hidden=false}
+function finish(cancel){cancelled=cancel;endRec();if(rec&&rec.state!=='inactive')rec.stop();else stopTracks()}
+function sendVoice(blob,ms,type){var fd=new FormData();fd.append('to',otherId);fd.append('ms',ms);var ext=/mp4/.test(type)?'m4a':/ogg/.test(type)?'ogg':'webm';fd.append('audio',blob,'voice.'+ext);
+  fetch('/api/messages/voice',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'voice',ms:ms,created_at:j.created_at});if(j.id>lastId)lastId=j.id}else alert((j&&j.error)||'Could not send the voice note.')}).catch(function(){alert('Could not send the voice note.')})}
+micBtn.addEventListener('click',function(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){alert('Voice notes are not supported in this browser.');return}
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){
+    stream=s;cancelled=false;chunks=[];var mt=pickMime();
+    try{rec=mt?new MediaRecorder(s,{mimeType:mt}):new MediaRecorder(s)}catch(err){stopTracks();alert('Could not start recording.');return}
+    rec.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
+    rec.onstop=function(){var ms=Date.now()-t0,type=rec.mimeType||mt||'audio/webm';stopTracks();if(cancelled||!chunks.length)return;sendVoice(new Blob(chunks,{type:type}),ms,type)};
+    rec.start();t0=Date.now();panel.hidden=true;document.body.classList.remove('panel-open');form.hidden=true;recBar.hidden=false;recTime.textContent='0:00';
+    tick=setInterval(function(){var ms=Date.now()-t0;recTime.textContent=dur(ms);if(ms>=120000)finish(false)},250);
+  }).catch(function(){alert('Allow microphone access to send voice notes.')})});
+recSend.addEventListener('click',function(){finish(false)});
+recCancel.addEventListener('click',function(){finish(true)});
+})();`;
+const clock = iso => new Date(iso + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const fmtDur = ms => { const t = Math.round((ms || 0) / 1000); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+const snippetOf = m => m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : decryptMsg(m.body_enc, m.iv).slice(0, 40);
+function bubbleHtml(m, meId) {
+  const side = m.sender_id === meId ? 'me' : 'them';
+  if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}"><audio controls preload="none" src="/api/messages/media/${m.id}"></audio><time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}</time></div>`;
+  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}"><img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
+  return `<div class="bubble ${side}" data-id="${m.id}">${esc(decryptMsg(m.body_enc, m.iv))}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
+}
 app.get('/chat/:id', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
   const otherId = Number(req.params.id);
   if (otherId === req.user.id) return res.redirect('/chat');
-  const other = db.prepare('SELECT id,name,avatar_mime,last_seen FROM users WHERE id=?').get(otherId);
+  const other = db.prepare('SELECT id,name,title,avatar_mime,last_seen FROM users WHERE id=?').get(otherId);
   if (!other) return res.status(404).send(layout('Not found', '<h2>User not found</h2>', req.user));
   const rows = db.prepare('SELECT * FROM messages WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?) ORDER BY id ASC').all(req.user.id, otherId, otherId, req.user.id);
   const lastId = rows.length ? rows[rows.length - 1].id : 0;
-  const bubbles = rows.map(m => `<div class="bubble ${m.sender_id === req.user.id ? 'me' : 'them'}">${esc(decryptMsg(m.body_enc, m.iv))}<time>${new Date(m.created_at + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>`).join('');
-  res.send(layout(other.name, `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a>${avatarOr(other)}<div><b>${esc(other.name)}</b><br><span class="mut" style="font-size:12px">${isOnline(other) ? 'Online' : 'Offline'}</span></div></div>
-<div id="thread" class="thread" data-last-id="${lastId}">${bubbles || '<p class="mut">Say hello 👋</p>'}</div>
-<form id="sendForm" class="chat-bar"><input id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required><button>Send</button></form>
-<script>(function(){var myId=${req.user.id},otherId=${otherId},thread=document.getElementById('thread'),form=document.getElementById('sendForm'),input=document.getElementById('msgInput');var lastId=parseInt(thread.dataset.lastId,10)||0;function esc(t){var d=document.createElement('div');d.textContent=t;return d.innerHTML}function bubble(m){var d=document.createElement('div');d.className='bubble '+(m.from===myId?'me':'them');var body=document.createElement('span');body.textContent=m.body;d.appendChild(body);var t=document.createElement('time');t.textContent=new Date(m.created_at+'Z').toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});d.appendChild(t);thread.appendChild(d);thread.scrollTop=thread.scrollHeight}function poll(){fetch('/api/messages/poll?with='+otherId+'&after='+lastId).then(function(r){return r.json()}).then(function(j){(j.messages||[]).forEach(function(m){bubble(m);lastId=m.id})}).catch(function(){})}thread.scrollTop=thread.scrollHeight;setInterval(poll,3000);form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;input.value='';fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:otherId,body:text})}).then(function(r){return r.json()}).then(function(j){if(j.id){bubble({id:j.id,from:myId,body:text,created_at:j.created_at});lastId=j.id}})})})()</script>`, req.user));
+  const bubbles = rows.map(m => bubbleHtml(m, req.user.id)).join('');
+  const script = CHAT_JS.replace('__MY__', String(req.user.id)).replace('__OTHER__', String(otherId));
+  res.send(layout(other.name, `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/u/${other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" style="font-size:12px">${isOnline(other) ? 'Online' : 'Offline'} &middot; tap to view profile</span></div></a></div>
+<div id="thread" class="thread" data-last-id="${lastId}">${bubbles || '<p class="mut hello">Say hello 👋</p>'}</div>
+<div id="panel" class="chat-panel" hidden><div class="ptabs"><button type="button" class="ghost on" data-tab="emoji">😊 Emoji</button><button type="button" class="ghost" data-tab="stickers">Stickers</button></div>
+<div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
+<div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg"></label><div id="sgrid" class="sgrid"></div></div></div>
+<form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><input id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
+<div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
+<script>${script}</script>`, req.user, { noAI: true }));
 });
 
 app.post('/api/messages/send', (req, res) => {
@@ -562,7 +733,63 @@ app.post('/api/messages/send', (req, res) => {
   const { body_enc, iv } = encryptMsg(text);
   const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,body_enc,iv) VALUES(?,?,?,?)').run(req.user.id, to, body_enc, iv);
   const row = db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid);
-  res.json({ id: info.lastInsertRowid, created_at: row.created_at });
+  res.json({ id: Number(info.lastInsertRowid), created_at: row.created_at });
+});
+
+// Sends bytes with Range support -- iPhones refuse to play audio without it.
+function sendBytes(req, res, buf, mime) {
+  res.setHeader('Content-Type', mime || 'application/octet-stream');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String((req.headers && req.headers.range) || ''));
+  if (m && (m[1] !== '' || m[2] !== '')) {
+    const start = m[1] === '' ? Math.max(0, buf.length - Number(m[2])) : Number(m[1]);
+    const end = (m[1] === '' || m[2] === '') ? buf.length - 1 : Math.min(Number(m[2]), buf.length - 1);
+    if (start > end || start >= buf.length) { res.setHeader('Content-Range', `bytes */${buf.length}`); return res.sendStatus(416); }
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${buf.length}`);
+    return res.status(206).send(buf.subarray(start, end + 1));
+  }
+  res.send(buf);
+}
+const AUDIO_MIME = /^audio\/[a-z0-9.+-]+(;\s*codecs=[a-z0-9.,+-]+)?$/i;
+const STICKER_MIMES = ['image/png', 'image/webp', 'image/gif', 'image/jpeg'];
+const MAX_STICKERS = 60;
+const userExists = id => !!id && !!db.prepare('SELECT 1 FROM users WHERE id=?').get(id);
+const insertMedia = (from, to, kind, buf, mime, ms) => {
+  const t = encryptMsg(''), m = encryptBytes(buf);
+  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,body_enc,iv,kind,media_enc,media_iv,media_mime,media_ms) VALUES(?,?,?,?,?,?,?,?,?)').run(from, to, t.body_enc, t.iv, kind, m.enc, m.iv, mime, ms || null);
+  return { id: Number(info.lastInsertRowid), created_at: db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid).created_at };
+};
+
+// Voice notes: a recording made in the chat page, stored encrypted like every other message.
+app.post('/api/messages/voice', upload.single('audio'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const to = Number(req.body && req.body.to);
+  if (!to || to === req.user.id || !userExists(to)) return res.status(400).json({ error: 'Invalid message.' });
+  if (!req.file || !AUDIO_MIME.test(req.file.mimetype)) return res.status(400).json({ error: 'That is not a voice recording.' });
+  if (req.file.buffer.length > 3 * 1024 * 1024) return res.status(413).json({ error: 'That voice note is too long.' });
+  if (limited('voice:' + req.user.id, 30, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
+  const ms = Math.max(0, Math.min(Number(req.body.ms) || 0, 300000));
+  res.json(insertMedia(req.user.id, to, 'voice', req.file.buffer, req.file.mimetype, ms));
+});
+// Stickers: sent from your own sticker board; the picture is copied into the message so it never breaks if you later delete it.
+app.post('/api/messages/sticker', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const to = Number(req.body && req.body.to), sid = Number(req.body && req.body.sticker_id);
+  const st = sid ? db.prepare('SELECT * FROM stickers WHERE id=? AND user_id=?').get(sid, req.user.id) : null;
+  if (!to || to === req.user.id || !st || !userExists(to)) return res.status(400).json({ error: 'Invalid sticker.' });
+  if (limited('sticker:' + req.user.id, 60, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
+  res.json(insertMedia(req.user.id, to, 'sticker', Buffer.from(st.data), st.mime, null));
+});
+// A voice note or sticker's file -- only the two people in that conversation can fetch it.
+app.get('/api/messages/media/:id', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const m = db.prepare('SELECT * FROM messages WHERE id=?').get(Number(req.params.id));
+  if (!m || !m.media_enc || (m.sender_id !== req.user.id && m.recipient_id !== req.user.id)) return res.sendStatus(404);
+  const buf = decryptBytes(m.media_enc, m.media_iv);
+  if (!buf) return res.sendStatus(404);
+  sendBytes(req, res, buf, m.media_mime);
 });
 
 app.get('/api/messages/poll', (req, res) => {
@@ -571,13 +798,51 @@ app.get('/api/messages/poll', (req, res) => {
   if (!withId) return res.status(400).json({ error: 'Missing conversation.' });
   const rows = db.prepare('SELECT * FROM messages WHERE id>? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id ASC')
     .all(after, req.user.id, withId, withId, req.user.id);
-  res.json({ messages: rows.map(m => ({ id: m.id, from: m.sender_id, body: decryptMsg(m.body_enc, m.iv), created_at: m.created_at })) });
+  res.json({ messages: rows.map(m => ({ id: m.id, from: m.sender_id, kind: m.kind || 'text', body: m.kind === 'text' || !m.kind ? decryptMsg(m.body_enc, m.iv) : '', ms: m.media_ms || 0, created_at: m.created_at })) });
+});
+
+// ---------- sticker board (each member's own saved stickers) ----------
+app.get('/api/stickers', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  res.json({ stickers: db.prepare('SELECT id FROM stickers WHERE user_id=? ORDER BY id DESC').all(req.user.id).map(r => ({ id: r.id })) });
+});
+app.get('/api/stickers/:id', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const st = db.prepare('SELECT * FROM stickers WHERE id=? AND user_id=?').get(Number(req.params.id), req.user.id);
+  if (!st) return res.sendStatus(404);
+  sendBytes(req, res, Buffer.from(st.data), st.mime);
+});
+app.post('/api/stickers', upload.single('sticker'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  if (!req.file || !STICKER_MIMES.includes(req.file.mimetype)) return res.status(400).json({ error: 'Choose a PNG, WebP, GIF or JPEG picture.' });
+  if (req.file.buffer.length > 1024 * 1024) return res.status(413).json({ error: 'Stickers can be up to 1 MB.' });
+  if (db.prepare('SELECT COUNT(*) n FROM stickers WHERE user_id=?').get(req.user.id).n >= MAX_STICKERS) return res.status(400).json({ error: `Your sticker board is full (${MAX_STICKERS}).` });
+  const info = db.prepare('INSERT INTO stickers(user_id,mime,data) VALUES(?,?,?)').run(req.user.id, req.file.mimetype, req.file.buffer);
+  res.json({ id: Number(info.lastInsertRowid) });
+});
+app.post('/api/stickers/:id/delete', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  db.prepare('DELETE FROM stickers WHERE id=? AND user_id=?').run(Number(req.params.id), req.user.id);
+  res.json({ ok: true });
+});
+// Save a sticker someone sent you onto your own board.
+app.post('/api/stickers/from-message/:mid', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const m = db.prepare("SELECT * FROM messages WHERE id=? AND kind='sticker'").get(Number(req.params.mid));
+  if (!m || (m.sender_id !== req.user.id && m.recipient_id !== req.user.id)) return res.status(404).json({ error: 'Sticker not found.' });
+  if (db.prepare('SELECT COUNT(*) n FROM stickers WHERE user_id=?').get(req.user.id).n >= MAX_STICKERS) return res.status(400).json({ error: `Your sticker board is full (${MAX_STICKERS}).` });
+  const buf = decryptBytes(m.media_enc, m.media_iv);
+  if (!buf) return res.status(404).json({ error: 'Sticker not found.' });
+  db.prepare('INSERT INTO stickers(user_id,mime,data) VALUES(?,?,?)').run(req.user.id, m.media_mime, buf);
+  res.json({ ok: true });
 });
 
 app.get('/avatar/:id', (req, res) => {
   const row = db.prepare('SELECT avatar_data, avatar_mime FROM users WHERE id=?').get(req.params.id);
   if (!row || !row.avatar_data) return res.sendStatus(404);
   res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   res.setHeader('Content-Type', row.avatar_mime || 'application/octet-stream');
   res.send(Buffer.from(row.avatar_data));
 });
@@ -593,6 +858,7 @@ app.get('/settings', (req, res) => {
 <label class="mut">Department</label><input name="department" value="${esc(u.department || '')}" maxlength="120">
 <label class="mut">University</label><input name="university" value="${esc(u.university || '')}" maxlength="120">
 <label class="mut">Course</label><input name="course" value="${esc(u.course || '')}" maxlength="120">
+${u.can_set_title ? `<label class="mut">Your role / title (shows beside your name on news you post)</label><input name="title" value="${esc(u.title || '')}" maxlength="60" placeholder="e.g. Director of Socials">` : '<p class="mut">An admin can allow you to set a role or title, like &ldquo;Director of Socials&rdquo;, that shows beside your name on news you post.</p>'}
 <button>Save</button></form>`, req.user));
 });
 app.post('/settings', (req, res) => {
@@ -601,6 +867,7 @@ app.post('/settings', (req, res) => {
   const clean = v => String(v || '').trim().slice(0, 120) || null;
   db.prepare('UPDATE users SET name=?, department=?, university=?, course=? WHERE id=?')
     .run(name, clean(req.body.department), clean(req.body.university), clean(req.body.course), req.user.id);
+  if (req.user.can_set_title) db.prepare('UPDATE users SET title=? WHERE id=?').run(String(req.body.title || '').trim().slice(0, 60) || null, req.user.id);
   res.redirect('/settings?msg=' + encodeURIComponent('Saved.'));
 });
 app.post('/settings/avatar', upload.single('file'), (req, res) => {
@@ -617,7 +884,7 @@ function youtubeId(url) {
 const hasPurchased = (userId, pageId) => !!db.prepare("SELECT 1 FROM purchases WHERE user_id=? AND page_id=? AND status='approved'").get(userId, pageId);
 const purchaseFor = (userId, pageId) => db.prepare('SELECT * FROM purchases WHERE user_id=? AND page_id=?').get(userId, pageId);
 function canViewPage(page, user) {
-  if (page.paid) return !!user && (user.role === 'admin' || user.role === 'partial' || hasPurchased(user.id, page.id));
+  if (page.paid) return !!user && (can.pages(user) || hasPurchased(user.id, page.id));
   if (page.members_only) return !!user;
   return true;
 }
@@ -879,39 +1146,26 @@ app.post('/logout', (req, res) => {
 const back = msg => '/admin?msg=' + encodeURIComponent(msg);
 
 // ---------- dashboard body: what a logged-in visitor sees at "/" ----------
+// Preview tile for one upload: a picture (the YouTube thumbnail for videos, a big icon for everything else).
+function previewTile(p) {
+  const [icon, label] = KIND_META[p.kind] || KIND_META.html;
+  const chip = p.paid ? `<span class="chip pay">₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view</span>` : p.members_only ? '<span class="chip lock">Members</span>' : '<span class="chip">Open</span>';
+  const thumb = p.kind === 'video' && p.video_id
+    ? `<img class="pv-img" src="https://i.ytimg.com/vi/${esc(p.video_id)}/hqdefault.jpg" alt="" loading="lazy">`
+    : `<div class="pv-img pv-icon">${icon}</div>`;
+  return `<a class="pv" href="/p/${p.slug}">${thumb}<div class="pv-body">${chip}<h3>${esc(p.title)}</h3><span class="mut">${label}</span></div></a>`;
+}
+// The dashboard is just a greeting and a preview of everything uploaded. Everything else lives in the menu.
 function dashboardBody(req) {
-  const u = req.user, central_ = isCentral(u), canUsers = u.role === 'admin', canPages = canUsers || u.role === 'partial';
-  const count = sql => db.prepare(sql).get().n;
-  const initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?');
-  const tile = (href, icon, title, sub, extra = '') => `<a class="tile" href="${href}"${extra}><span class="stat">${icon}</span><h3>${title}</h3><span class="mut">${sub}</span></a>`;
-  const shortcuts = [
-    tile('/browse', '🌐', 'Browse pages', 'See everything that is live'),
-    AI ? tile('#', '💬', 'Ask the assistant', 'Get quick answers', ' onclick="document.getElementById(\'ai-open\').click();return false"') : '',
-    canPages ? tile('/admin#upload', '⬆️', 'Upload a page', 'Add a new HTML file') : '',
-    canPages ? tile('/admin#pages', '🗂️', 'Manage pages', 'Replace, lock or delete') : '',
-    canUsers ? tile('/admin#users', '👥', 'Users', 'Verify, remove or set roles') : ''
-  ].join('');
-  const statRow = (rows) => `<div class="grid">${rows.map(([k, v]) => `<div class="tile"><span class="stat">${v}</span><span class="mut">${k}</span></div>`).join('')}</div>`;
-  const stats = canUsers
-    ? statRow([['Pages', count('SELECT COUNT(*) n FROM pages')], ['Users', count('SELECT COUNT(*) n FROM users')], ['Waiting to verify', count('SELECT COUNT(*) n FROM users WHERE verified=0')]])
-    : canPages
-    ? statRow([['Pages', count('SELECT COUNT(*) n FROM pages')], ['Members-only', count('SELECT COUNT(*) n FROM pages WHERE members_only=1')]])
-    : statRow([['Available to you', count('SELECT COUNT(*) n FROM pages')], ['Members-only', count('SELECT COUNT(*) n FROM pages WHERE members_only=1')], ["Added this week", count("SELECT COUNT(*) n FROM pages WHERE created_at >= datetime('now','-7 days')")]]);
-  const recent = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo FROM pages ORDER BY id DESC LIMIT 5').all();
+  const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?');
+  const uploads = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,video_id FROM pages ORDER BY id DESC LIMIT 60').all();
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
-  const subtitle = central_ ? 'You are the central admin. Manage the whole site from here.'
-    : canUsers ? 'You are an admin. Manage pages and users.'
-    : canPages ? 'You can upload and manage pages here.'
-    : 'Everything you can do on Studies Hub, in one place.';
+  const subtitle = isCentral(u) ? 'You are the central admin.'
+    : u.role !== 'user' ? `You are a ${esc(ROLE_LABEL[u.role] || 'admin')}.`
+    : 'Everything uploaded to Studies Hub, at a glance.';
   return `<div class="dash-hero"><div class="dash-top"><span class="avatar">${initial}</span><div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}</p></div></div>
 <p style="margin:14px 0 0">${pill} <span class="mut">&middot; member since ${esc(String(u.created_at).slice(0, 10))}</span></p></div>
-${stats}<h2 class="sec">Shortcuts</h2><div class="grid">${shortcuts}</div>
-<div class="row sec" style="align-items:baseline"><h2 style="margin:0">Recently added</h2><a href="/browse" class="mut">See all pages &rarr;</a></div>
-${recent.length ? `<div class="grid">${recent.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet.</p>'}
-<h2 class="sec">Your account</h2><div class="card"><form method="post" action="/account/name" class="row" style="gap:8px;flex-wrap:wrap"><input name="name" value="${esc(u.name)}" maxlength="80" required style="max-width:220px"><button class="ghost">Save name</button></form>
-<p class="mut" style="margin:6px 0 0">${esc(u.email)} &middot; ${u.verified ? 'email verified' : 'email not verified'}</p>
-<p style="margin:8px 0 0"><a href="/settings">Profile picture, department, university &amp; course &rarr;</a></p>
-<form method="post" action="/logout" style="margin-top:8px"><button class="ghost">Log out</button></form></div>`;
+<h2 class="sec">Uploaded</h2>${uploads.length ? `<div class="pv-grid">${uploads.map(previewTile).join('')}</div>` : '<p class="mut">Nothing uploaded yet.</p>'}`;
 }
 
 app.post('/account/name', (req, res) => {
@@ -928,61 +1182,69 @@ app.get('/dashboard', (req, res) => {
 });
 
 app.get('/admin', adminish, (req, res) => {
-  const canUsers = req.user.role === 'admin', central_ = isCentral(req.user);
-  const pages = db.prepare('SELECT * FROM pages ORDER BY id DESC').all();
-  const roleLabel = { admin: 'Full admin', partial: 'Partial admin', user: 'User' };
-  const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${['user', 'partial', 'admin'].map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${roleLabel[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
-  const paymentsSection = canUsers ? (() => {
+  const me = req.user, central_ = isCentral(me);
+  const cp = can.pages(me), ck = can.allKinds(me), cn = can.news(me), cs = can.support(me), cf = can.full(me);
+  const pages = cp ? db.prepare('SELECT * FROM pages ORDER BY id DESC').all() : [];
+  const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${ROLES.map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
+  const paymentsSection = cf ? (() => {
     const claims = db.prepare("SELECT p.*, u.name un, u.email ue, pg.title pt, pg.slug ps, pg.price_kobo FROM purchases p JOIN users u ON u.id=p.user_id JOIN pages pg ON pg.id=p.page_id WHERE p.status='pending' ORDER BY p.id DESC").all();
     if (!claims.length) return '';
     return `<h3 id="payments">Payment claims waiting for you (${claims.length})</h3>${claims.map(c => `<div class="card row"><div><b>${esc(c.un)}</b> <span class="mut">${esc(c.ue)}</span><br><span class="mut">₦${((c.price_kobo || PRICE_KOBO) / 100).toFixed(0)} for "${esc(c.pt)}"</span></div>
 <div class="row" style="gap:6px"><form method="post" action="/admin/payments/${c.id}/approve"><button>Approve</button></form><form method="post" action="/admin/payments/${c.id}/reject" onsubmit="return confirm('Reject this payment claim?')"><button class="link">Reject</button></form></div></div>`).join('')}`;
   })() : '';
-  const usersSection = canUsers ? (() => {
-    const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen FROM users ORDER BY id DESC').all();
-    return `<h3 id="users">Registered users (${users.length})</h3><div style="overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th>Role</th><th></th></tr>${users.map(u =>
-      `<tr><td>${presenceDot(u)}${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${u.verified ? 'verified' : `<form method="post" action="/admin/users/${u.id}/verify"><button class="link">Unverified: verify now</button></form>`}</td><td>${u.email === ADMIN_EMAIL ? 'Central admin' : central_ ? roleSelect(u) : roleLabel[u.role] || 'User'}</td><td>${u.role === 'admin'
-        ? '' : `<form method="post" action="/admin/users/${u.id}/delete" onsubmit="return confirm('Remove this user?')"><button class="link">Remove</button></form>`}</td></tr>`).join('')}</table></div>`;
+  const usersSection = cs ? (() => {
+    const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen,title,can_set_title FROM users ORDER BY id DESC').all();
+    const post = (u, action, label, extra = '', confirmMsg = '') => `<form method="post" action="/admin/users/${u.id}/${action}"${confirmMsg ? ` onsubmit="return confirm('${confirmMsg}')"` : ''}>${extra}<button class="link">${label}</button></form>`;
+    const rows = users.map(u => {
+      const protectedTarget = u.role === 'admin' && !cf; // login-help admins can't touch full admins
+      const status = u.verified ? 'verified' : `${post(u, 'verify', 'Verify now')}${post(u, 'resend-verification', 'Resend link')}`;
+      const roleCell = u.email === ADMIN_EMAIL ? 'Central admin' : central_ ? roleSelect(u) : (ROLE_LABEL[u.role] || 'User');
+      const titleCell = cf ? `${u.title ? `<span class="role-tag" style="margin:0 6px 0 0">${esc(u.title)}</span>` : ''}${post(u, 'title-permission', u.can_set_title ? 'Revoke title permission' : 'Allow title', `<input type="hidden" name="allow" value="${u.can_set_title ? 0 : 1}">`)}` : '';
+      const helpCell = protectedTarget ? '' : `${post(u, 'reset-code', 'Send reset code')}${post(u, 'signout', 'Sign out everywhere', '', 'Sign this person out of every device?')}`;
+      const removeCell = cf && u.role !== 'admin' ? post(u, 'delete', 'Remove', '', 'Remove this user?') : '';
+      return `<tr><td>${presenceDot(u)}${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${status}</td><td>${roleCell}</td>${cf ? `<td>${titleCell}</td>` : ''}<td>${helpCell}</td>${cf ? `<td>${removeCell}</td>` : ''}</tr>`;
+    }).join('');
+    return `<h3 id="users">${cf ? 'Registered users' : 'Login help'} (${users.length})</h3><div style="overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th>Role</th>${cf ? '<th>Title</th>' : ''}<th>Login help</th>${cf ? '<th></th>' : ''}</tr>${rows}</table></div>`;
   })() : '';
-  const pendingNews = canUsers ? db.prepare("SELECT n.*, u.name un, u.email ue FROM news n JOIN users u ON u.id = n.author_id WHERE n.status='pending' ORDER BY n.id DESC").all() : [];
+  const pendingNews = cn ? db.prepare("SELECT n.*, u.name un, u.email ue FROM news n JOIN users u ON u.id = n.author_id WHERE n.status='pending' ORDER BY n.id DESC").all() : [];
   const newsThumb = n => n.image_data ? `<img src="/news-image/${n.id}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;float:left;margin-right:10px">` : '';
-  const pendingNewsSection = pendingNews.length ? `<h3 id="pending-news">News waiting for you (${pendingNews.length})</h3>${pendingNews.map(n => `<div class="card" style="overflow:hidden">${newsThumb(n)}<b>${esc(n.title)}</b> <span class="mut">by ${esc(n.un)} (${esc(n.ue)})</span><p class="mut" style="margin:6px 0">${esc(n.body)}</p>
+  const pendingNewsSection = pendingNews.length ? `<h3 id="pending-news">News waiting for you (${pendingNews.length})</h3>${pendingNews.map(n => `<div class="card" style="overflow:hidden">${newsThumb(n)}<b>${esc(n.title)}</b> <span class="mut">by ${esc(n.un)} (${esc(n.ue)})</span><p class="mut" style="margin:6px 0;white-space:pre-wrap">${esc(n.body)}</p>
 <div class="row" style="gap:6px"><form method="post" action="/admin/news/${n.id}/approve"><button>Approve</button></form><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Reject this news item?')"><button class="link">Reject</button></form></div></div>`).join('')}` : '';
-  const newsItems = db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all();
-  const newsSection = `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
+  const newsItems = cn ? db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all() : [];
+  const newsSection = cn ? `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
 <form class="card" method="post" action="/admin/news" enctype="multipart/form-data"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="Short summary" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
-${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}`;
-  res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
+${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
+  const pagesSection = cp ? `<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
-${canUsers ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">YouTube video</option></select>`
-    : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Only the central or a full admin can upload PDFs, Word documents, videos or CBT pages.</p>'}
+${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">YouTube video</option></select>`
+    : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Your role can upload plain HTML pages. PDFs, Word documents, videos and CBT pages need a Files admin or a full admin.</p>'}
 <div id="fileField"><input type="file" name="file" accept=".html,.htm,text/html"></div>
-${canUsers ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."></div>` : ''}
+${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."></div>` : ''}
 <label><input type="checkbox" name="members_only" value="1"> Members only (login required)</label><br>
-${canUsers ? `<label><input type="radio" name="visibility" value="normal" checked> Normal view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><br>` : ''}
+${cf ? `<label><input type="radio" name="visibility" value="normal" checked> Normal view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><br>` : ''}
 <button>Upload</button></form>
-${canUsers ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input');function sync(){var isVideo=k.value==='video';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>` : ''}
+${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input');function sync(){var isVideo=k.value==='video';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>` : ''}
 <h3 id="pages">Pages (${pages.length})</h3>${pages.map(p => {
     const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
     const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
     const replaceCtrl = p.kind === 'video'
-      ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form>`
-      : `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>`;
+      ? (ck ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form>` : '')
+      : (p.kind === 'html' || ck ? `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>` : '');
     return `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${pIcon} ${esc(p.title)}</a><span class="mut">/p/${p.slug} &middot; ${pLabel} &middot; ${status}</span></div>
 <div class="row" style="margin-top:10px">
 <form method="post" action="/admin/pages/${p.id}/toggle"><button class="link">${p.members_only ? '🔒 Members only — make open' : 'Open — make members only'}</button></form>
 ${replaceCtrl}
 <form method="post" action="/admin/pages/${p.id}/delete" onsubmit="return confirm('Delete this page?')"><button class="link">Delete</button></form></div></div>`;
   }).join('')
-    || '<p class="mut">No pages yet.</p>'}
-${newsSection}${paymentsSection}${usersSection}`, req.user));
+    || '<p class="mut">No pages yet.</p>'}` : '';
+  res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+${pagesSection}${newsSection}${paymentsSection}${usersSection}`, req.user));
 });
 
-app.post('/admin/upload', adminish, upload.single('file'), (req, res) => {
+app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
   const kind = ['html', 'cbt', 'pdf', 'doc', 'video'].includes(req.body.kind) ? req.body.kind : 'html';
-  if (kind !== 'html' && req.user.role !== 'admin') return res.sendStatus(403);
-  const paid = req.user.role === 'admin' && req.body.visibility === 'paid' ? 1 : 0;
+  if (kind !== 'html' && !can.allKinds(req.user)) return res.sendStatus(403);
+  const paid = can.full(req.user) && req.body.visibility === 'paid' ? 1 : 0;
   const membersOnly = req.body.members_only ? 1 : 0;
   const title = (req.body.title || '').trim();
 
@@ -1007,10 +1269,10 @@ app.post('/admin/upload', adminish, upload.single('file'), (req, res) => {
   res.redirect(back(`Published at /p/${slug}`));
 });
 
-app.post('/admin/pages/:id/replace', adminish, upload.single('file'), (req, res) => {
+app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, res) => {
   const page = db.prepare('SELECT kind FROM pages WHERE id=?').get(req.params.id);
   if (!page) return res.redirect(back('Page not found.'));
-  if (page.kind !== 'html' && req.user.role !== 'admin') return res.sendStatus(403);
+  if (page.kind !== 'html' && !can.allKinds(req.user)) return res.sendStatus(403);
   if (!req.file) return res.redirect(back('Choose a file first.'));
   if (page.kind === 'pdf' || page.kind === 'doc') {
     db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.file.originalname, req.params.id);
@@ -1019,13 +1281,13 @@ app.post('/admin/pages/:id/replace', adminish, upload.single('file'), (req, res)
   }
   res.redirect(back('File replaced.'));
 });
-app.post('/admin/pages/:id/video', admin, (req, res) => {
+app.post('/admin/pages/:id/video', filesAdmin, (req, res) => {
   const vid = youtubeId(req.body.video_url);
   if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
   db.prepare("UPDATE pages SET video_id=? WHERE id=? AND kind='video'").run(vid, req.params.id);
   res.redirect(back('Video link updated.'));
 });
-app.post('/admin/news', adminish, upload.single('image'), (req, res) => {
+app.post('/admin/news', newsAdmin, upload.single('image'), (req, res) => {
   const title = String(req.body.title || '').trim().slice(0, 140);
   const body = String(req.body.body || '').trim().slice(0, 600);
   if (!title || !body) return res.redirect(back('Enter a headline and a summary.'));
@@ -1034,35 +1296,68 @@ app.post('/admin/news', adminish, upload.single('image'), (req, res) => {
     .run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id, 'approved');
   res.redirect(back('News posted.'));
 });
-app.post('/admin/news/:id/approve', admin, (req, res) => {
+app.post('/admin/news/:id/approve', newsAdmin, (req, res) => {
   db.prepare("UPDATE news SET status='approved' WHERE id=?").run(req.params.id);
   res.redirect(back('News approved.'));
 });
-app.post('/admin/news/:id/delete', adminish, (req, res) => {
+app.post('/admin/news/:id/delete', newsAdmin, (req, res) => {
   db.prepare('DELETE FROM news WHERE id=?').run(req.params.id);
   res.redirect(back('News deleted.'));
 });
-app.post('/admin/pages/:id/toggle', adminish, (req, res) => {
+app.post('/admin/pages/:id/toggle', pagesAdmin, (req, res) => {
   db.prepare('UPDATE pages SET members_only = 1 - members_only WHERE id=?').run(req.params.id);
   res.redirect('/admin');
 });
-app.post('/admin/pages/:id/delete', adminish, (req, res) => {
+app.post('/admin/pages/:id/delete', pagesAdmin, (req, res) => {
   db.prepare('DELETE FROM pages WHERE id=?').run(req.params.id);
   res.redirect(back('Page deleted.'));
 });
-app.post('/admin/users/:id/verify', admin, (req, res) => {
-  db.prepare('UPDATE users SET verified=1, verify_hash=NULL, verify_expires=NULL WHERE id=?').run(req.params.id);
+// Login-help actions. Login-help admins can help anyone except full admins; full admins can help everyone.
+const helpTarget = (req, res) => {
+  const t = db.prepare('SELECT * FROM users WHERE id=?').get(Number(req.params.id));
+  if (!t) { res.redirect(back('User not found.')); return null; }
+  if (t.role === 'admin' && !can.full(req.user)) { res.sendStatus(403); return null; }
+  return t;
+};
+app.post('/admin/users/:id/verify', supportAdmin, (req, res) => {
+  const t = helpTarget(req, res); if (!t) return;
+  db.prepare('UPDATE users SET verified=1, verify_hash=NULL, verify_expires=NULL WHERE id=?').run(t.id);
   res.redirect(back('User verified.'));
+});
+app.post('/admin/users/:id/resend-verification', supportAdmin, async (req, res) => {
+  const t = helpTarget(req, res); if (!t) return;
+  if (t.verified) return res.redirect(back('That account is already verified.'));
+  const r = await sendSafely(req, t);
+  res.redirect(back(r === 'sent' ? `Verification link sent to ${t.email}.` : r === 'wait' ? 'A link was sent a moment ago. Wait a minute and try again.' : 'The email could not be sent. Check the email settings.'));
+});
+app.post('/admin/users/:id/reset-code', supportAdmin, async (req, res) => {
+  const t = helpTarget(req, res); if (!t) return;
+  if (limited('help-reset:' + t.id, 3, 15 * 60e3)) return res.redirect(back('Too many codes sent to this person. Try again in a few minutes.'));
+  const code = String(crypto.randomInt(100000, 1000000));
+  db.prepare('UPDATE users SET reset_hash=?, reset_expires=?, reset_attempts=0 WHERE id=?').run(bcrypt.hashSync(code, 10), Date.now() + 600000, t.id);
+  try { await sendResetCode(t.email, code); } catch (e) { console.error('Reset email failed:', e.message); }
+  res.redirect(back(`A reset code was emailed to ${t.email}. It goes only to their inbox.`)); // the code is never shown to the admin
+});
+app.post('/admin/users/:id/signout', supportAdmin, (req, res) => {
+  const t = helpTarget(req, res); if (!t) return;
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(t.id);
+  res.redirect(back(`${t.name} was signed out everywhere.`));
+});
+// A member can only set their own role/title (like "Director of Socials") once a full admin allows it.
+app.post('/admin/users/:id/title-permission', admin, (req, res) => {
+  if (req.body.allow === '1') db.prepare('UPDATE users SET can_set_title=1 WHERE id=?').run(Number(req.params.id));
+  else db.prepare('UPDATE users SET can_set_title=0, title=NULL WHERE id=?').run(Number(req.params.id));
+  res.redirect(back(req.body.allow === '1' ? 'They can now set their own title.' : 'Title permission removed.'));
 });
 app.post('/admin/users/:id/delete', admin, (req, res) => {
   db.prepare("DELETE FROM sessions WHERE user_id=?").run(req.params.id);
   db.prepare("DELETE FROM users WHERE id=? AND role!='admin'").run(req.params.id);
   res.redirect(back('User removed.'));
 });
-// Only the central admin (the ADMIN_EMAIL account) can grant or remove partial/full admin access,
+// Only the central admin (the ADMIN_EMAIL account) can create or change any kind of admin (files, news, login-help, partial, full),
 // and only for users who have already registered.
 app.post('/admin/users/:id/role', central, (req, res) => {
-  const role = ['user', 'partial', 'admin'].includes(req.body.role) ? req.body.role : 'user';
+  const role = ROLES.includes(req.body.role) ? req.body.role : 'user';
   const target = db.prepare('SELECT email FROM users WHERE id=?').get(req.params.id);
   if (target && target.email !== ADMIN_EMAIL) db.prepare('UPDATE users SET role=? WHERE id=?').run(role, req.params.id);
   res.redirect(back('Role updated.'));
