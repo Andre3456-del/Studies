@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
@@ -33,7 +34,7 @@ db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id I
 db.exec('CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id)');
 // Voice notes and stickers ride on the same messages table (kind = text | voice | sticker); their media is encrypted too.
 const msgCols = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
-for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'text'"], ['media_enc', 'BLOB'], ['media_iv', 'BLOB'], ['media_mime', 'TEXT'], ['media_ms', 'INTEGER']])
+for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'text'"], ['media_enc', 'BLOB'], ['media_iv', 'BLOB'], ['media_mime', 'TEXT'], ['media_ms', 'INTEGER'], ['media_name', 'TEXT']])
   if (!msgCols.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
 // Each member's personal sticker board.
 db.exec('CREATE TABLE IF NOT EXISTS stickers(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
@@ -53,7 +54,7 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(lower(usernam
 db.exec(`
 CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, faculty TEXT NOT NULL DEFAULT 'Other');
 CREATE TABLE IF NOT EXISTS friendships(id INTEGER PRIMARY KEY, requester_id INTEGER NOT NULL, addressee_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(requester_id, addressee_id));
-CREATE TABLE IF NOT EXISTS groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_by INTEGER NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_by INTEGER NOT NULL, avatar_data BLOB, avatar_mime TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS group_members(group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'member', added_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(group_id, user_id));
 CREATE TABLE IF NOT EXISTS message_reads(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, read_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(message_id, user_id));
 CREATE TABLE IF NOT EXISTS message_hidden(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY(message_id, user_id));
@@ -66,6 +67,9 @@ CREATE INDEX IF NOT EXISTS push_user ON push_subscriptions(user_id);
 const msgCols2 = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
 for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER']])
   if (!msgCols2.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
+const groupCols = db.prepare('PRAGMA table_info(groups)').all().map(c => c.name);
+for (const [c, def] of [['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT']])
+  if (!groupCols.includes(c)) db.exec(`ALTER TABLE groups ADD COLUMN ${c} ${def}`);
 db.exec('CREATE INDEX IF NOT EXISTS messages_group ON messages(group_id)');
 // Pay-to-view is only for CBT (quiz) uploads now -- anything else that was marked paid becomes free.
 db.prepare("UPDATE pages SET paid=0 WHERE paid=1 AND kind != 'cbt'").run();
@@ -230,6 +234,15 @@ const CHAT_HTML = `<button id="ai-open" class="ai-fab" aria-label="Ask the assis
 
 // ---------- helpers ----------
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Escapes text, then turns any http(s) link inside it into a real, tappable, underlined link that opens
+// in a new tab. Runs on already-escaped text, so it never introduces raw HTML from what someone typed.
+function linkify(text) {
+  return esc(text).replace(/(https?:\/\/[^\s<]+)/g, raw => {
+    const m = /^(.*?)([.,!?;:'")\]]+)$/.exec(raw); // keep trailing sentence punctuation outside the link
+    const url = m ? m[1] : raw, trail = m ? m[2] : '';
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="autolink">${url}</a>${trail}`;
+  });
+}
 const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page';
 const safeNext = n => (typeof n === 'string' && /^\/(?!\/)/.test(n) ? n : '');
 function uniqueSlug(base) {
@@ -362,7 +375,7 @@ function broadcastNews(newsId, exceptId) {
 }
 function announceUpload(page) {
   const ids = audienceFor(page);
-  const where = [page.dept, page.level ? page.level + ' level' : ''].filter(Boolean).join(' · ');
+  const where = [deptListOf(page).join(', '), page.level ? page.level + ' level' : ''].filter(Boolean).join(' · ');
   notify(ids, { title: page.paid ? 'New CBT (pay to view)' : 'New upload', body: `${page.title}${where ? ' — ' + where : ''}`, url: '/p/' + page.slug, tag: 'upload' });
 }
 const USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
@@ -388,19 +401,29 @@ function departmentOptions(selected) {
   for (const r of rows) (groups[r.faculty] = groups[r.faculty] || []).push(r.name);
   return Object.keys(groups).map(f => `<optgroup label="${esc(f)}">${groups[f].map(n => `<option value="${esc(n)}"${n === selected ? ' selected' : ''}>${esc(n)}</option>`).join('')}</optgroup>`).join('');
 }
-// An upload is either general (no department, no level), or aimed at one department and/or one level.
+// dept is stored as a comma-separated list of department names, or NULL for "every department".
+const deptListOf = page => (page.dept || '').split(',').map(s => s.trim()).filter(Boolean);
+// Checkboxes for picking one, several, or (by picking none) every department -- grouped by faculty like the admin's own department list.
+function departmentCheckboxes(selectedList) {
+  const rows = db.prepare('SELECT name,faculty FROM departments ORDER BY faculty,name').all(), groups = {};
+  for (const r of rows) (groups[r.faculty] = groups[r.faculty] || []).push(r.name);
+  const box = n => `<label class="row" style="justify-content:flex-start;gap:8px"><input type="checkbox" name="dept" value="${esc(n)}" style="width:auto"${selectedList.includes(n) ? ' checked' : ''}>${esc(n)}</label>`;
+  return Object.keys(groups).map(f => `<p class="chat-label">${esc(f)}</p>${groups[f].map(box).join('')}`).join('');
+}
+// An upload is either general (no department, no level), or aimed at one or more departments and/or one level.
 function sortedFor(page, user) {
   if (can.pages(user)) return true;
   if (page.dept == null && page.level == null) return true;
   if (!user) return false;
-  if (page.dept != null && page.dept !== user.department) return false;
+  if (page.dept != null && !deptListOf(page).includes(user.department)) return false;
   if (page.level != null && Number(page.level) !== Number(user.level)) return false;
   return true;
 }
 // Everyone who should be told about a new upload.
 function audienceFor(page) {
   const where = ["role='user'", 'verified=1'], args = [];
-  if (page.dept != null) { where.push('department=?'); args.push(page.dept); }
+  const list = page.dept != null ? deptListOf(page) : [];
+  if (list.length) { where.push(`department IN (${list.map(() => '?').join(',')})`); args.push(...list); }
   if (page.level != null) { where.push('level=?'); args.push(page.level); }
   return db.prepare(`SELECT id FROM users WHERE ${where.join(' AND ')}`).all(...args).map(r => r.id);
 }
@@ -496,6 +519,7 @@ html{background:var(--bg);scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:radial-gradient(900px 520px at 12% -8%,rgba(56,176,248,.22),transparent 62%),radial-gradient(700px 440px at 96% 4%,rgba(240,0,232,.13),transparent 60%),var(--bg);background-attachment:fixed}
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+.autolink{text-decoration:underline}
 .top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;max-width:1000px;margin:0 auto}
 .brand{display:flex;align-items:center;gap:10px;color:var(--fg);font-weight:700;font-size:18px}.brand:hover{text-decoration:none}
 .logo{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--blue),var(--pink));box-shadow:0 0 14px rgba(56,176,248,.7)}
@@ -594,10 +618,15 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .sticker-msg{max-width:60%;display:flex;flex-direction:column;gap:2px}
 .sticker-msg.me{align-self:flex-end;align-items:flex-end}.sticker-msg.them{align-self:flex-start;align-items:flex-start}
 .sticker-msg img{width:150px;max-width:100%;max-height:150px;object-fit:contain}
+.bubble.img-msg img{display:block;max-width:220px;max-height:280px;width:100%;object-fit:cover;border-radius:10px;margin-bottom:2px}
+.file-chip{display:flex;align-items:center;gap:6px;color:inherit;text-decoration:none;font-weight:600}
+.file-chip:hover{text-decoration:underline}
+.file-name{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
 .sticker-msg time{font-size:11px;opacity:.65}
 .save-st{font-size:12px;color:var(--blue)}
 .chat-bar[hidden],.chat-panel[hidden]{display:none}
 .chat-bar .ic{padding:9px 12px;font-size:18px;line-height:1;background:transparent;border:1px solid var(--line);color:var(--fg);box-shadow:none}
+label.ic{display:inline-flex;align-items:center;justify-content:center;cursor:pointer;margin:0}
 .chat-bar.rec{align-items:center}.rec-dot{width:10px;height:10px;border-radius:50%;background:#ef4444;animation:blink 1s infinite}@keyframes blink{50%{opacity:.25}}
 .chat-panel{position:fixed;left:0;right:0;bottom:calc(66px + env(safe-area-inset-bottom,0px));max-width:1000px;margin:0 auto;height:230px;display:flex;flex-direction:column;background:#161628;border-top:1px solid var(--line);z-index:6}
 .ptabs{display:flex;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line)}.ptabs button{margin:0;padding:5px 12px;font-size:14px}.ptabs button.on{background:rgba(56,176,248,.15)}
@@ -622,7 +651,7 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .ok{color:#22c55e}
 .tab-link{padding:10px 16px;color:var(--mut);font-weight:600;border-bottom:2px solid transparent}
 .tab-link.active{color:var(--blue);border-color:var(--blue)}
-.tick{opacity:.9}.tick-un{color:#c9d4e8}.tick-read{color:#38b0f8}
+.tick{opacity:.95}.tick-un{color:#8ab4f8}.tick-read{color:#22c55e}
 .msg-actions{display:flex;gap:10px;margin-top:4px;opacity:0}
 .bubble:hover .msg-actions,.sticker-msg:hover .msg-actions,.bubble:focus-within .msg-actions{opacity:1}
 .msg-actions button{font-size:11px;color:var(--mut);background:none;box-shadow:none;padding:0;margin:0}
@@ -853,7 +882,7 @@ app.get('/news/:id', (req, res) => {
   const who = n.author_uid ? avatarOr({ id: n.author_uid, name: n.author, avatar_mime: n.avatar_mime }, 40) : '';
   const nameHtml = n.author_uid && req.user ? `<a href="/u/${n.author_uid}"><b>${esc(n.author)}</b></a>` : `<b>${esc(n.author || 'Studies Hub')}</b>`;
   const posted = `<div class="row" style="justify-content:flex-start;gap:10px;margin-top:16px">${who}<div>${nameHtml}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}<br><span class="mut" style="font-size:12px">${timeAgo(n.created_at)} ago</span></div></div>`;
-  res.send(layout(n.title, `<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${esc(n.body)}</p>${posted}</div>`, req.user));
+  res.send(layout(n.title, `<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${linkify(n.body)}</p>${posted}</div>`, req.user));
 });
 app.post('/news', upload.single('image'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/news');
@@ -888,6 +917,7 @@ ${posts.length ? `<h3>News from ${esc(u.name.split(' ')[0])}</h3>${posts.map(p =
 
 // ---------- chat: encrypted messages between any two users ----------
 const avatarOr = (u, size = 44) => u.avatar_mime ? `<img src="/avatar/${u.id}" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
+const groupAvatarOr = (g, size = 44) => g.avatar_mime ? `<img src="/group-avatar/${g.id}" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.44)}px">👥</span>`;
 const byline = n => `${esc(n.author || 'Studies Hub')}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}`;
 
 // ---------- friends ----------
@@ -1012,6 +1042,41 @@ app.post('/chat/group/:id/rename', (req, res) => {
   if (name) db.prepare('UPDATE groups SET name=? WHERE id=?').run(name, gid);
   res.redirect('/chat/group/' + gid);
 });
+// A group can have more than one admin -- any admin can make another member an admin too.
+app.post('/chat/group/:id/promote/:uid', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const gid = Number(req.params.id), uid = Number(req.params.uid);
+  if (!isGroupAdmin(gid, req.user.id) || !isGroupMember(gid, uid)) return res.sendStatus(403);
+  db.prepare("UPDATE group_members SET role='admin' WHERE group_id=? AND user_id=?").run(gid, uid);
+  notify([uid], { title: 'You are now a group admin', body: db.prepare('SELECT name FROM groups WHERE id=?').get(gid).name, url: '/chat/group/' + gid, tag: 'group' });
+  res.redirect('/chat/group/' + gid);
+});
+app.post('/chat/group/:id/demote/:uid', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const gid = Number(req.params.id), uid = Number(req.params.uid);
+  if (!isGroupAdmin(gid, req.user.id)) return res.sendStatus(403);
+  const adminCount = db.prepare("SELECT COUNT(*) n FROM group_members WHERE group_id=? AND role='admin'").get(gid).n;
+  if (adminCount <= 1) return res.redirect(`/chat/group/${gid}?msg=` + encodeURIComponent('A group needs at least one admin.'));
+  db.prepare("UPDATE group_members SET role='member' WHERE group_id=? AND user_id=?").run(gid, uid);
+  res.redirect('/chat/group/' + gid);
+});
+app.post('/chat/group/:id/avatar', upload.single('file'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const gid = Number(req.params.id);
+  if (!isGroupAdmin(gid, req.user.id)) return res.sendStatus(403);
+  if (!req.file || !/^image\/(png|jpeg|webp)$/.test(req.file.mimetype)) return res.redirect(`/chat/group/${gid}?msg=` + encodeURIComponent('Choose a PNG, JPEG or WebP picture.'));
+  db.prepare('UPDATE groups SET avatar_data=?, avatar_mime=? WHERE id=?').run(req.file.buffer, req.file.mimetype, gid);
+  res.redirect('/chat/group/' + gid);
+});
+app.get('/group-avatar/:id', (req, res) => {
+  const g = db.prepare('SELECT avatar_data, avatar_mime FROM groups WHERE id=?').get(req.params.id);
+  if (!g || !g.avatar_data) return res.sendStatus(404);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.setHeader('Content-Type', g.avatar_mime || 'application/octet-stream');
+  res.send(Buffer.from(g.avatar_data));
+});
 
 // ---------- messages: ticks, reactions, edit, delete (shared by DMs and groups) ----------
 const lastMessageWith = (me, other) => db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id DESC LIMIT 1').get(me, other, other, me);
@@ -1033,7 +1098,8 @@ function markRead(rows, viewerId) {
 }
 const clock = iso => new Date(iso + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const fmtDur = ms => { const t = Math.round((ms || 0) / 1000); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
-const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : decryptMsg(m.body_enc, m.iv).slice(0, 40);
+const fmtSize = b => b == null ? '' : b < 1024 * 1024 ? Math.round(b / 1024) + ' KB' : (b / (1024 * 1024)).toFixed(1) + ' MB';
+const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'file' ? `📄 ${m.media_name || 'File'}` : decryptMsg(m.body_enc, m.iv).slice(0, 40);
 function bubbleHtml(m, meId, isGroup) {
   const side = m.sender_id === meId ? 'me' : 'them';
   const reactions = reactionsFor(m.id);
@@ -1044,7 +1110,9 @@ function bubbleHtml(m, meId, isGroup) {
   if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}" data-kind="${m.kind}">${senderTag}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
   if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="voice">${senderTag}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio><time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
   if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}" data-kind="sticker">${senderTag}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}<span class="msg-text">${esc(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}" data-kind="image">${senderTag}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a><time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  if (m.kind === 'file') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="file"><a class="file-chip" href="/api/messages/media/${m.id}" download="${esc(m.media_name || 'file')}">📄 <span class="file-name">${esc(m.media_name || 'File')}</span></a><time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
 }
 
 app.get('/chat', (req, res) => {
@@ -1071,17 +1139,17 @@ app.get('/chat', (req, res) => {
     return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
   }
   const friends = db.prepare('SELECT id,name,avatar_mime,last_seen FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ')').all();
-  const row = (u, sub, href, unread) => `<a class="chat-item" href="${href}"><span class="av-wrap" style="position:relative">${avatarOr(u)}${u.last_seen !== undefined ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${isOnline(u) ? '#22c55e' : '#ef4444'}"></span>` : ''}</span><span class="meta"><b>${esc(u.name)}</b><span>${sub}</span></span>${unread ? `<b class="nbadge">${badgeText(unread)}</b>` : ''}</a>`;
+  const row = (avatarHtml, name, sub, href, unread, dot) => `<a class="chat-item" href="${href}"><span class="av-wrap" style="position:relative">${avatarHtml}${dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${dot}"></span>` : ''}</span><span class="meta"><b>${esc(name)}</b><span>${sub}</span></span>${unread ? `<b class="nbadge">${badgeText(unread)}</b>` : ''}</a>`;
   const friendRows = friends.map(u => {
     const m = lastMessageWith(me, u.id);
     const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?)").get(u.id, me, me).n;
-    return row(u, isOnline(u) ? 'Online now' : (m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'Offline'), `/chat/${u.id}`, unread);
+    return row(avatarOr(u), u.name, isOnline(u) ? 'Online now' : (m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'Offline'), `/chat/${u.id}`, unread, isOnline(u) ? '#22c55e' : '#ef4444');
   }).join('') || '<p class="mut">No friends yet -- find people in the other tab.</p>';
-  const groups = db.prepare('SELECT g.id,g.name FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me);
+  const groups = db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me);
   const groupRows = groups.map(g => {
     const m = lastGroupMessage(g.id);
     const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id=? AND sender_id != ? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?)").get(g.id, me, me).n;
-    return row({ name: g.name, avatar_mime: null, id: 'g' + g.id }, m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet', `/chat/group/${g.id}`, unread);
+    return row(groupAvatarOr(g), g.name, m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet', `/chat/group/${g.id}`, unread, null);
   }).join('');
   res.send(layout('Chat', `<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a></p>${groups.length ? `<p class="chat-label">Groups</p>${groupRows}` : ''}<p class="chat-label">Friends</p>${friendRows}`, req.user));
 });
@@ -1092,13 +1160,26 @@ var qs=convType==='group'?('group='+convId):('to='+convId);
 var thread=document.getElementById('thread'),form=document.getElementById('sendForm'),input=document.getElementById('msgInput');
 var panel=document.getElementById('panel'),pBtn=document.getElementById('panelBtn'),micBtn=document.getElementById('micBtn');
 var recBar=document.getElementById('recBar'),recTime=document.getElementById('recTime'),recSend=document.getElementById('recSend'),recCancel=document.getElementById('recCancel');
-var pEmoji=document.getElementById('pEmoji'),pStickers=document.getElementById('pStickers'),ec=document.getElementById('ecats'),eg=document.getElementById('egrid'),sg=document.getElementById('sgrid'),stFile=document.getElementById('stFile');
+var pEmoji=document.getElementById('pEmoji'),pStickers=document.getElementById('pStickers'),ec=document.getElementById('ecats'),eg=document.getElementById('egrid'),sg=document.getElementById('sgrid'),stFile=document.getElementById('stFile'),stZip=document.getElementById('stZip'),upStatus=document.getElementById('upStatus');
 var editingId=null,lastId=parseInt(thread.getAttribute('data-last-id'),10)||0,seen={};
 Array.prototype.forEach.call(thread.querySelectorAll('[data-id]'),function(n){seen[n.getAttribute('data-id')]=1});
 function fmt(iso){return new Date(iso+'Z').toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
 function dur(ms){var t=Math.round((ms||0)/1000);return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2)}
 function stamp(t){var iso=t.getAttribute('data-t');if(iso)t.textContent=(t.getAttribute('data-pre')||'')+fmt(iso)}
 function el(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e}
+function linkifyInto(container,text){
+  var re=/(https?:\\/\\/[^\\s<]+)/g,last=0,m;
+  while((m=re.exec(text))){
+    if(m.index>last)container.appendChild(document.createTextNode(text.slice(last,m.index)));
+    var url=m[0],mm=/^(.*?)([.,!?;:'")\\]]+)$/.exec(url),trail='';
+    if(mm){url=mm[1];trail=mm[2]}
+    var a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.className='autolink';a.textContent=url;
+    container.appendChild(a);
+    if(trail)container.appendChild(document.createTextNode(trail));
+    last=m.index+m[0].length;
+  }
+  if(last<text.length)container.appendChild(document.createTextNode(text.slice(last)));
+}
 function toBottom(){window.scrollTo(0,document.body.scrollHeight)}
 function tickHtml(t){if(convType==='group'||!t)return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
 function actionsRow(id,mine,kind){
@@ -1132,7 +1213,9 @@ function bubble(m){
   if(m.deleted){d=el('div','bubble '+side+' deleted');d.appendChild(el('span','mut','This message was deleted'))}
   else if(m.kind==='voice'){d=el('div','bubble '+side);var st=senderTag(m);if(st)d.appendChild(st);var a=document.createElement('audio');a.controls=true;a.preload='none';a.src='/api/messages/media/'+m.id;d.appendChild(a);t.setAttribute('data-pre','🎤 '+dur(m.ms)+' · ')}
   else if(m.kind==='sticker'){d=el('div','sticker-msg '+side);var st2=senderTag(m);if(st2)d.appendChild(st2);var im=document.createElement('img');im.src='/api/messages/media/'+m.id;im.alt='sticker';d.appendChild(im);if(!mine){var sb=el('button','link save-st','+ Save sticker');sb.type='button';sb.setAttribute('data-save',m.id);d.appendChild(sb)}}
-  else{d=el('div','bubble '+side);var st3=senderTag(m);if(st3)d.appendChild(st3);var sp=el('span','msg-text',m.body);d.appendChild(sp);if(m.edited)d.appendChild(el('span','mut',' (edited)'))}
+  else if(m.kind==='image'){d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);var ia=document.createElement('a');ia.href='/api/messages/media/'+m.id;ia.target='_blank';ia.rel='noopener noreferrer';var iim=document.createElement('img');iim.src='/api/messages/media/'+m.id;iim.alt='photo';iim.loading='lazy';ia.appendChild(iim);d.appendChild(ia)}
+  else if(m.kind==='file'){d=el('div','bubble '+side);var fa=document.createElement('a');fa.className='file-chip';fa.href='/api/messages/media/'+m.id;fa.setAttribute('download',m.name||'file');fa.appendChild(document.createTextNode('📄 '));var fn=el('span','file-name',m.name||'File');fa.appendChild(fn);d.appendChild(fa)}
+  else{d=el('div','bubble '+side);var st3=senderTag(m);if(st3)d.appendChild(st3);var sp=el('span','msg-text');linkifyInto(sp,m.body);d.appendChild(sp);if(m.edited)d.appendChild(el('span','mut',' (edited)'))}
   d.setAttribute('data-id',m.id);d.setAttribute('data-kind',m.kind);
   if(!m.deleted)d.appendChild(actionsRow(m.id,mine,m.kind));
   if(m.reactions&&Object.keys(m.reactions).length){var row=el('div','reactions');Object.keys(m.reactions).forEach(function(em){row.appendChild(el('span','rchip',em+' '+m.reactions[em]))});d.appendChild(row)}
@@ -1149,7 +1232,7 @@ function poll(){fetch('/api/messages/poll?'+qs+'&after='+lastId).then(function(r
 function post(url,obj,cb){fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id)cb(j);else alert((j&&j.error)||'Could not send.')}).catch(function(){alert('Could not send. Check your connection.')})}
 toBottom();setInterval(poll,3000);
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
-  if(editingId){var id=editingId;editingId=null;input.value='';fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.textContent=text;if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
+  if(editingId){var id=editingId;editingId=null;input.value='';fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
   input.value='';var body=Object.assign({body:text},convType==='group'?{group:convId}:{to:convId});
   post('/api/messages/send',body,function(j){bubble({id:j.id,from:myId,kind:'text',body:text,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id})});
 
@@ -1173,8 +1256,37 @@ function loadStickers(){fetch('/api/stickers').then(function(r){return r.json()}
   list.forEach(function(s){var w=el('div','st'),im=document.createElement('img');im.src='/api/stickers/'+s.id;im.alt='sticker';im.addEventListener('click',function(){sendSticker(s.id)});
     var x=el('button','st-x','×');x.type='button';x.addEventListener('click',function(){if(confirm('Delete this sticker from your board?'))fetch('/api/stickers/'+s.id+'/delete',{method:'POST'}).then(loadStickers)});
     w.appendChild(im);w.appendChild(x);sg.appendChild(w)})}).catch(function(){})}
-stFile.addEventListener('change',function(){var f=stFile.files&&stFile.files[0];if(!f)return;var fd=new FormData();fd.append('sticker',f,f.name);
-  fetch('/api/stickers',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(!j||!j.id)alert((j&&j.error)||'Could not add that sticker.');stFile.value='';loadStickers()}).catch(function(){alert('Could not add that sticker.')})});
+function upStatusShow(t){upStatus.hidden=false;upStatus.textContent=t}
+function upStatusHide(){upStatus.hidden=true}
+stFile.addEventListener('change',function(){var files=Array.prototype.slice.call(stFile.files||[]);if(!files.length)return;
+  var i=0,errs=[];
+  function next(){
+    if(i>=files.length){stFile.value='';upStatusHide();loadStickers();if(errs.length)alert(errs.join('\\n'));return}
+    var f=files[i++];upStatusShow('Adding sticker '+i+' of '+files.length+'\u2026');
+    var fd=new FormData();fd.append('sticker',f,f.name);
+    fetch('/api/stickers',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(!j||!j.id)errs.push(f.name+': '+((j&&j.error)||'could not be added'));next()}).catch(function(){errs.push(f.name+': could not be added');next()});
+  }
+  next();
+});
+stZip.addEventListener('change',function(){var f=stZip.files&&stZip.files[0];if(!f)return;
+  upStatusShow('Unzipping and adding your stickers\u2026');
+  var fd=new FormData();fd.append('zip',f,f.name);
+  fetch('/api/stickers/zip',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){
+    stZip.value='';upStatusHide();loadStickers();
+    if(!j||j.error)alert((j&&j.error)||'Could not read that zip file.');
+    else if(j.added!==undefined)alert('Added '+j.added+' sticker'+(j.added===1?'':'s')+(j.skipped?' (skipped '+j.skipped+' file'+(j.skipped===1?'':'s')+' that were not pictures or were too big)':'')+'.');
+  }).catch(function(){upStatusHide();alert('Could not read that zip file.')});
+});
+var attachInput=document.getElementById('fileInput');
+attachInput.addEventListener('change',function(){var f=attachInput.files&&attachInput.files[0];if(!f)return;
+  upStatusShow('Sending '+f.name+'\u2026');
+  var fd=new FormData();if(convType==='group')fd.append('group',convId);else fd.append('to',convId);fd.append('file',f,f.name);
+  fetch('/api/messages/attachment',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){
+    attachInput.value='';upStatusHide();
+    if(j&&j.id){var kind=/^image\\//.test(f.type)?'image':'file';bubble({id:j.id,from:myId,kind:kind,name:f.name,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}
+    else alert((j&&j.error)||'Could not send that file.');
+  }).catch(function(){upStatusHide();alert('Could not send that file.')});
+});
 thread.addEventListener('click',function(e){
   var save=e.target.closest?e.target.closest('[data-save]'):null;
   if(save){fetch('/api/stickers/from-message/'+save.getAttribute('data-save'),{method:'POST'}).then(function(r){return r.json()}).then(function(j){save.textContent=(j&&j.ok)?'✓ Saved to your stickers':((j&&j.error)||'Could not save');save.disabled=true}).catch(function(){save.textContent='Could not save'});return}
@@ -1211,9 +1323,11 @@ function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastI
 <div id="thread" class="thread" data-last-id="${lastId}">${bubbles || '<p class="mut hello">Say hello 👋</p>'}</div>
 <div id="panel" class="chat-panel" hidden><div class="ptabs"><button type="button" class="ghost on" data-tab="emoji">😊 Emoji</button><button type="button" class="ghost" data-tab="stickers">Stickers</button></div>
 <div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
-<div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg"></label><div id="sgrid" class="sgrid"></div></div></div>
-<form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><input id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
+<div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker(s)<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" multiple></label>
+<label class="btn ghost st-add">+ Add a .zip of pictures<input type="file" id="stZip" accept=".zip,application/zip,application/x-zip-compressed"></label><div id="sgrid" class="sgrid"></div></div></div>
+<form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" style="display:none">📎</label><input id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
 <div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
+<p id="upStatus" class="mut" style="margin:4px 0 0" hidden></p>
 <script>${script}</script>`, req.user, { noAI: true }));
 }
 
@@ -1245,15 +1359,42 @@ app.get('/chat/group/:id', (req, res) => {
   markRead(rows, req.user.id);
   const lastId = rows.length ? rows[rows.length - 1].id : 0;
   const bubbles = rows.map(m => bubbleHtml(m, req.user.id, true)).join('');
-  const amAdmin = isGroupAdmin(gid, req.user.id);
-  const memberList = members.map(m => `<div class="row"><span>${esc(m.name)}${m.role === 'admin' ? ' <span class="role-tag">Group admin</span>' : ''}</span>${amAdmin && m.id !== req.user.id ? `<form method="post" action="/chat/group/${gid}/remove/${m.id}" onsubmit="return confirm('Remove from group?')"><button class="link">Remove</button></form>` : ''}</div>`).join('');
-  const friendsNotIn = db.prepare('SELECT id,name FROM users WHERE id IN (' + (friendIds(req.user.id).join(',') || '0') + ') AND id NOT IN (' + members.map(m => m.id).join(',') + ')').all();
-  const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><div><b>${esc(g.name)}</b><br><span class="mut" style="font-size:12px">${members.length} members</span></div></div>
-<details class="card" style="margin:0 0 10px"><summary style="cursor:pointer">Group info</summary>${memberList}
-${amAdmin ? `<form method="post" action="/chat/group/${gid}/rename" class="row"><input name="name" placeholder="Rename group" style="width:auto;flex:1"><button>Rename</button></form>
-${friendsNotIn.length ? `<form method="post" action="/chat/group/${gid}/add" class="row"><select name="user_id">${friendsNotIn.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select><button>Add</button></form>` : ''}` : ''}
-<form method="post" action="/chat/group/${gid}/leave" onsubmit="return confirm('Leave this group?')"><button class="link">Leave group</button></form></details>`;
+  const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/chat/group/${gid}/info" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${groupAvatarOr(g)}<div><b>${esc(g.name)}</b><br><span class="mut" style="font-size:12px">${members.length} members &middot; tap for group info</span></div></a></div>`;
   threadPage(req, res, { isGroup: true, convId: gid, title: g.name, headHtml, bubbles, lastId });
+});
+
+// Group info -- a full page styled after a familiar group-settings screen: big picture, name, member
+// count, then a plain list of members and actions. Any admin can rename, add/remove members, change the
+// picture, or make another member an admin too (a group can have more than one admin).
+app.get('/chat/group/:id/info', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+  const gid = Number(req.params.id);
+  const g = db.prepare('SELECT * FROM groups WHERE id=?').get(gid);
+  if (!g) return res.status(404).send(layout('Not found', '<h2>Group not found</h2>', req.user));
+  if (!isGroupMember(gid, req.user.id)) return res.sendStatus(403);
+  const members = groupMembers(gid);
+  const amAdmin = isGroupAdmin(gid, req.user.id);
+  const friendsNotIn = db.prepare('SELECT id,name FROM users WHERE id IN (' + (friendIds(req.user.id).join(',') || '0') + ') AND id NOT IN (' + (members.map(m => m.id).join(',') || '0') + ')').all();
+  const avatarBlock = `<div style="text-align:center;margin:6px 0 18px">
+${amAdmin ? `<label style="cursor:pointer;display:inline-block;position:relative">${groupAvatarOr(g, 96)}<form id="avF" method="post" action="/chat/group/${gid}/avatar" enctype="multipart/form-data" style="display:none"><input type="file" name="file" id="avI" accept="image/png,image/jpeg,image/webp"></form><span class="role-tag" style="position:absolute;bottom:0;right:-6px">Edit</span></label><script>document.getElementById('avI').addEventListener('change',function(){document.getElementById('avF').submit()})</script>`
+    : groupAvatarOr(g, 96)}
+<h1 style="margin:10px 0 2px;font-size:22px">${esc(g.name)}</h1><p class="mut" style="margin:0">Group &middot; ${members.length} members</p></div>`;
+  const memberRow = m => {
+    const isMe = m.id === req.user.id;
+    const actions = !amAdmin || isMe ? '' : `${m.role === 'admin'
+        ? `<form method="post" action="/chat/group/${gid}/demote/${m.id}"><button class="link">Remove admin</button></form>`
+        : `<form method="post" action="/chat/group/${gid}/promote/${m.id}"><button class="link">Make admin</button></form>`}
+<form method="post" action="/chat/group/${gid}/remove/${m.id}" onsubmit="return confirm('Remove ${esc(m.name)} from the group?')"><button class="link">Remove</button></form>`;
+    return `<div class="card row">${avatarOr(m, 36)}<span style="flex:1">${esc(m.name)}${isMe ? ' (you)' : ''}${m.role === 'admin' ? ' <span class="role-tag">Group admin</span>' : ''}</span>${actions}</div>`;
+  };
+  res.send(layout(g.name, `<p class="mut" style="margin:0 0 4px"><a href="/chat/group/${gid}">&larr; Back to chat</a></p>
+${avatarBlock}
+${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+${amAdmin ? `<form method="post" action="/chat/group/${gid}/rename" class="card row"><input name="name" placeholder="Rename group" value="${esc(g.name)}" style="width:auto;flex:1"><button>Save</button></form>` : ''}
+${amAdmin && friendsNotIn.length ? `<form method="post" action="/chat/group/${gid}/add" class="card row"><select name="user_id">${friendsNotIn.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select><button>Add to group</button></form>` : ''}
+<p class="chat-label">${members.length} members</p>
+${members.map(memberRow).join('')}
+<form method="post" action="/chat/group/${gid}/leave" onsubmit="return confirm('Leave this group?')" style="margin-top:14px"><button class="link">Leave group</button></form>`, req.user));
 });
 
 app.post('/api/messages/send', (req, res) => {
@@ -1310,9 +1451,9 @@ function sendBytes(req, res, buf, mime) {
 const AUDIO_MIME = /^audio\/[a-z0-9.+-]+(;\s*codecs=[a-z0-9.,+-]+)?$/i;
 const STICKER_MIMES = ['image/png', 'image/webp', 'image/gif', 'image/jpeg'];
 const MAX_STICKERS = 60;
-const insertMedia = (from, target, kind, buf, mime, ms) => {
+const insertMedia = (from, target, kind, buf, mime, ms, name) => {
   const t = encryptMsg(''), m = encryptBytes(buf);
-  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_enc,media_iv,media_mime,media_ms) VALUES(?,?,?,?,?,?,?,?,?,?)').run(from, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, m.enc, m.iv, mime, ms || null);
+  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_enc,media_iv,media_mime,media_ms,media_name) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(from, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, m.enc, m.iv, mime, ms || null, name || null);
   return { id: Number(info.lastInsertRowid), created_at: db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid).created_at };
 };
 
@@ -1339,6 +1480,18 @@ app.post('/api/messages/sticker', (req, res) => {
   if (limited('sticker:' + req.user.id, 60, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
   const result = insertMedia(req.user.id, target, 'sticker', Buffer.from(st.data), st.mime, null);
   notifyNewMessage(req.user, target, 'Sticker');
+  res.json(result);
+});
+// A photo or any other file picked from the gallery or phone storage -- same encrypted storage as everything else.
+app.post('/api/messages/attachment', upload.single('file'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const target = resolveTarget(req);
+  if (!target) return res.status(400).json({ error: 'Invalid message.' });
+  if (!req.file) return res.status(400).json({ error: 'Choose a file first.' });
+  if (limited('attach:' + req.user.id, 20, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
+  const kind = /^image\//.test(req.file.mimetype) ? 'image' : 'file';
+  const result = insertMedia(req.user.id, target, kind, req.file.buffer, req.file.mimetype, null, req.file.originalname.slice(0, 150));
+  notifyNewMessage(req.user, target, kind === 'image' ? '📷 Photo' : `📄 ${req.file.originalname.slice(0, 60)}`);
   res.json(result);
 });
 // A voice note or sticker's file -- only people in that conversation can fetch it.
@@ -1375,7 +1528,7 @@ app.get('/api/messages/poll', (req, res) => {
     id: m.id, from: m.sender_id, from_name: (meta[m.id] || {}).from_name, kind: m.kind || 'text',
     deleted: !!m.deleted_at, edited: !!m.edited_at,
     body: m.deleted_at ? '' : (m.kind === 'text' || !m.kind ? decryptMsg(m.body_enc, m.iv) : ''),
-    ms: m.media_ms || 0, created_at: m.created_at,
+    ms: m.media_ms || 0, name: m.media_name || '', created_at: m.created_at,
     reactions: reactionsFor(m.id),
     tick: m.sender_id === req.user.id && !m.group_id ? tickFor(m, m.recipient_id) : undefined,
   }));
@@ -1457,6 +1610,63 @@ app.post('/api/stickers', upload.single('sticker'), (req, res) => {
   if (db.prepare('SELECT COUNT(*) n FROM stickers WHERE user_id=?').get(req.user.id).n >= MAX_STICKERS) return res.status(400).json({ error: `Your sticker board is full (${MAX_STICKERS}).` });
   const info = db.prepare('INSERT INTO stickers(user_id,mime,data) VALUES(?,?,?)').run(req.user.id, req.file.mimetype, req.file.buffer);
   res.json({ id: Number(info.lastInsertRowid) });
+});
+// A tiny dependency-free .zip reader (stored + deflate entries only -- covers the vast majority of
+// real-world zips, especially ones a phone's "Compress" action creates) so a whole folder of sticker
+// pictures can be dropped in as one file, no extra packages needed.
+function readZipEntries(buf) {
+  const EOCD = 0x06054b50, CEN = 0x02014b50, LOC = 0x04034b50;
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65557); i--) {
+    if (buf.readUInt32LE(i) === EOCD) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip file');
+  const total = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const headers = [];
+  for (let i = 0; i < total && p + 46 <= buf.length; i++) {
+    if (buf.readUInt32LE(p) !== CEN) break;
+    const method = buf.readUInt16LE(p + 10), compSize = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28), extraLen = buf.readUInt16LE(p + 30), commentLen = buf.readUInt16LE(p + 32);
+    const localOffset = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    headers.push({ name, method, compSize, localOffset });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  const out = [];
+  for (const h of headers) {
+    if (h.name.endsWith('/') || !h.name || h.name.includes('__MACOSX')) continue;
+    const lp = h.localOffset;
+    if (lp + 30 > buf.length || buf.readUInt32LE(lp) !== LOC) continue;
+    const lNameLen = buf.readUInt16LE(lp + 26), lExtraLen = buf.readUInt16LE(lp + 28);
+    const dataStart = lp + 30 + lNameLen + lExtraLen;
+    const comp = buf.subarray(dataStart, dataStart + h.compSize);
+    let data;
+    if (h.method === 0) data = comp;
+    else if (h.method === 8) { try { data = zlib.inflateRawSync(comp); } catch { continue; } }
+    else continue; // unsupported (rare) compression method -- skip rather than fail the whole zip
+    out.push({ name: h.name, data });
+  }
+  return out;
+}
+const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+app.post('/api/stickers/zip', upload.single('zip'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  if (!req.file) return res.status(400).json({ error: 'Choose a .zip file first.' });
+  let entries;
+  try { entries = readZipEntries(req.file.buffer); } catch { return res.status(400).json({ error: 'That does not look like a valid .zip file.' }); }
+  const ins = db.prepare('INSERT INTO stickers(user_id,mime,data) VALUES(?,?,?)');
+  let added = 0, skipped = 0;
+  let room = MAX_STICKERS - db.prepare('SELECT COUNT(*) n FROM stickers WHERE user_id=?').get(req.user.id).n;
+  for (const e of entries) {
+    const ext = (/\.([a-z0-9]+)$/i.exec(e.name) || [])[1];
+    const mime = ext && EXT_MIME[ext.toLowerCase()];
+    if (room <= 0) { skipped++; continue; }
+    if (!mime || e.data.length > 1024 * 1024) { skipped++; continue; }
+    ins.run(req.user.id, mime, e.data);
+    added++; room--;
+  }
+  res.json({ added, skipped });
 });
 app.post('/api/stickers/:id/delete', (req, res) => {
   if (!req.user) return res.sendStatus(401);
@@ -1909,6 +2119,13 @@ app.get('/admin', adminish, (req, res) => {
     return `<h3 id="payments">Payment claims waiting for you (${claims.length})</h3>${claims.map(c => `<div class="card row"><div><b>${esc(c.un)}</b> <span class="mut">${esc(c.ue)}</span><br><span class="mut">₦${((c.price_kobo || PRICE_KOBO) / 100).toFixed(0)} for "${esc(c.pt)}"</span></div>
 <div class="row" style="gap:6px"><form method="post" action="/admin/payments/${c.id}/approve"><button>Approve</button></form><form method="post" action="/admin/payments/${c.id}/reject" onsubmit="return confirm('Reject this payment claim?')"><button class="link">Reject</button></form></div></div>`).join('')}`;
   })() : '';
+  const levelSection = central_ ? (() => {
+    const counts = LEVELS.map(l => ({ l, n: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND level=?").get(l).n }));
+    return `<h3 id="levels">End of session: move everyone up a level</h3>
+<p class="mut" style="margin-top:0">${counts.map(c => `${c.l} level: ${c.n}`).join(' &middot; ')}</p>
+<form method="post" action="/admin/levels/advance" onsubmit="return confirm('Move every student up one level (100→200, 200→300, and so on)? This cannot be undone.')"><button>Advance everyone to the next level</button></form>
+<p class="hint">Students already at ${LEVELS[LEVELS.length - 1]} level are left as they are -- there is no "graduated" state yet.</p>`;
+  })() : '';
   const positionsSection = cf ? (() => {
     const pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' ORDER BY id").all();
     const depts = db.prepare('SELECT id,name,faculty FROM departments ORDER BY faculty,name').all();
@@ -1940,7 +2157,7 @@ app.get('/admin', adminish, (req, res) => {
   const newsItems = cn ? db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all() : [];
   const newsSection = cn ? `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
 <form class="card" method="post" action="/admin/news" enctype="multipart/form-data"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="Short summary" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
-${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
+${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><a href="/admin/news/${n.id}/edit">Edit</a><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
   const pagesSection = cp ? `<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
 ${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">YouTube video</option></select>`
@@ -1949,7 +2166,7 @@ ${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</opti
 ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."></div>` : ''}
 <label><input type="checkbox" name="members_only" value="1"> Members only (login required)</label><br>
 <label class="hint" style="display:block;margin-top:8px">Who is this for?</label>
-<select name="dept"><option value="">All departments</option>${departmentOptions('')}</select>
+<details><summary>Which departments? (leave all unchecked for every department)</summary>${departmentCheckboxes([])}</details>
 <select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
 <button>Upload</button></form>
@@ -1960,7 +2177,8 @@ ${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=docume
     const replaceCtrl = p.kind === 'video'
       ? (ck ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form>` : '')
       : (p.kind === 'html' || ck ? `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>` : '');
-    const forWho = `${p.dept ? esc(p.dept) : 'All departments'} &middot; ${p.level ? p.level + ' level' : 'All levels'}`;
+    const deptList = deptListOf(p);
+    const forWho = `${deptList.length ? esc(deptList.join(', ')) : 'All departments'} &middot; ${p.level ? p.level + ' level' : 'All levels'}`;
     return `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${pIcon} ${esc(p.title)}</a><span class="mut">/p/${p.slug} &middot; ${pLabel} &middot; ${status}</span></div>
 <p class="mut" style="margin:6px 0 0">For: ${forWho} &middot; <a href="/admin/pages/${p.id}/sort">Change</a></p>
 <div class="row" style="margin-top:10px">
@@ -1970,15 +2188,15 @@ ${replaceCtrl}
   }).join('')
     || '<p class="mut">No pages yet.</p>'}` : '';
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-${pagesSection}${newsSection}${paymentsSection}${positionsSection}${usersSection}`, req.user));
+${pagesSection}${newsSection}${paymentsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
 });
 
 // Reads the "who is this for?" choices: a department (or all) and a level (or all, or detected from the course code).
 function readAudience(body, titleHint) {
-  const dept = String(body.dept || '').trim();
+  const picked = (Array.isArray(body.dept) ? body.dept : body.dept ? [body.dept] : []).filter(d => departmentNames().includes(d));
   const level = String(body.level || 'auto');
   return {
-    dept: dept && departmentNames().includes(dept) ? dept : null,
+    dept: picked.length ? picked.join(',') : null,
     level: level === 'auto' ? levelFromText(titleHint) : LEVELS.includes(Number(level)) ? Number(level) : null,
   };
 }
@@ -2016,7 +2234,7 @@ app.get('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
   const p = db.prepare('SELECT * FROM pages WHERE id=?').get(req.params.id);
   if (!p) return res.redirect(back('Page not found.'));
   res.send(layout('Who is this for?', `<p class="mut"><a href="/admin#pages">&larr; Admin</a></p><h1 style="font-size:26px">${esc(p.title)}</h1>
-<form class="card" method="post" action="/admin/pages/${p.id}/sort"><label class="mut">Department</label><select name="dept"><option value="">All departments</option>${departmentOptions(p.dept)}</select>
+<form class="card" method="post" action="/admin/pages/${p.id}/sort"><label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select><button>Save</button></form>`, req.user));
 });
 app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
@@ -2050,6 +2268,11 @@ app.post('/admin/departments/add', admin, (req, res) => {
 app.post('/admin/departments/:id/delete', admin, (req, res) => {
   db.prepare('DELETE FROM departments WHERE id=?').run(req.params.id);
   res.redirect(back('Department removed from the list.'));
+});
+// End of a session: move every student up one level. Central admin only -- this affects the whole school at once.
+app.post('/admin/levels/advance', central, (req, res) => {
+  const info = db.prepare(`UPDATE users SET level = level + 100 WHERE role='user' AND level IS NOT NULL AND level < ${LEVELS[LEVELS.length - 1]}`).run();
+  res.redirect(back(`${info.changes} student${info.changes === 1 ? '' : 's'} moved up a level.`));
 });
 
 app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, res) => {
@@ -2092,6 +2315,29 @@ app.post('/admin/news/:id/approve', newsAdmin, (req, res) => {
 app.post('/admin/news/:id/delete', newsAdmin, (req, res) => {
   db.prepare('DELETE FROM news WHERE id=?').run(req.params.id);
   res.redirect(back('News deleted.'));
+});
+app.get('/admin/news/:id/edit', newsAdmin, (req, res) => {
+  const n = db.prepare('SELECT * FROM news WHERE id=?').get(req.params.id);
+  if (!n) return res.redirect(back('News item not found.'));
+  res.send(layout('Edit news', `<p class="mut"><a href="/admin#news">&larr; Admin</a></p><h1 style="font-size:26px">Edit news</h1>
+${n.image_data ? `<img src="/news-image/${n.id}" style="max-width:220px;border-radius:10px;display:block;margin-bottom:10px">` : ''}
+<form class="card" method="post" action="/admin/news/${n.id}/edit" enctype="multipart/form-data">
+<input name="title" value="${esc(n.title)}" required maxlength="140">
+<input type="file" name="image" accept="image/*" style="padding:9px 0">
+<p class="hint">Choose a picture only if you want to replace the current one.</p>
+<textarea name="body" required maxlength="600" style="width:100%;min-height:120px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(n.body)}</textarea>
+<button>Save changes</button></form>`, req.user));
+});
+app.post('/admin/news/:id/edit', newsAdmin, upload.single('image'), (req, res) => {
+  const n = db.prepare('SELECT id FROM news WHERE id=?').get(req.params.id);
+  if (!n) return res.redirect(back('News item not found.'));
+  const title = String(req.body.title || '').trim().slice(0, 140);
+  const body = String(req.body.body || '').trim().slice(0, 600);
+  if (!title || !body) return res.redirect(`/admin/news/${n.id}/edit`);
+  if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect(back('That file is not an image.'));
+  if (req.file) db.prepare('UPDATE news SET title=?, body=?, image_data=?, image_mime=? WHERE id=?').run(title, body, req.file.buffer, req.file.mimetype, n.id);
+  else db.prepare('UPDATE news SET title=?, body=? WHERE id=?').run(title, body, n.id);
+  res.redirect(back('News updated.'));
 });
 app.post('/admin/pages/:id/toggle', pagesAdmin, (req, res) => {
   db.prepare('UPDATE pages SET members_only = 1 - members_only WHERE id=?').run(req.params.id);
