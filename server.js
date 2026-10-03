@@ -483,27 +483,77 @@ button{background:#5bc8ff;color:#04101f;border:none;border-radius:10px;padding:1
 <p>This page needs a connection. Reconnect and try again -- anything you already opened recently may still work.</p>
 <button onclick="location.reload()">Try again</button></div></body></html>`;
 app.get('/offline.html', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(OFFLINE_HTML); });
-const SW_JS = `var OFFLINE_CACHE='studies-hub-offline-v1';
+const UPLOAD_QUEUED_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Saved - Studies Hub</title>
+<style>body{margin:0;background:#04101f;color:#eaf2ff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}
+.card{max-width:360px}.tick{font-size:48px;margin-bottom:12px}
+h1{font-size:1.25rem;margin:0 0 8px}p{color:#93a0bd;line-height:1.5;margin:0 0 20px}
+a.btn{display:inline-block;background:#5bc8ff;color:#04101f;border:none;border-radius:10px;padding:12px 22px;font-size:1rem;font-weight:600;text-decoration:none}</style></head>
+<body><div class="card"><div class="tick">💾</div><h1>Saved on your device</h1>
+<p>No connection right now, so this is waiting on your phone. It'll upload itself as soon as you're back online -- no need to try again.</p>
+<a class="btn" href="/admin">Back to Admin</a></div></body></html>`;
+const SW_JS = `var OFFLINE_CACHE='studies-hub-offline-v1',UPLOAD_PATHS=['/admin/upload'];
 self.addEventListener('install',function(e){self.skipWaiting();e.waitUntil(caches.open(OFFLINE_CACHE).then(function(c){return c.add('/offline.html')}))});
 self.addEventListener('fetch',function(e){
   if(e.request.mode!=='navigate')return;
-  e.respondWith(fetch(e.request).catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match('/offline.html')})}));
+  var pathname=new URL(e.request.url).pathname;
+  if(e.request.method==='POST'&&UPLOAD_PATHS.indexOf(pathname)>-1){e.respondWith(handleUploadNav(e.request,pathname));return}
+  if(e.request.method!=='GET'){e.respondWith(fetch(e.request).catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match('/offline.html')})}));return}
+  // A normal page visit: try the network and remember the result, so the same page can still open with no connection later.
+  e.respondWith(fetch(e.request).then(function(res){var copy=res.clone();caches.open(OFFLINE_CACHE).then(function(c){c.put(e.request,copy)});return res})
+    .catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match(e.request).then(function(cached){return cached||c.match('/offline.html')})})}));
 });
 self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});
-self.addEventListener('sync',function(e){if(e.tag==='send-queued-messages')e.waitUntil(flushQueuedMessages())});
-function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',1);rq.onupgradeneeded=function(){rq.result.createObjectStore('msgs',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
-function pendingAll(){return pendingDB().then(function(db){return new Promise(function(res){var rq=db.transaction('msgs','readonly').objectStore('msgs').getAll();rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){res([])}})})}
-function pendingDelete(id){return pendingDB().then(function(db){return new Promise(function(res){var tx=db.transaction('msgs','readwrite');tx.objectStore('msgs').delete(id);tx.oncomplete=function(){res()}})})}
+self.addEventListener('sync',function(e){
+  if(e.tag==='send-queued-messages')e.waitUntil(flushQueuedMessages());
+  if(e.tag==='send-queued-uploads')e.waitUntil(flushQueuedUploads());
+});
+function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',2);rq.onupgradeneeded=function(){var db=rq.result;if(!db.objectStoreNames.contains('msgs'))db.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!db.objectStoreNames.contains('uploads'))db.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
+function storeAll(store){return pendingDB().then(function(db){return new Promise(function(res){var rq=db.transaction(store,'readonly').objectStore(store).getAll();rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){res([])}})})}
+function storeDelete(store,id){return pendingDB().then(function(db){return new Promise(function(res){var tx=db.transaction(store,'readwrite');tx.objectStore(store).delete(id);tx.oncomplete=function(){res()}})})}
 function flushQueuedMessages(){
-  return pendingAll().then(function(items){
+  return storeAll('msgs').then(function(items){
     var sentTempIds=[];
     return items.reduce(function(p,it){return p.then(function(){
       return fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(it.payload)}).then(function(r){return r.json()}).then(function(j){
-        if(j&&j.id){sentTempIds.push(it.tempId);return pendingDelete(it.id)}
+        if(j&&j.id){sentTempIds.push(it.tempId);return storeDelete('msgs',it.id)}
       }).catch(function(){});
     })},Promise.resolve()).then(function(){
       return self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){cs.forEach(function(c){c.postMessage({type:'chat-synced',tempIds:sentTempIds})})});
     });
+  });
+}
+// A failed upload-form submission (offline) lands here instead of a native error: save it whole (fields + the
+// file itself) and hand back a friendly confirmation page instead of the browser's own offline error.
+function handleUploadNav(req,pathname){
+  var clone=req.clone();
+  return fetch(req).catch(function(){
+    return clone.formData().then(function(fd){
+      var fields={},file=null;
+      fd.forEach(function(v,k){
+        if(v&&typeof v==='object'&&typeof v.arrayBuffer==='function'&&v.size>0){file={name:v.name||'upload',type:v.type||'application/octet-stream',blob:v}}
+        else if(!(v&&typeof v==='object'&&typeof v.arrayBuffer==='function')){
+          if(fields[k]===undefined)fields[k]=v;else if(Array.isArray(fields[k]))fields[k].push(v);else fields[k]=[fields[k],v];
+        }
+      });
+      return pendingDB().then(function(db){return new Promise(function(res,rej){var tx=db.transaction('uploads','readwrite'),rq=tx.objectStore('uploads').add({url:pathname,fields:fields,file:file});rq.onsuccess=function(){res()};rq.onerror=function(){rej(rq.error)}})});
+    }).then(function(){
+      return self.registration.sync.register('send-queued-uploads').catch(function(){});
+    }).then(function(){
+      return new Response(UPLOAD_QUEUED_HTML,{status:200,headers:{'Content-Type':'text/html; charset=utf-8'}});
+    });
+  });
+}
+function flushQueuedUploads(){
+  return storeAll('uploads').then(function(items){
+    return items.reduce(function(p,it){return p.then(function(){
+      var fd=new FormData();
+      Object.keys(it.fields).forEach(function(k){var v=it.fields[k];if(Array.isArray(v))v.forEach(function(vv){fd.append(k,vv)});else fd.append(k,v)});
+      if(it.file)fd.append('file',it.file.blob,it.file.name);
+      return fetch(it.url,{method:'POST',body:fd}).then(function(res){if(res.ok)return storeDelete('uploads',it.id)}).catch(function(){});
+    })},Promise.resolve());
+  }).then(function(){
+    return self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){cs.forEach(function(c){c.postMessage({type:'uploads-synced'})})});
   });
 }
 self.addEventListener('push',function(e){
@@ -1333,7 +1383,7 @@ function queueAndShow(body,text){
   bubble({id:tempId,from:myId,kind:'text',body:text,created_at:new Date().toISOString(),tick:'queued'});
   pendingAdd({tempId:tempId,payload:body}).then(registerBackgroundSync);
 }
-function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',1);rq.onupgradeneeded=function(){rq.result.createObjectStore('msgs',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
+function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',2);rq.onupgradeneeded=function(){var db=rq.result;if(!db.objectStoreNames.contains('msgs'))db.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!db.objectStoreNames.contains('uploads'))db.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
 function pendingAdd(item){return pendingDB().then(function(db){return new Promise(function(res,rej){var tx=db.transaction('msgs','readwrite'),rq=tx.objectStore('msgs').add(item);rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})})}
 function pendingList(){return pendingDB().then(function(db){return new Promise(function(res){var rq=db.transaction('msgs','readonly').objectStore('msgs').getAll();rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){res([])}})})}
 function pendingRemove(id){return pendingDB().then(function(db){return new Promise(function(res){var tx=db.transaction('msgs','readwrite');tx.objectStore('msgs').delete(id);tx.oncomplete=function(){res()}})})}
@@ -2295,6 +2345,7 @@ ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name=
 <button>Upload</button></form>
 ${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
 <script>if('launchQueue' in window){window.launchQueue.setConsumer(function(lp){if(!lp.files||!lp.files.length)return;lp.files[0].getFile().then(function(file){var dt=new DataTransfer();dt.items.add(file);var fi=document.querySelector('#fileField input[type=file]');fi.files=dt.files;var n=file.name.toLowerCase();var ks=document.getElementById('kindSelect');ks.value=n.indexOf('.pdf')>-1?'pdf':(n.indexOf('.doc')>-1?'doc':'html');ks.dispatchEvent(new Event('change'));document.getElementById('upload').scrollIntoView({behavior:'smooth'})})})}</script>` : ''}
+${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',function(e){if(e.data&&e.data.type==='uploads-synced')location.reload()})}</script>` : ''}
 <h3 id="pages">Pages (${pages.length})</h3>${pages.map(p => {
     const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
     const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
