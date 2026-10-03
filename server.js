@@ -429,7 +429,7 @@ function audienceFor(page) {
 }
 // Members finish their details (username, university, department, level) before anything else; staff only need a username.
 const profileComplete = u => !!u.username && !!u.name && (u.role !== 'user' || (!!u.department && !!u.level && !!u.university));
-const GATE_OPEN = ['/welcome', '/logout', '/privacy', '/health', '/sw.js', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const GATE_OPEN = ['/welcome', '/logout', '/privacy', '/health', '/sw.js', '/offline.html', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect('/welcome');
   next();
@@ -446,7 +446,22 @@ app.get('/manifest.webmanifest', (req, res) => {
   res.send(JSON.stringify({ name: 'Studies Hub', short_name: 'Studies', description: 'Study pages, CBT practice, news and chat for your department and level.', start_url: '/', scope: '/', display: 'standalone', background_color: '#12121c', theme_color: '#12121c',
     icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }] }));
 });
-const SW_JS = `self.addEventListener('install',function(){self.skipWaiting()});
+const OFFLINE_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Offline - Studies Hub</title>
+<style>body{margin:0;background:#04101f;color:#eaf2ff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}
+.card{max-width:360px}img{width:72px;height:72px;border-radius:16px;margin-bottom:18px}
+h1{font-size:1.25rem;margin:0 0 8px}p{color:#93a0bd;line-height:1.5;margin:0 0 20px}
+button{background:#5bc8ff;color:#04101f;border:none;border-radius:10px;padding:12px 22px;font-size:1rem;font-weight:600;cursor:pointer}</style></head>
+<body><div class="card"><img src="/icon-192.png" alt="Studies Hub"><h1>You're offline</h1>
+<p>This page needs a connection. Reconnect and try again -- anything you already opened recently may still work.</p>
+<button onclick="location.reload()">Try again</button></div></body></html>`;
+app.get('/offline.html', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(OFFLINE_HTML); });
+const SW_JS = `var OFFLINE_CACHE='studies-hub-offline-v1';
+self.addEventListener('install',function(e){self.skipWaiting();e.waitUntil(caches.open(OFFLINE_CACHE).then(function(c){return c.add('/offline.html')}))});
+self.addEventListener('fetch',function(e){
+  if(e.request.mode!=='navigate')return;
+  e.respondWith(fetch(e.request).catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match('/offline.html')})}));
+});
 self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});
 self.addEventListener('push',function(e){
   var d={};
