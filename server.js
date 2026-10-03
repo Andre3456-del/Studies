@@ -443,8 +443,35 @@ app.get('/favicon.ico', (req, res) => sendAsset(res, ICON_192, 'image/png'));
 app.get('/icon-512.png', (req, res) => sendAsset(res, ICON_512, 'image/png'));
 app.get('/manifest.webmanifest', (req, res) => {
   res.setHeader('Content-Type', 'application/manifest+json');
-  res.send(JSON.stringify({ name: 'Studies Hub', short_name: 'Studies', description: 'Study pages, CBT practice, news and chat for your department and level.', start_url: '/', scope: '/', display: 'standalone', background_color: '#12121c', theme_color: '#12121c',
-    icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }] }));
+  res.send(JSON.stringify({
+    name: 'Studies Hub', short_name: 'Studies', description: 'Study pages, CBT practice, news and chat for your department and level.',
+    start_url: '/', scope: '/', display: 'standalone', display_override: ['window-controls-overlay', 'standalone'],
+    background_color: '#12121c', theme_color: '#12121c',
+    icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
+    // Shortcuts: long-press the installed icon to jump straight to a section.
+    shortcuts: [
+      { name: 'Dashboard', url: '/dashboard', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
+      { name: 'Chat', url: '/chat', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
+      { name: 'News', url: '/news', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
+      { name: 'Settings', url: '/settings', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
+    ],
+    // Launch handler: re-opening the installed app (from a notification, a shared link, etc) focuses the
+    // existing window instead of spawning a duplicate one.
+    launch_handler: { client_mode: 'focus-existing' },
+    // Share target: "Share" a link, text or photo from any other app straight into a News post.
+    share_target: { action: '/share-target', method: 'POST', enctype: 'multipart/form-data',
+      params: { title: 'title', text: 'text', url: 'url', files: [{ name: 'photo', accept: ['image/*'] }] } },
+    // File handlers: "Open with Studies Hub" on a PDF/Word file from the phone's file manager lands
+    // straight on the admin upload form with that file already attached.
+    file_handlers: [{ action: '/admin', accept: {
+      'application/pdf': ['.pdf'],
+      'application/msword': ['.doc'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+    } }],
+    // Protocol handler: a foundation for future deep links of the form web+studieshub://chat/5
+    // (e.g. from a QR code or a message) opening straight inside the installed app.
+    protocol_handlers: [{ protocol: 'web+studieshub', url: '/open?u=%s' }],
+  }));
 });
 const OFFLINE_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Offline - Studies Hub</title>
@@ -463,6 +490,22 @@ self.addEventListener('fetch',function(e){
   e.respondWith(fetch(e.request).catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match('/offline.html')})}));
 });
 self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});
+self.addEventListener('sync',function(e){if(e.tag==='send-queued-messages')e.waitUntil(flushQueuedMessages())});
+function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',1);rq.onupgradeneeded=function(){rq.result.createObjectStore('msgs',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
+function pendingAll(){return pendingDB().then(function(db){return new Promise(function(res){var rq=db.transaction('msgs','readonly').objectStore('msgs').getAll();rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){res([])}})})}
+function pendingDelete(id){return pendingDB().then(function(db){return new Promise(function(res){var tx=db.transaction('msgs','readwrite');tx.objectStore('msgs').delete(id);tx.oncomplete=function(){res()}})})}
+function flushQueuedMessages(){
+  return pendingAll().then(function(items){
+    var sentTempIds=[];
+    return items.reduce(function(p,it){return p.then(function(){
+      return fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(it.payload)}).then(function(r){return r.json()}).then(function(j){
+        if(j&&j.id){sentTempIds.push(it.tempId);return pendingDelete(it.id)}
+      }).catch(function(){});
+    })},Promise.resolve()).then(function(){
+      return self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){cs.forEach(function(c){c.postMessage({type:'chat-synced',tempIds:sentTempIds})})});
+    });
+  });
+}
 self.addEventListener('push',function(e){
   var d={};
   try{d=e.data.json()}catch(_){d={title:'Studies Hub',body:e.data?e.data.text():''}}
@@ -666,7 +709,7 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .ok{color:#22c55e}
 .tab-link{padding:10px 16px;color:var(--mut);font-weight:600;border-bottom:2px solid transparent}
 .tab-link.active{color:var(--blue);border-color:var(--blue)}
-.tick{opacity:.95}.tick-un{color:#8ab4f8}.tick-read{color:#22c55e}
+.tick{opacity:.95}.tick-un{color:#8ab4f8}.tick-read{color:#22c55e}.tick-queued{color:#93a0bd}
 .msg-actions{display:flex;gap:10px;margin-top:4px;opacity:0}
 .bubble:hover .msg-actions,.sticker-msg:hover .msg-actions,.bubble:focus-within .msg-actions{opacity:1}
 .msg-actions button{font-size:11px;color:var(--mut);background:none;box-shadow:none;padding:0;margin:0}
@@ -909,6 +952,35 @@ app.post('/news', upload.single('image'), (req, res) => {
     .run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id);
   notify(db.prepare("SELECT id FROM users WHERE role IN ('admin','news')").all().map(r => r.id), { title: 'News to review', body: `${req.user.name}: ${title}`, url: '/admin#pending-news', tag: 'news-review' });
   res.redirect('/news?msg=' + encodeURIComponent("Thanks -- we'll review it shortly."));
+});
+
+// Share target: something shared "to Studies Hub" from another app lands here, pre-filled into a News post.
+app.post('/share-target', upload.single('photo'), (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/news');
+  const title = String(req.body.title || '').trim().slice(0, 140);
+  const text = String(req.body.text || '').trim();
+  const url = String(req.body.url || '').trim();
+  const body = [text, url].filter(Boolean).join('\n').trim().slice(0, 600);
+  const img = req.file && /^image\//.test(req.file.mimetype);
+  const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+  const imgTag = img ? `<p class="mut" style="margin:10px 0 2px">Photo you shared:</p><img id="shareImgPreview" src="data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}" style="max-width:100%;border-radius:12px;margin-bottom:10px">
+<input type="file" name="image" id="shareImg" accept="image/*" style="display:none">
+<script>fetch(document.getElementById('shareImgPreview').src).then(function(r){return r.blob()}).then(function(b){var f=new File([b],'shared.${EXT[req.file.mimetype] || 'jpg'}',{type:'${req.file.mimetype}'});var dt=new DataTransfer();dt.items.add(f);document.getElementById('shareImg').files=dt.files})</script>` : '';
+  res.send(layout('Share to News', `<p class="mut"><a href="/news">&larr; Back</a></p><h1 style="font-size:24px">Share to News</h1>
+<p class="mut">Finish this up and it'll go to a news admin for approval, same as posting from the News page.</p>
+<form class="card" method="post" action="/news" enctype="multipart/form-data">
+<input name="title" placeholder="Headline" required maxlength="140" value="${esc(title)}">
+<textarea name="body" required maxlength="600" style="width:100%;min-height:100px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(body)}</textarea>
+${imgTag}
+<button>Submit for review</button></form>`, req.user));
+});
+// Protocol handler target: web+studieshub://... links land here and get redirected to the matching page.
+app.get('/open', (req, res) => {
+  const raw = String(req.query.u || '');
+  const m = raw.match(/^web\+studieshub:\/\/(.*)$/i);
+  let dest = m ? '/' + m[1].replace(/^\/+/, '') : raw;
+  if (!dest.startsWith('/') || dest.startsWith('//') || dest.includes('://')) dest = '/dashboard';
+  res.redirect(dest);
 });
 
 // A member's profile: what they've chosen to share (university, department, level, their verified position) plus their approved news.
@@ -1196,7 +1268,7 @@ function linkifyInto(container,text){
   if(last<text.length)container.appendChild(document.createTextNode(text.slice(last)));
 }
 function toBottom(){window.scrollTo(0,document.body.scrollHeight)}
-function tickHtml(t){if(convType==='group'||!t)return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
+function tickHtml(t){if(!t)return'';if(t==='queued')return' <span class="tick tick-queued" title="Waiting for a connection">&#8987;</span>';if(convType==='group')return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
 function actionsRow(id,mine,kind){
   var r=el('div','msg-actions'),react=el('button','link','React');react.type='button';react.setAttribute('data-act','react');r.appendChild(react);
   if(mine){
@@ -1249,7 +1321,43 @@ toBottom();setInterval(poll,3000);
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
   if(editingId){var id=editingId;editingId=null;input.value='';fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
   input.value='';var body=Object.assign({body:text},convType==='group'?{group:convId}:{to:convId});
-  post('/api/messages/send',body,function(j){bubble({id:j.id,from:myId,kind:'text',body:text,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id})});
+  if(!navigator.onLine)return queueAndShow(body,text);
+  fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){
+    if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:text,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}
+    else alert((j&&j.error)||'Could not send.')
+  }).catch(function(){queueAndShow(body,text)})});
+
+/* ---- send while offline: queue in IndexedDB, auto-send once a connection is back ---- */
+function queueAndShow(body,text){
+  var tempId='q'+Date.now()+Math.random().toString(36).slice(2);
+  bubble({id:tempId,from:myId,kind:'text',body:text,created_at:new Date().toISOString(),tick:'queued'});
+  pendingAdd({tempId:tempId,payload:body}).then(registerBackgroundSync);
+}
+function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',1);rq.onupgradeneeded=function(){rq.result.createObjectStore('msgs',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
+function pendingAdd(item){return pendingDB().then(function(db){return new Promise(function(res,rej){var tx=db.transaction('msgs','readwrite'),rq=tx.objectStore('msgs').add(item);rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})})}
+function pendingList(){return pendingDB().then(function(db){return new Promise(function(res){var rq=db.transaction('msgs','readonly').objectStore('msgs').getAll();rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){res([])}})})}
+function pendingRemove(id){return pendingDB().then(function(db){return new Promise(function(res){var tx=db.transaction('msgs','readwrite');tx.objectStore('msgs').delete(id);tx.oncomplete=function(){res()}})})}
+function registerBackgroundSync(){
+  if(!('serviceWorker' in navigator)||!('SyncManager' in window))return;
+  navigator.serviceWorker.ready.then(function(reg){return reg.sync.register('send-queued-messages')}).catch(function(){});
+}
+function flushPendingHere(){ // fallback for browsers without Background Sync: only works while this page is open
+  return pendingList().then(function(items){
+    return items.reduce(function(p,it){return p.then(function(){
+      return fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(it.payload)}).then(function(r){return r.json()}).then(function(j){
+        if(j&&j.id){var b=thread.querySelector('[data-id="'+it.tempId+'"]');if(b)b.parentNode.removeChild(b);return pendingRemove(it.id)}
+      }).catch(function(){});
+    })},Promise.resolve());
+  });
+}
+window.addEventListener('online',flushPendingHere);
+if(navigator.onLine)flushPendingHere();
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('message',function(e){
+    if(!e.data||e.data.type!=='chat-synced')return;
+    (e.data.tempIds||[]).forEach(function(tid){var b=thread.querySelector('[data-id="'+tid+'"]');if(b)b.parentNode.removeChild(b)});
+  });
+}
 
 /* ---- emoji + stickers panel ---- */
 var EMO={'😀':'😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😜 🤪 😎 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🤭 🤫 😶 😐 😑 😬 🙄 😯 😴 🤤 😷 🤒 🤕 🤢 🤮 🤧 😈 💀 👻 🤡',
@@ -2185,7 +2293,8 @@ ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeh
 <select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
 <button>Upload</button></form>
-${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>` : ''}
+${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
+<script>if('launchQueue' in window){window.launchQueue.setConsumer(function(lp){if(!lp.files||!lp.files.length)return;lp.files[0].getFile().then(function(file){var dt=new DataTransfer();dt.items.add(file);var fi=document.querySelector('#fileField input[type=file]');fi.files=dt.files;var n=file.name.toLowerCase();var ks=document.getElementById('kindSelect');ks.value=n.indexOf('.pdf')>-1?'pdf':(n.indexOf('.doc')>-1?'doc':'html');ks.dispatchEvent(new Event('change'));document.getElementById('upload').scrollIntoView({behavior:'smooth'})})})}</script>` : ''}
 <h3 id="pages">Pages (${pages.length})</h3>${pages.map(p => {
     const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
     const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
