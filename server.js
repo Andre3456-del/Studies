@@ -445,7 +445,9 @@ app.get('/manifest.webmanifest', (req, res) => {
   res.setHeader('Content-Type', 'application/manifest+json');
   res.send(JSON.stringify({
     name: 'Studies Hub', short_name: 'Studies', description: 'Study pages, CBT practice, news and chat for your department and level.',
-    start_url: '/', scope: '/', display: 'standalone', display_override: ['window-controls-overlay', 'standalone'],
+    start_url: '/', scope: '/', display: 'standalone', display_override: ['window-controls-overlay', 'tabbed', 'standalone'],
+    edge_side_panel: { preferred_width: 400 },
+    note_taking: { new_note_url: '/news' },
     background_color: '#12121c', theme_color: '#12121c',
     icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
     // Shortcuts: long-press the installed icon to jump straight to a section.
@@ -471,7 +473,36 @@ app.get('/manifest.webmanifest', (req, res) => {
     // Protocol handler: a foundation for future deep links of the form web+studieshub://chat/5
     // (e.g. from a QR code or a message) opening straight inside the installed app.
     protocol_handlers: [{ protocol: 'web+studieshub', url: '/open?u=%s' }],
+    // Widgets: a Windows 11 Widgets Board card showing the latest News. Windows-only today, but spec-correct.
+    widgets: [{
+      name: 'Studies Hub News', short_name: 'News', description: 'The latest approved news from Studies Hub.',
+      tag: 'studies-hub-news', template: 'studies-hub-news-template', ms_ac_template: '/widgets/news-template.json',
+      data: '/widgets/news-data.json', type: 'application/json', auth: false, update: 21600,
+      screenshots: [{ src: '/icon-512.png', sizes: '512x512', label: 'Studies Hub News widget' }],
+      icons: [{ src: '/icon-192.png', sizes: '192x192' }],
+    }],
   }));
+});
+// Widgets Board data: the Adaptive Card template (fixed) and the live data (latest 3 approved news items) it binds to.
+app.get('/widgets/news-template.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.json({
+    type: 'AdaptiveCard', $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', version: '1.5',
+    body: [
+      { type: 'TextBlock', size: 'Medium', weight: 'Bolder', text: 'Studies Hub News' },
+      { type: 'Container', $data: '${items}', separator: true, items: [
+        { type: 'TextBlock', text: '${title}', weight: 'Bolder', wrap: true },
+        { type: 'TextBlock', text: '${snippet}', wrap: true, isSubtle: true, spacing: 'None' },
+      ] },
+    ],
+    actions: [{ type: 'Action.Execute', title: 'Open Studies Hub', verb: 'open-news' }],
+  });
+});
+app.get('/widgets/news-data.json', (req, res) => {
+  const items = db.prepare("SELECT title, body FROM news WHERE status='approved' ORDER BY id DESC LIMIT 3").all()
+    .map(n => ({ title: n.title, snippet: n.body.length > 100 ? n.body.slice(0, 100) + '…' : n.body }));
+  res.setHeader('Content-Type', 'application/json');
+  res.json({ items });
 });
 const OFFLINE_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Offline - Studies Hub</title>
@@ -504,6 +535,33 @@ self.addEventListener('fetch',function(e){
     .catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match(e.request).then(function(cached){return cached||c.match('/offline.html')})})}));
 });
 self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});
+// Periodic Background Sync: a Chromium-only, engagement-gated API -- the browser decides if/how often this
+// actually fires. Used here to keep a few key pages fresh for offline browsing, and to refresh the News widget.
+function refreshCachedPages(){
+  return caches.open(OFFLINE_CACHE).then(function(c){
+    return Promise.all(['/dashboard','/news','/chat'].map(function(p){return fetch(p).then(function(res){if(res.ok)return c.put(p,res)}).catch(function(){})}));
+  });
+}
+function updateWidget(widget){
+  var d=widget.definition;
+  return Promise.all([fetch(d.msAcTemplate).then(function(r){return r.text()}),fetch(d.data).then(function(r){return r.text()})])
+    .then(function(r){return self.widgets.updateByTag(d.tag,{template:r[0],data:r[1]})}).catch(function(){});
+}
+self.addEventListener('periodicsync',function(e){
+  if(e.tag==='refresh-content')e.waitUntil(refreshCachedPages());
+  if('widgets' in self)e.waitUntil(self.widgets.getByTag(e.tag).then(function(w){if(w)return updateWidget(w)}));
+});
+// Windows 11 Widgets Board lifecycle (does nothing on platforms without a widgets host).
+self.addEventListener('widgetinstall',function(e){
+  e.waitUntil(updateWidget(e.widget).then(function(){
+    if(!self.registration.periodicSync)return;
+    return self.registration.periodicSync.getTags().then(function(tags){
+      if(tags.indexOf(e.widget.definition.tag)===-1)return self.registration.periodicSync.register(e.widget.definition.tag,{minInterval:(e.widget.definition.update||21600)*1000});
+    });
+  }).catch(function(){}));
+});
+self.addEventListener('widgetresume',function(e){e.waitUntil(updateWidget(e.widget))});
+self.addEventListener('widgetclick',function(e){if(e.action==='open-news')e.waitUntil(self.clients.openWindow('/news'))});
 self.addEventListener('sync',function(e){
   if(e.tag==='send-queued-messages')e.waitUntil(flushQueuedMessages());
   if(e.tag==='send-queued-uploads')e.waitUntil(flushQueuedUploads());
@@ -805,6 +863,11 @@ window.enablePush=function(){
   }).catch(function(){return false})};
 navigator.serviceWorker.register('/sw.js').then(function(reg){
   if(window.Notification&&window.PushManager&&Notification.permission==='granted')subscribe(reg).catch(function(){})
+  if('periodicSync' in reg&&navigator.permissions){
+    navigator.permissions.query({name:'periodic-background-sync'}).then(function(status){
+      if(status.state==='granted')reg.periodicSync.register('refresh-content',{minInterval:12*60*60*1000}).catch(function(){})
+    }).catch(function(){})
+  }
 }).catch(function(){});
 var bar=document.getElementById('pushBar'),dismissed=false;
 try{dismissed=!!localStorage.getItem('pushDismissed')}catch(_){}
