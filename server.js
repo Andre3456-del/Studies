@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 const bcrypt = require('bcryptjs');
 const { DatabaseSync } = require('node:sqlite'); // built into Node 22.13+, nothing to compile
 const crypto = require('crypto');
@@ -445,7 +445,7 @@ app.get('/manifest.webmanifest', (req, res) => {
   res.setHeader('Content-Type', 'application/manifest+json');
   res.send(JSON.stringify({
     name: 'Studies Hub', short_name: 'Studies', description: 'Study pages, CBT practice, news and chat for your department and level.',
-    start_url: '/', scope: '/', display: 'standalone', display_override: ['window-controls-overlay', 'tabbed', 'standalone'],
+    id: '/', start_url: '/', scope: '/', display: 'standalone', display_override: ['window-controls-overlay', 'tabbed', 'standalone'],
     edge_side_panel: { preferred_width: 400 },
     note_taking: { new_note_url: '/news' },
     background_color: '#12121c', theme_color: '#12121c',
@@ -1030,7 +1030,7 @@ function newsFeedBody(req, home = false) {
   const empty = '<p class="mut">No news yet. Check back soon.</p>';
   if (home) return cards || empty;
   const submitForm = req.user
-    ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
+    ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
     : '<p class="mut"><a href="/login?next=/news">Log in</a> to share something.</p>';
   return `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || empty}`;
 }
@@ -1058,7 +1058,7 @@ app.get('/news/:id', (req, res) => {
 app.post('/news', upload.single('image'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/news');
   const title = String(req.body.title || '').trim().slice(0, 140);
-  const body = String(req.body.body || '').trim().slice(0, 600);
+  const body = String(req.body.body || '').trim().slice(0, 2000000);
   if (!title || !body) return res.redirect('/news?msg=' + encodeURIComponent('Enter a headline and a summary.'));
   if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect('/news?msg=' + encodeURIComponent('That file is not an image.'));
   db.prepare("INSERT INTO news(title,body,image_data,image_mime,author_id,status) VALUES(?,?,?,?,?,'pending')")
@@ -1073,7 +1073,7 @@ app.post('/share-target', upload.single('photo'), (req, res) => {
   const title = String(req.body.title || '').trim().slice(0, 140);
   const text = String(req.body.text || '').trim();
   const url = String(req.body.url || '').trim();
-  const body = [text, url].filter(Boolean).join('\n').trim().slice(0, 600);
+  const body = [text, url].filter(Boolean).join('\n').trim().slice(0, 2000000);
   const img = req.file && /^image\//.test(req.file.mimetype);
   const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
   const imgTag = img ? `<p class="mut" style="margin:10px 0 2px">Photo you shared:</p><img id="shareImgPreview" src="data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}" style="max-width:100%;border-radius:12px;margin-bottom:10px">
@@ -1083,7 +1083,7 @@ app.post('/share-target', upload.single('photo'), (req, res) => {
 <p class="mut">Finish this up and it'll go to a news admin for approval, same as posting from the News page.</p>
 <form class="card" method="post" action="/news" enctype="multipart/form-data">
 <input name="title" placeholder="Headline" required maxlength="140" value="${esc(title)}">
-<textarea name="body" required maxlength="600" style="width:100%;min-height:100px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(body)}</textarea>
+<textarea name="body" required maxlength="2000000" style="width:100%;min-height:100px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(body)}</textarea>
 ${imgTag}
 <button>Submit for review</button></form>`, req.user));
 });
@@ -1485,32 +1485,75 @@ showCat(Object.keys(EMO)[0]);
 function tab(name){var isE=name==='emoji';pEmoji.hidden=!isE;pStickers.hidden=isE;Array.prototype.forEach.call(panel.querySelectorAll('[data-tab]'),function(b){b.className=(b.getAttribute('data-tab')===name?'ghost on':'ghost')});if(!isE)loadStickers()}
 Array.prototype.forEach.call(panel.querySelectorAll('[data-tab]'),function(b){b.addEventListener('click',function(){tab(b.getAttribute('data-tab'))})});
 pBtn.addEventListener('click',function(){panel.hidden=!panel.hidden;document.body.classList.toggle('panel-open',!panel.hidden);if(!panel.hidden){tab('emoji');toBottom()}});
-function sendSticker(id){var body=Object.assign({sticker_id:id},convType==='group'?{group:convId}:{to:convId});post('/api/messages/sticker',body,function(j){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;panel.hidden=true;document.body.classList.remove('panel-open')})}
-function loadStickers(){fetch('/api/stickers').then(function(r){return r.json()}).then(function(j){
-  sg.innerHTML='';var list=j.stickers||[];
-  if(!list.length){sg.appendChild(el('p','mut','No stickers yet. Add a picture to start your sticker board.'));return}
-  list.forEach(function(s){var w=el('div','st'),im=document.createElement('img');im.src='/api/stickers/'+s.id;im.alt='sticker';im.addEventListener('click',function(){sendSticker(s.id)});
-    var x=el('button','st-x','×');x.type='button';x.addEventListener('click',function(){if(confirm('Delete this sticker from your board?'))fetch('/api/stickers/'+s.id+'/delete',{method:'POST'}).then(loadStickers)});
-    w.appendChild(im);w.appendChild(x);sg.appendChild(w)})}).catch(function(){})}
+/* ---- sticker board: lives on this device (IndexedDB), no count or size cap -- only bounded by the phone's
+   own storage. Stickers added before this change are still listed (from the server) so nothing old is lost;
+   every new sticker from here on is saved locally instead. ---- */
+function stickerDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-stickers',1);rq.onupgradeneeded=function(){rq.result.createObjectStore('board',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
+function stickerAdd(mime,blob){return stickerDB().then(function(db){return new Promise(function(res,rej){var rq=db.transaction('board','readwrite').objectStore('board').add({mime:mime,blob:blob});rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})})}
+function stickerList(){return stickerDB().then(function(db){return new Promise(function(res){var rq=db.transaction('board','readonly').objectStore('board').getAll();rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){res([])}})})}
+function stickerDelete(id){return stickerDB().then(function(db){return new Promise(function(res){var tx=db.transaction('board','readwrite');tx.objectStore('board').delete(id);tx.oncomplete=function(){res()}})})}
+function sendSticker(key){
+  var isLocal=typeof key==='string'&&key.indexOf('local:')===0;
+  if(!isLocal){
+    var body=Object.assign({sticker_id:key},convType==='group'?{group:convId}:{to:convId});
+    post('/api/messages/sticker',body,function(j){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;panel.hidden=true;document.body.classList.remove('panel-open')});
+    return;
+  }
+  var localId=Number(key.slice(6));
+  stickerList().then(function(list){
+    var s=list.filter(function(x){return x.id===localId})[0];
+    if(!s)return;
+    var fd=new FormData();fd.append('sticker',s.blob,'sticker');if(convType==='group')fd.append('group',convId);else fd.append('to',convId);
+    fetch('/api/messages/local-sticker',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){
+      if(j&&j.id){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;panel.hidden=true;document.body.classList.remove('panel-open')}
+      else alert((j&&j.error)||'Could not send that sticker.');
+    }).catch(function(){alert('Could not send that sticker -- check your connection.')});
+  });
+}
+function loadStickers(){
+  Promise.all([fetch('/api/stickers').then(function(r){return r.json()}).catch(function(){return {stickers:[]}}),stickerList()]).then(function(r){
+    var serverList=(r[0]&&r[0].stickers)||[],localList=r[1]||[];
+    sg.innerHTML='';
+    if(!serverList.length&&!localList.length){sg.appendChild(el('p','mut','No stickers yet. Add a picture to start your sticker board.'));return}
+    serverList.forEach(function(s){addStickerTile('/api/stickers/'+s.id,s.id,function(){
+      if(confirm('Delete this sticker from your board?'))fetch('/api/stickers/'+s.id+'/delete',{method:'POST'}).then(loadStickers);
+    })});
+    localList.forEach(function(s){var url=URL.createObjectURL(s.blob);addStickerTile(url,'local:'+s.id,function(){
+      if(confirm('Delete this sticker from your board?'))stickerDelete(s.id).then(loadStickers);
+    })});
+  });
+}
+function addStickerTile(src,sendKey,onDelete){
+  var w=el('div','st'),im=document.createElement('img');im.src=src;im.alt='sticker';im.addEventListener('click',function(){sendSticker(sendKey)});
+  var x=el('button','st-x','×');x.type='button';x.addEventListener('click',onDelete);
+  w.appendChild(im);w.appendChild(x);sg.appendChild(w);
+}
 function upStatusShow(t){upStatus.hidden=false;upStatus.textContent=t}
 function upStatusHide(){upStatus.hidden=true}
 stFile.addEventListener('change',function(){var files=Array.prototype.slice.call(stFile.files||[]);if(!files.length)return;
   var i=0,errs=[];
   function next(){
     if(i>=files.length){stFile.value='';upStatusHide();loadStickers();if(errs.length)alert(errs.join('\\n'));return}
-    var f=files[i++];upStatusShow('Adding sticker '+i+' of '+files.length+'\u2026');
-    var fd=new FormData();fd.append('sticker',f,f.name);
-    fetch('/api/stickers',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(!j||!j.id)errs.push(f.name+': '+((j&&j.error)||'could not be added'));next()}).catch(function(){errs.push(f.name+': could not be added');next()});
+    var f=files[i++];
+    if(!/^image\\//.test(f.type)){errs.push(f.name+': not a picture');next();return}
+    upStatusShow('Adding sticker '+i+' of '+files.length+'\u2026');
+    stickerAdd(f.type,f).then(function(){next()}).catch(function(){errs.push(f.name+': could not be saved');next()});
   }
   next();
 });
 stZip.addEventListener('change',function(){var f=stZip.files&&stZip.files[0];if(!f)return;
-  upStatusShow('Unzipping and adding your stickers\u2026');
+  upStatusShow('Unzipping your stickers\u2026');
   var fd=new FormData();fd.append('zip',f,f.name);
   fetch('/api/stickers/zip',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){
-    stZip.value='';upStatusHide();loadStickers();
-    if(!j||j.error)alert((j&&j.error)||'Could not read that zip file.');
-    else if(j.added!==undefined)alert('Added '+j.added+' sticker'+(j.added===1?'':'s')+(j.skipped?' (skipped '+j.skipped+' file'+(j.skipped===1?'':'s')+' that were not pictures or were too big)':'')+'.');
+    stZip.value='';
+    if(!j||j.error){upStatusHide();alert((j&&j.error)||'Could not read that zip file.');return}
+    var imgs=j.images||[];
+    return Promise.all(imgs.map(function(im){
+      return fetch('data:'+im.mime+';base64,'+im.data).then(function(r){return r.blob()}).then(function(blob){return stickerAdd(im.mime,blob)});
+    })).then(function(){
+      upStatusHide();loadStickers();
+      alert('Added '+imgs.length+' sticker'+(imgs.length===1?'':'s')+(j.skipped?' (skipped '+j.skipped+' file'+(j.skipped===1?'':'s')+' that were not pictures)':'')+'.');
+    });
   }).catch(function(){upStatusHide();alert('Could not read that zip file.')});
 });
 var attachInput=document.getElementById('fileInput');
@@ -1718,6 +1761,17 @@ app.post('/api/messages/sticker', (req, res) => {
   notifyNewMessage(req.user, target, 'Sticker');
   res.json(result);
 });
+// A sticker that only ever lived on the sender's device: the recipient still needs the bytes themselves, so
+// this uploads it fresh (no server-side sticker board involved) but keeps it tagged as a sticker to send.
+app.post('/api/messages/local-sticker', upload.single('sticker'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const target = resolveTarget(req);
+  if (!target || !req.file || !STICKER_MIMES.includes(req.file.mimetype)) return res.status(400).json({ error: 'Invalid sticker.' });
+  if (limited('sticker:' + req.user.id, 60, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
+  const result = insertMedia(req.user.id, target, 'sticker', req.file.buffer, req.file.mimetype, null);
+  notifyNewMessage(req.user, target, 'Sticker');
+  res.json(result);
+});
 // A photo or any other file picked from the gallery or phone storage -- same encrypted storage as everything else.
 app.post('/api/messages/attachment', upload.single('file'), (req, res) => {
   if (!req.user) return res.sendStatus(401);
@@ -1886,23 +1940,23 @@ function readZipEntries(buf) {
   return out;
 }
 const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+// Stickers now live on the device (IndexedDB), not the server, so there's no per-sticker size cap and no
+// board limit any more -- this route is a stateless unzip-and-hand-back service; nothing here is stored.
 app.post('/api/stickers/zip', upload.single('zip'), (req, res) => {
   if (!req.user) return res.sendStatus(401);
   if (!req.file) return res.status(400).json({ error: 'Choose a .zip file first.' });
   let entries;
   try { entries = readZipEntries(req.file.buffer); } catch { return res.status(400).json({ error: 'That does not look like a valid .zip file.' }); }
-  const ins = db.prepare('INSERT INTO stickers(user_id,mime,data) VALUES(?,?,?)');
-  let added = 0, skipped = 0;
-  let room = MAX_STICKERS - db.prepare('SELECT COUNT(*) n FROM stickers WHERE user_id=?').get(req.user.id).n;
+  const images = [], MAX_PER_ZIP = 200; // a sanity cap on one request's unzip work, not a storage limit
+  let skipped = 0;
   for (const e of entries) {
+    if (images.length >= MAX_PER_ZIP) { skipped++; continue; }
     const ext = (/\.([a-z0-9]+)$/i.exec(e.name) || [])[1];
     const mime = ext && EXT_MIME[ext.toLowerCase()];
-    if (room <= 0) { skipped++; continue; }
-    if (!mime || e.data.length > 1024 * 1024) { skipped++; continue; }
-    ins.run(req.user.id, mime, e.data);
-    added++; room--;
+    if (!mime) { skipped++; continue; }
+    images.push({ mime, data: e.data.toString('base64') });
   }
-  res.json({ added, skipped });
+  res.json({ images, skipped });
 });
 app.post('/api/stickers/:id/delete', (req, res) => {
   if (!req.user) return res.sendStatus(401);
@@ -2392,7 +2446,7 @@ app.get('/admin', adminish, (req, res) => {
 <div class="row" style="gap:6px"><form method="post" action="/admin/news/${n.id}/approve"><button>Approve</button></form><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Reject this news item?')"><button class="link">Reject</button></form></div></div>`).join('')}` : '';
   const newsItems = cn ? db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all() : [];
   const newsSection = cn ? `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
-<form class="card" method="post" action="/admin/news" enctype="multipart/form-data"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="Short summary" required maxlength="600" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
+<form class="card" method="post" action="/admin/news" enctype="multipart/form-data"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="Short summary" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
 ${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><a href="/admin/news/${n.id}/edit">Edit</a><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
   const pagesSection = cp ? `<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
@@ -2533,7 +2587,7 @@ app.post('/admin/pages/:id/video', filesAdmin, (req, res) => {
 });
 app.post('/admin/news', newsAdmin, upload.single('image'), (req, res) => {
   const title = String(req.body.title || '').trim().slice(0, 140);
-  const body = String(req.body.body || '').trim().slice(0, 600);
+  const body = String(req.body.body || '').trim().slice(0, 2000000);
   if (!title || !body) return res.redirect(back('Enter a headline and a summary.'));
   if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect(back('That file is not an image.'));
   const info = db.prepare('INSERT INTO news(title,body,image_data,image_mime,author_id,status) VALUES(?,?,?,?,?,?)')
@@ -2563,14 +2617,14 @@ ${n.image_data ? `<img src="/news-image/${n.id}" style="max-width:220px;border-r
 <input name="title" value="${esc(n.title)}" required maxlength="140">
 <input type="file" name="image" accept="image/*" style="padding:9px 0">
 <p class="hint">Choose a picture only if you want to replace the current one.</p>
-<textarea name="body" required maxlength="600" style="width:100%;min-height:120px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(n.body)}</textarea>
+<textarea name="body" required maxlength="2000000" style="width:100%;min-height:120px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(n.body)}</textarea>
 <button>Save changes</button></form>`, req.user));
 });
 app.post('/admin/news/:id/edit', newsAdmin, upload.single('image'), (req, res) => {
   const n = db.prepare('SELECT id FROM news WHERE id=?').get(req.params.id);
   if (!n) return res.redirect(back('News item not found.'));
   const title = String(req.body.title || '').trim().slice(0, 140);
-  const body = String(req.body.body || '').trim().slice(0, 600);
+  const body = String(req.body.body || '').trim().slice(0, 2000000);
   if (!title || !body) return res.redirect(`/admin/news/${n.id}/edit`);
   if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect(back('That file is not an image.'));
   if (req.file) db.prepare('UPDATE news SET title=?, body=?, image_data=?, image_mime=? WHERE id=?').run(title, body, req.file.buffer, req.file.mimetype, n.id);
