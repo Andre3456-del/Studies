@@ -23,7 +23,11 @@ CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, user_id INTEGER NOT
 `);
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0'], ['username', 'TEXT'], ['level', 'INTEGER'], ['position', 'TEXT'], ['position_status', 'TEXT']])
+for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0'], ['username', 'TEXT'], ['level', 'INTEGER'], ['position', 'TEXT'], ['position_status', 'TEXT'],
+  // A verified position can carry real reach and capability: how far their news posts travel (their own
+  // department+level, their whole faculty, or the whole school), what admin capability it grants automatically,
+  // and -- for positions that need a specific person's sign-off rather than the general news queue -- who that is.
+  ['position_scope', 'TEXT'], ['position_auto_role', 'TEXT'], ['position_approver_id', 'INTEGER']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -49,6 +53,14 @@ if (!newsCols.includes('status')) db.exec("ALTER TABLE news ADD COLUMN status TE
 // image_data/image_mime instead (a real uploaded image file, not a pasted link).
 if (!newsCols.includes('image_data')) db.exec('ALTER TABLE news ADD COLUMN image_data BLOB');
 if (!newsCols.includes('image_mime')) db.exec('ALTER TABLE news ADD COLUMN image_mime TEXT');
+// Scope: NULL means visible to everyone (every existing post, and anything from an unscoped poster, stays
+// exactly as before). 'own' restricts to one department+level; 'faculty' restricts to every department sharing
+// that faculty. approver_id/status support a post that needs one specific person's sign-off instead of the
+// general news queue -- their approval publishes it directly.
+for (const [c, def] of [['scope_type', 'TEXT'], ['scope_department', 'TEXT'], ['scope_level', 'INTEGER'], ['scope_faculty', 'TEXT'], ['approver_id', 'INTEGER'], ['approver_status', 'TEXT']])
+  if (!newsCols.includes(c)) db.exec(`ALTER TABLE news ADD COLUMN ${c} ${def}`);
+// Paid promotional posts from businesses/services -- shown in News, separately from regular submissions.
+db.exec(`CREATE TABLE IF NOT EXISTS sponsor_posts(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, contact TEXT, image_data BLOB, image_mime TEXT, reference TEXT UNIQUE NOT NULL, amount_kobo INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending_payment', created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT)`);
 // ---- usernames, departments, friends, groups, receipts, reactions, push subscriptions ----
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(lower(username))');
 db.exec(`
@@ -129,6 +141,8 @@ const BANK_NAME = process.env.BANK_NAME || 'OPay';
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || '7043309103';
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'Esseabasi Usen Inyangmme';
 const PRICE_KOBO = Math.round(PRICE_NGN * 100);
+const SPONSOR_PRICE_NGN = Number(process.env.SPONSOR_PRICE_NGN || 2000);
+const SPONSOR_PRICE_KOBO = Math.round(SPONSOR_PRICE_NGN * 100);
 
 // Messages are encrypted at rest with AES-256-GCM, so a stolen copy of the database file is unreadable.
 // The key auto-generates once and lives in this database from then on -- MESSAGE_KEY can override it.
@@ -355,7 +369,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
+    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -368,9 +382,17 @@ app.use((req, res, next) => {
 // ---------- usernames, levels and "who can see what" ----------
 const fullAdminIds = () => db.prepare("SELECT id FROM users WHERE role='admin'").all().map(r => r.id);
 function broadcastNews(newsId, exceptId) {
-  const n = db.prepare('SELECT title FROM news WHERE id=?').get(newsId);
+  const n = db.prepare('SELECT * FROM news WHERE id=?').get(newsId);
   if (!n) return;
-  const ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ?').all(exceptId || 0).map(r => r.id);
+  let ids;
+  if (!n.scope_type) {
+    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ?').all(exceptId || 0).map(r => r.id);
+  } else if (n.scope_type === 'own') {
+    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ? AND department=? AND level=?').all(exceptId || 0, n.scope_department, n.scope_level).map(r => r.id);
+  } else {
+    const depts = db.prepare('SELECT name FROM departments WHERE faculty=?').all(n.scope_faculty).map(d => d.name);
+    ids = depts.length ? db.prepare(`SELECT id FROM users WHERE verified=1 AND id != ? AND department IN (${depts.map(() => '?').join(',')})`).all(exceptId || 0, ...depts).map(r => r.id) : [];
+  }
   notify(ids, { title: 'New on Studies Hub', body: n.title, url: '/news/' + newsId, tag: 'news' });
 }
 function announceUpload(page) {
@@ -426,6 +448,23 @@ function audienceFor(page) {
   if (list.length) { where.push(`department IN (${list.map(() => '?').join(',')})`); args.push(...list); }
   if (page.level != null) { where.push('level=?'); args.push(page.level); }
   return db.prepare(`SELECT id FROM users WHERE ${where.join(' AND ')}`).all(...args).map(r => r.id);
+}
+const facultyOf = dept => dept ? (db.prepare('SELECT faculty FROM departments WHERE name=?').get(dept) || {}).faculty : null;
+// What reach a news post from this poster should carry, snapshotted at the moment they post (so it stays
+// correct even if their own department/level changes later). A user with no verified, scoped position reaches
+// everyone, exactly as before this feature existed -- scoping only ever narrows reach for someone it applies to.
+function newsReachFor(user) {
+  if (!user || user.position_status !== 'approved' || !user.position_scope) return { scope_type: null, scope_department: null, scope_level: null, scope_faculty: null };
+  if (user.position_scope === 'own') return { scope_type: 'own', scope_department: user.department || null, scope_level: user.level || null, scope_faculty: null };
+  if (user.position_scope === 'faculty') return { scope_type: 'faculty', scope_department: null, scope_level: null, scope_faculty: facultyOf(user.department) };
+  return { scope_type: null, scope_department: null, scope_level: null, scope_faculty: null }; // 'school' -- same unrestricted reach as the default
+}
+function canSeeNewsItem(item, viewer) {
+  if (!item.scope_type) return true; // unrestricted: every post made before this feature, and every school-wide one, stays visible to all
+  if (!viewer) return false; // department/faculty-scoped posts need a known department -- only logged-in students have one
+  if (item.scope_type === 'own') return viewer.department === item.scope_department && Number(viewer.level) === Number(item.scope_level);
+  if (item.scope_type === 'faculty') return !!item.scope_faculty && facultyOf(viewer.department) === item.scope_faculty;
+  return true;
 }
 // Members finish their details (username, university, department, level) before anything else; staff only need a username.
 const profileComplete = u => !!u.username && !!u.name && (u.role !== 'user' || (!!u.department && !!u.level && !!u.university));
@@ -659,8 +698,8 @@ const presenceDot = u => `<span title="${isOnline(u) ? 'Online' : 'Offline'}" st
 
 // Roles: user | partial (HTML pages only) | content (all file types) | news | support (login help) | admin (everything).
 // Only the central admin (the ADMIN_EMAIL account) can hand these out.
-const ROLES = ['user', 'partial', 'content', 'news', 'support', 'admin'];
-const ROLE_LABEL = { user: 'User', partial: 'Partial admin (HTML pages)', content: 'Files admin', news: 'News admin', support: 'Login-help admin', admin: 'Full admin' };
+const ROLES = ['user', 'partial', 'content', 'news', 'support', 'observer', 'admin'];
+const ROLE_LABEL = { user: 'User', partial: 'Partial admin (HTML pages)', content: 'Files admin', news: 'News admin', support: 'Login-help admin', observer: 'Observer (read-only)', admin: 'Full admin' };
 const can = {
   full: u => !!u && u.role === 'admin',
   pages: u => !!u && ['admin', 'partial', 'content'].includes(u.role),
@@ -773,6 +812,7 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:6px 0 12px;z-index:5}
 .news-body p.news-snip{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:0 0 8px}
 .role-tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;border:1px solid rgba(240,0,232,.45);color:#ff9cf7;margin-left:6px;vertical-align:middle;line-height:1.5}
+.verified-badge{color:#5bc8ff;font-weight:700;margin-left:2px}
 .pv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
 .pv{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;color:var(--fg);transition:.2s}
 .pv:hover{transform:translateY(-3px);border-color:var(--blue);text-decoration:none}
@@ -1023,16 +1063,29 @@ const timeAgo = iso => {
 };
 // home = true: just the news cards, nothing else -- no heading, no share form -- so the front page is only news.
 // home = false (the /news section): heading, the "Share something" form for logged-in members, then the cards.
+const ADSENSE_CLIENT = 'ca-pub-4280454885902185';
 function newsFeedBody(req, home = false) {
-  const items = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
+  const all = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
+  const items = all.filter(n => canSeeNewsItem(n, req.user));
   const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
   const cards = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`).join('');
   const empty = '<p class="mut">No news yet. Check back soon.</p>';
   if (home) return cards || empty;
+  // News section only (not the home page): the sponsor-ad script, any active paid promotional posts, and the
+  // link to buy one.
+  const adScript = `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}" crossorigin="anonymous"></script>`;
+  const sponsors = db.prepare("SELECT * FROM sponsor_posts WHERE status='approved' AND expires_at > datetime('now') ORDER BY id DESC LIMIT 3").all();
+  const sponsorCards = sponsors.map(s => `<div class="card" style="border-color:#ffd166"><p class="pill" style="background:#ffd16622;border-color:#ffd16655;color:#ffd166">Sponsored</p>${s.image_data ? `<img class="news-img" src="/sponsor-image/${s.id}" alt="" style="margin-bottom:8px">` : ''}<h3 style="margin:4px 0">${esc(s.title)}</h3><p class="mut">${esc(s.body)}</p>${s.contact ? `<p class="mut" style="margin:4px 0 0">${esc(s.contact)}</p>` : ''}</div>`).join('');
   const submitForm = req.user
     ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
     : '<p class="mut"><a href="/login?next=/news">Log in</a> to share something.</p>';
-  return `<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${submitForm}${cards || empty}`;
+  const approverQueue = req.user ? (() => {
+    const waiting = db.prepare("SELECT n.*, u.name AS author FROM news n JOIN users u ON u.id=n.author_id WHERE n.status='pending_approver' AND n.approver_id=?").all(req.user.id);
+    if (!waiting.length) return '';
+    return `<h3>Waiting for your approval (${waiting.length})</h3>${waiting.map(n => `<div class="card"><b>${esc(n.author)}</b> wrote: <b>${esc(n.title)}</b><p class="mut">${esc(n.body.slice(0, 200))}${n.body.length > 200 ? '…' : ''}</p><div class="row" style="gap:6px"><form method="post" action="/news/${n.id}/approver-approve"><button>Approve</button></form><form method="post" action="/news/${n.id}/approver-reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
+  })() : '';
+  const sponsorLink = req.user ? `<p class="mut" style="margin:0 0 16px"><a href="/sponsor">Advertise your business or service here -- ₦2000/month &rarr;</a></p>` : '';
+  return `${adScript}<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${approverQueue}${submitForm}${sponsorLink}${sponsorCards}${cards || empty}`;
 }
 app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));
 app.get('/news-image/:id', (req, res) => {
@@ -1047,13 +1100,14 @@ app.get('/news-image/:id', (req, res) => {
 // The bigger, tap-through view of one news item: full picture, and the text exactly as it was
 // typed or pasted -- real line breaks kept (via the .news-full CSS rule), nothing squashed together.
 app.get('/news/:id', (req, res) => {
-  const n = db.prepare("SELECT n.*, u.id AS author_uid, u.name AS author, u.title AS author_title, u.avatar_mime FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.id=? AND n.status='approved'").get(req.params.id);
-  if (!n) return res.status(404).send(layout('Not found', '<h2>News item not found</h2><p><a href="/news">Back to News</a></p>', req.user));
+  const n = db.prepare("SELECT n.*, u.id AS author_uid, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role, u.avatar_mime FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.id=? AND n.status='approved'").get(req.params.id);
+  if (!n || !canSeeNewsItem(n, req.user)) return res.status(404).send(layout('Not found', '<h2>News item not found</h2><p><a href="/news">Back to News</a></p>', req.user));
   const img = n.image_data ? `<img src="/news-image/${n.id}" style="width:100%;border-radius:14px;margin-bottom:16px">` : n.image_url ? `<img src="${esc(n.image_url)}" style="width:100%;border-radius:14px;margin-bottom:16px">` : '';
   const who = n.author_uid ? avatarOr({ id: n.author_uid, name: n.author, avatar_mime: n.avatar_mime }, 40) : '';
   const nameHtml = n.author_uid && req.user ? `<a href="/u/${n.author_uid}"><b>${esc(n.author)}</b></a>` : `<b>${esc(n.author || 'Studies Hub')}</b>`;
-  const posted = `<div class="row" style="justify-content:flex-start;gap:10px;margin-top:16px">${who}<div>${nameHtml}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}<br><span class="mut" style="font-size:12px">${timeAgo(n.created_at)} ago</span></div></div>`;
-  res.send(layout(n.title, `<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${linkify(n.body)}</p>${posted}</div>`, req.user));
+  const posted = `<div class="row" style="justify-content:flex-start;gap:10px;margin-top:16px">${who}<div>${nameHtml}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}${verifiedBadge(n.author_auto_role)}<br><span class="mut" style="font-size:12px">${timeAgo(n.created_at)} ago</span></div></div>`;
+  const adScript = `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}" crossorigin="anonymous"></script>`;
+  res.send(layout(n.title, `${adScript}<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${linkify(n.body)}</p>${posted}</div>`, req.user));
 });
 app.post('/news', upload.single('image'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/news');
@@ -1061,9 +1115,13 @@ app.post('/news', upload.single('image'), (req, res) => {
   const body = String(req.body.body || '').trim().slice(0, 2000000);
   if (!title || !body) return res.redirect('/news?msg=' + encodeURIComponent('Enter a headline and a summary.'));
   if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect('/news?msg=' + encodeURIComponent('That file is not an image.'));
-  db.prepare("INSERT INTO news(title,body,image_data,image_mime,author_id,status) VALUES(?,?,?,?,?,'pending')")
-    .run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id);
-  notify(db.prepare("SELECT id FROM users WHERE role IN ('admin','news')").all().map(r => r.id), { title: 'News to review', body: `${req.user.name}: ${title}`, url: '/admin#pending-news', tag: 'news-review' });
+  const reach = newsReachFor(req.user);
+  const hasApprover = req.user.position_status === 'approved' && req.user.position_approver_id;
+  const status = hasApprover ? 'pending_approver' : 'pending';
+  db.prepare("INSERT INTO news(title,body,image_data,image_mime,author_id,status,scope_type,scope_department,scope_level,scope_faculty,approver_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+    .run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id, status, reach.scope_type, reach.scope_department, reach.scope_level, reach.scope_faculty, hasApprover ? req.user.position_approver_id : null);
+  if (hasApprover) notify([req.user.position_approver_id], { title: 'News to review', body: `${req.user.name}: ${title}`, url: '/news', tag: 'news-review' });
+  else notify(db.prepare("SELECT id FROM users WHERE role IN ('admin','news')").all().map(r => r.id), { title: 'News to review', body: `${req.user.name}: ${title}`, url: '/admin#pending-news', tag: 'news-review' });
   res.redirect('/news?msg=' + encodeURIComponent("Thanks -- we'll review it shortly."));
 });
 
@@ -1099,7 +1157,7 @@ app.get('/open', (req, res) => {
 // A member's profile: what they've chosen to share (university, department, level, their verified position) plus their approved news.
 app.get('/u/:id', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
-  const u = db.prepare('SELECT id,name,title,avatar_mime,username,department,university,level,last_seen FROM users WHERE id=?').get(Number(req.params.id));
+  const u = db.prepare('SELECT id,name,title,position_auto_role,avatar_mime,username,department,university,level,last_seen FROM users WHERE id=?').get(Number(req.params.id));
   if (!u) return res.status(404).send(layout('Not found', '<h2>Member not found</h2>', req.user));
   const facts = [['University', u.university], ['Department', u.department], ['Level', u.level ? u.level + ' level' : null]].filter(r => r[1])
     .map(r => `<tr><td class="mut">${r[0]}</td><td>${esc(String(r[1]))}</td></tr>`).join('');
@@ -1109,7 +1167,7 @@ app.get('/u/:id', (req, res) => {
     : areFriends ? `<a class="btn" href="/chat/${u.id}">Message ${esc(u.name.split(' ')[0])}</a>`
     : friendActionHtml(req.user.id, u.id);
   res.send(layout(u.name, `<p class="mut" style="margin:0 0 12px"><a href="javascript:history.back()">&larr; Back</a></p>
-<div class="card"><div class="prof">${avatarOr(u, 88)}<div><h1 style="margin:0;font-size:26px">${esc(u.name)}</h1><p class="mut" style="margin:2px 0 0">${u.username ? `@${esc(u.username)}` : ''}</p>${u.title ? `<span class="role-tag" style="margin:4px 0 0">${esc(u.title)}</span>` : ''}<div class="mut" style="margin-top:6px">${presenceDot(u)}${isOnline(u) ? 'Online now' : 'Offline'}</div></div></div>
+<div class="card"><div class="prof">${avatarOr(u, 88)}<div><h1 style="margin:0;font-size:26px">${esc(u.name)}</h1><p class="mut" style="margin:2px 0 0">${u.username ? `@${esc(u.username)}` : ''}</p>${u.title ? `<span class="role-tag" style="margin:4px 0 0">${esc(u.title)}</span>${verifiedBadge(u.position_auto_role)}` : ''}<div class="mut" style="margin-top:6px">${presenceDot(u)}${isOnline(u) ? 'Online now' : 'Offline'}</div></div></div>
 ${facts ? `<table style="margin-top:14px">${facts}</table>` : '<p class="mut" style="margin:14px 0 0">No department, university or level added yet.</p>'}
 <p style="margin:14px 0 0">${action}</p></div>
 ${posts.length ? `<h3>News from ${esc(u.name.split(' ')[0])}</h3>${posts.map(p => `<div class="card row"><a href="/news/${p.id}">${esc(p.title)}</a><span class="mut">${timeAgo(p.created_at)}</span></div>`).join('')}` : ''}`, req.user));
@@ -1118,7 +1176,9 @@ ${posts.length ? `<h3>News from ${esc(u.name.split(' ')[0])}</h3>${posts.map(p =
 // ---------- chat: encrypted messages between any two users ----------
 const avatarOr = (u, size = 44) => u.avatar_mime ? `<img src="/avatar/${u.id}" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
 const groupAvatarOr = (g, size = 44) => g.avatar_mime ? `<img src="/group-avatar/${g.id}" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.44)}px">👥</span>`;
-const byline = n => `${esc(n.author || 'Studies Hub')}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}`;
+// A verified position that carries real admin capability gets a small badge next to the name, wherever it shows.
+const verifiedBadge = autoRole => autoRole ? ' <span class="verified-badge" title="Verified admin">&#10003;</span>' : '';
+const byline = n => `${esc(n.author || 'Studies Hub')}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}${verifiedBadge(n.author_auto_role)}`;
 
 // ---------- friends ----------
 // 'none' | 'sent' (I asked them) | 'received' (they asked me) | 'friends'
@@ -2186,6 +2246,69 @@ app.post('/admin/payments/:id/reject', admin, (req, res) => {
   res.redirect(back('Payment claim removed.'));
 });
 
+// Paid promotional posts: any logged-in member can pay to advertise a business or service in News for a month.
+app.get('/sponsor', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/sponsor');
+  res.send(layout('Advertise on Studies Hub', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>Advertise your business or service</h1>
+<p class="mut">₦${SPONSOR_PRICE_NGN} gets your post shown in the News section for 30 days, clearly marked "Sponsored".</p>
+<form class="card" method="post" action="/sponsor" enctype="multipart/form-data">
+<input name="title" placeholder="What are you advertising?" required maxlength="140">
+<textarea name="body" placeholder="Describe it" required maxlength="2000" style="width:100%;min-height:80px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea>
+<input name="contact" placeholder="How should people reach you? (phone, @username, etc.)" maxlength="140">
+<input type="file" name="image" accept="image/*" style="padding:9px 0">
+<button>Continue to payment</button>
+</form>`, req.user));
+});
+app.post('/sponsor', upload.single('image'), (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/sponsor');
+  const title = String(req.body.title || '').trim().slice(0, 140);
+  const body = String(req.body.body || '').trim().slice(0, 2000);
+  const contact = String(req.body.contact || '').trim().slice(0, 140);
+  if (!title || !body) return res.redirect('/sponsor');
+  if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect('/sponsor');
+  const reference = `sponsor_${req.user.id}_${Date.now()}`;
+  const info = db.prepare("INSERT INTO sponsor_posts(user_id,title,body,contact,image_data,image_mime,reference,amount_kobo,status) VALUES(?,?,?,?,?,?,?,?,'pending_payment')")
+    .run(req.user.id, title, body, contact, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, reference, SPONSOR_PRICE_KOBO);
+  notify(fullAdminIds(), { title: 'Sponsor post payment claim', body: `${req.user.name} wants to advertise "${title}"`, url: '/admin#sponsors', tag: 'sponsor' });
+  res.redirect('/sponsor/' + info.lastInsertRowid);
+});
+app.get('/sponsor/:id', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const s = db.prepare('SELECT * FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
+  const statusLine = s.status === 'approved' ? `<p class="pill">&#10003; Live until ${esc((s.expires_at || '').slice(0, 10))}</p>` : s.status === 'rejected' ? '<p class="err">This submission was not approved.</p>' : '<p class="pill pending">Waiting for payment to be confirmed</p>';
+  res.send(layout('Your sponsor post', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>${esc(s.title)}</h1>${statusLine}
+${s.status === 'pending_payment' ? `<div class="card"><p>Pay <b>₦${SPONSOR_PRICE_NGN}</b> by bank transfer to:</p><p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p><p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p><form method="post" action="/sponsor/${s.id}/claim"><button>I've paid</button></form></div>` : ''}`, req.user));
+});
+app.post('/sponsor/:id/claim', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const s = db.prepare("SELECT id FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(req.params.id, req.user.id);
+  if (s) notify(fullAdminIds(), { title: 'Sponsor post payment claim', body: `${req.user.name} says they paid for their sponsor post`, url: '/admin#sponsors', tag: 'sponsor' });
+  res.redirect('/sponsor/' + req.params.id);
+});
+app.get('/sponsor-image/:id', (req, res) => {
+  const row = db.prepare('SELECT image_data, image_mime FROM sponsor_posts WHERE id=?').get(req.params.id);
+  if (!row || !row.image_data) return res.sendStatus(404);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.setHeader('Content-Type', row.image_mime || 'application/octet-stream');
+  res.send(Buffer.from(row.image_data));
+});
+app.post('/admin/sponsors/:id/approve', admin, (req, res) => {
+  const s = db.prepare('SELECT user_id, title FROM sponsor_posts WHERE id=?').get(req.params.id);
+  if (!s) return res.redirect(back('Not found.'));
+  db.prepare("UPDATE sponsor_posts SET status='approved', expires_at=datetime('now','+30 days') WHERE id=?").run(req.params.id);
+  notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for 30 days.`, url: '/sponsor/' + req.params.id, tag: 'sponsor' });
+  res.redirect(back('Sponsor post approved -- live for 30 days.'));
+});
+app.post('/admin/sponsors/:id/reject', admin, (req, res) => {
+  const s = db.prepare('SELECT user_id, title FROM sponsor_posts WHERE id=?').get(req.params.id);
+  db.prepare("UPDATE sponsor_posts SET status='rejected' WHERE id=?").run(req.params.id);
+  if (s) notify([s.user_id], { title: 'Sponsor post not approved', body: `"${s.title}" could not be approved.`, url: '/sponsor/' + req.params.id, tag: 'sponsor' });
+  res.redirect(back('Sponsor post rejected.'));
+});
+
 app.get('/signup', (req, res) => res.send(authForm('signup')));
 app.post('/signup', async (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
@@ -2409,6 +2532,12 @@ app.get('/admin', adminish, (req, res) => {
     return `<h3 id="payments">Payment claims waiting for you (${claims.length})</h3>${claims.map(c => `<div class="card row"><div><b>${esc(c.un)}</b> <span class="mut">${esc(c.ue)}</span><br><span class="mut">₦${((c.price_kobo || PRICE_KOBO) / 100).toFixed(0)} for "${esc(c.pt)}"</span></div>
 <div class="row" style="gap:6px"><form method="post" action="/admin/payments/${c.id}/approve"><button>Approve</button></form><form method="post" action="/admin/payments/${c.id}/reject" onsubmit="return confirm('Reject this payment claim?')"><button class="link">Reject</button></form></div></div>`).join('')}`;
   })() : '';
+  const sponsorsSection = cf ? (() => {
+    const claims = db.prepare("SELECT s.*, u.name un FROM sponsor_posts s JOIN users u ON u.id=s.user_id WHERE s.status='pending_payment' ORDER BY s.id DESC").all();
+    if (!claims.length) return '';
+    return `<h3 id="sponsors">Sponsor post payment claims (${claims.length})</h3>${claims.map(c => `<div class="card"><b>${esc(c.un)}</b> wants to advertise: <b>${esc(c.title)}</b><p class="mut">${esc(c.body.slice(0, 150))}${c.body.length > 150 ? '…' : ''}</p><p class="mut">₦${(c.amount_kobo / 100).toFixed(0)}</p>
+<div class="row" style="gap:6px"><form method="post" action="/admin/sponsors/${c.id}/approve"><button>Approve -- 30 days live</button></form><form method="post" action="/admin/sponsors/${c.id}/reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
+  })() : '';
   const levelSection = central_ ? (() => {
     const counts = LEVELS.map(l => ({ l, n: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND level=?").get(l).n }));
     return `<h3 id="levels">End of session: move everyone up a level</h3>
@@ -2420,11 +2549,35 @@ app.get('/admin', adminish, (req, res) => {
     const pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' ORDER BY id").all();
     const depts = db.prepare('SELECT id,name,faculty FROM departments ORDER BY faculty,name').all();
     const facs = [...new Set(depts.map(d => d.faculty))];
-    return `<h3 id="positions">Positions waiting for verification (${pend.length})</h3>${pend.map(p => `<div class="card row"><div><b>${esc(p.name)}</b> <span class="mut">${p.username ? '@' + esc(p.username) : ''} ${esc(p.department || '')} ${p.level ? p.level + ' level' : ''}</span><br>Says they are: <b>${esc(p.position)}</b></div>
-<div class="row" style="gap:6px"><form method="post" action="/admin/positions/${p.id}/approve"><button>Verify</button></form><form method="post" action="/admin/positions/${p.id}/reject"><button class="link">Reject</button></form></div></div>`).join('') || '<p class="mut">No positions waiting.</p>'}
+    const approvers = db.prepare("SELECT id,name,title FROM users WHERE position_status='approved' AND position_auto_role='news' ORDER BY name").all();
+    const approverOpts = `<option value="">No extra approval needed</option>${approvers.map(a => `<option value="${a.id}">${esc(a.name)}${a.title ? ' -- ' + esc(a.title) : ''}</option>`).join('')}`;
+    return `<h3 id="positions">Positions waiting for verification (${pend.length})</h3>${pend.map(p => `<div class="card"><b>${esc(p.name)}</b> <span class="mut">${p.username ? '@' + esc(p.username) : ''} ${esc(p.department || '')} ${p.level ? p.level + ' level' : ''}</span><br>Says they are: <b>${esc(p.position)}</b>
+<form method="post" action="/admin/positions/${p.id}/approve" style="margin-top:10px">
+<label class="mut">How far their posts reach</label>
+<select name="scope"><option value="own">Their own department + level</option><option value="faculty">Their whole faculty, every level</option><option value="school">The whole school</option></select>
+<label class="mut">Grant automatically, once verified</label>
+<select name="auto_role"><option value="">Nothing extra -- just show the title</option><option value="news">News admin -- can post news directly</option><option value="content">Files admin -- can upload course content</option><option value="observer">Observer -- read-only view of Admin, no posting power</option></select>
+<label class="mut">Their news must be approved by</label>
+<select name="approver_id">${approverOpts}</select>
+<div class="row" style="gap:6px;margin-top:8px"><button>Verify</button></div>
+</form>
+<form method="post" action="/admin/positions/${p.id}/reject" style="margin-top:4px"><button class="link">Reject instead</button></form>
+</div>`).join('') || '<p class="mut">No positions waiting.</p>'}
 <h3 id="departments">Departments (${depts.length})</h3><p class="mut" style="margin-top:0">This list feeds sign-up and the upload form. Add anything that is missing.</p>
 <form class="card" method="post" action="/admin/departments/add"><input name="name" placeholder="Department or programme name" required maxlength="120"><input name="faculty" list="facList" placeholder="Faculty (e.g. Science)" maxlength="80"><datalist id="facList">${facs.map(f => `<option value="${esc(f)}">`).join('')}</datalist><button>Add department</button></form>
 <details class="card"><summary style="cursor:pointer">Show all departments</summary>${facs.map(f => `<p class="chat-label">${esc(f)}</p>${depts.filter(d => d.faculty === f).map(d => `<form method="post" action="/admin/departments/${d.id}/delete" class="row" onsubmit="return confirm('Remove this department from the list?')"><span>${esc(d.name)}</span><button class="link">Remove</button></form>`).join('')}`).join('')}</details>`;
+  })() : '';
+  const observerSection = me.role === 'observer' ? (() => {
+    const counts = {
+      users: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user'").get().n,
+      pendingPositions: db.prepare("SELECT COUNT(*) n FROM users WHERE position_status='pending'").get().n,
+      pendingNews: db.prepare("SELECT COUNT(*) n FROM news WHERE status IN ('pending','pending_approver')").get().n,
+      pages: db.prepare('SELECT COUNT(*) n FROM pages').get().n,
+    };
+    const verified = db.prepare("SELECT name, username, title, department, level FROM users WHERE position_status='approved' ORDER BY name").all();
+    return `<p class="mut">Read-only view -- you can see what's happening across the site, but nothing here can be changed from this account.</p>
+<h3>At a glance</h3><p class="mut" style="margin-top:0">${counts.users} students &middot; ${counts.pages} pages uploaded &middot; ${counts.pendingNews} news item${counts.pendingNews === 1 ? '' : 's'} awaiting approval &middot; ${counts.pendingPositions} position${counts.pendingPositions === 1 ? '' : 's'} awaiting verification</p>
+<h3>Verified positions (${verified.length})</h3>${verified.map(v => `<p class="mut">${esc(v.name)}${v.username ? ' @' + esc(v.username) : ''} -- <b>${esc(v.title || '')}</b> (${esc(v.department || '')}${v.level ? ', ' + v.level + ' level' : ''})</p>`).join('') || '<p class="mut">None yet.</p>'}`;
   })() : '';
   const usersSection = cs ? (() => {
     const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen,title,username,position_status FROM users ORDER BY id DESC').all();
@@ -2480,7 +2633,7 @@ ${replaceCtrl}
   }).join('')
     || '<p class="mut">No pages yet.</p>'}` : '';
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-${pagesSection}${newsSection}${paymentsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
+${observerSection}${pagesSection}${newsSection}${paymentsSection}${sponsorsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
 });
 
 // Reads the "who is this for?" choices: a department (or all) and a level (or all, or detected from the course code).
@@ -2538,9 +2691,13 @@ app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
 });
 // Positions and departments (full admin).
 app.post('/admin/positions/:id/approve', admin, (req, res) => {
-  const t = db.prepare("SELECT id,position FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
+  const t = db.prepare("SELECT id,position,role FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
   if (!t) return res.redirect(back('Nothing to verify.'));
-  db.prepare("UPDATE users SET title=position, position_status='approved' WHERE id=?").run(t.id);
+  const scope = ['own', 'faculty', 'school'].includes(req.body.scope) ? req.body.scope : 'own';
+  const autoRole = ['news', 'content', 'observer'].includes(req.body.auto_role) ? req.body.auto_role : null;
+  const approverId = req.body.approver_id ? Number(req.body.approver_id) : null;
+  db.prepare("UPDATE users SET title=position, position_status='approved', position_scope=?, position_auto_role=?, position_approver_id=? WHERE id=?").run(scope, autoRole, approverId, t.id);
+  if (autoRole && t.role === 'user') db.prepare('UPDATE users SET role=? WHERE id=?').run(autoRole, t.id);
   notify([t.id], { title: 'Position verified', body: `${t.position} now shows beside your name.`, url: '/settings', tag: 'position' });
   res.redirect(back('Position verified.'));
 });
@@ -2603,6 +2760,22 @@ app.post('/admin/news/:id/approve', newsAdmin, (req, res) => {
     broadcastNews(Number(req.params.id), wasPending.author_id);
   }
   res.redirect(back('News approved.'));
+});
+app.post('/news/:id/approver-approve', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const n = db.prepare("SELECT author_id FROM news WHERE id=? AND status='pending_approver' AND approver_id=?").get(req.params.id, req.user.id);
+  if (!n) return res.redirect(back('That item is not waiting on you.'));
+  db.prepare("UPDATE news SET status='approved' WHERE id=?").run(req.params.id);
+  if (n.author_id && n.author_id !== req.user.id) notify([n.author_id], { title: 'Your news is live', body: `${req.user.name} approved what you shared.`, url: '/news/' + req.params.id, tag: 'news-approved' });
+  broadcastNews(Number(req.params.id), n.author_id);
+  res.redirect(back('Approved -- it is live.'));
+});
+app.post('/news/:id/approver-reject', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const n = db.prepare("SELECT id FROM news WHERE id=? AND status='pending_approver' AND approver_id=?").get(req.params.id, req.user.id);
+  if (!n) return res.redirect(back('That item is not waiting on you.'));
+  db.prepare("UPDATE news SET status='rejected' WHERE id=?").run(req.params.id);
+  res.redirect(back('Rejected.'));
 });
 app.post('/admin/news/:id/delete', newsAdmin, (req, res) => {
   db.prepare('DELETE FROM news WHERE id=?').run(req.params.id);
