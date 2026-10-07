@@ -27,7 +27,7 @@ for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_has
   // A verified position can carry real reach and capability: how far their news posts travel (their own
   // department+level, their whole faculty, or the whole school), what admin capability it grants automatically,
   // and -- for positions that need a specific person's sign-off rather than the general news queue -- who that is.
-  ['position_scope', 'TEXT'], ['position_auto_role', 'TEXT'], ['position_approver_id', 'INTEGER']])
+  ['position_scope', 'TEXT'], ['position_auto_role', 'TEXT'], ['position_approver_id', 'INTEGER'], ['position_can_verify', 'INTEGER NOT NULL DEFAULT 0']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -369,7 +369,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
+    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -389,6 +389,8 @@ function broadcastNews(newsId, exceptId) {
     ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ?').all(exceptId || 0).map(r => r.id);
   } else if (n.scope_type === 'own') {
     ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ? AND department=? AND level=?').all(exceptId || 0, n.scope_department, n.scope_level).map(r => r.id);
+  } else if (n.scope_type === 'department') {
+    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ? AND department=?').all(exceptId || 0, n.scope_department).map(r => r.id);
   } else {
     const depts = db.prepare('SELECT name FROM departments WHERE faculty=?').all(n.scope_faculty).map(d => d.name);
     ids = depts.length ? db.prepare(`SELECT id FROM users WHERE verified=1 AND id != ? AND department IN (${depts.map(() => '?').join(',')})`).all(exceptId || 0, ...depts).map(r => r.id) : [];
@@ -450,12 +452,17 @@ function audienceFor(page) {
   return db.prepare(`SELECT id FROM users WHERE ${where.join(' AND ')}`).all(...args).map(r => r.id);
 }
 const facultyOf = dept => dept ? (db.prepare('SELECT faculty FROM departments WHERE name=?').get(dept) || {}).faculty : null;
+// Four tiers, lowest to highest reach: a class rep covers their own department+level, a departmental president
+// their whole department (every level), a faculty president their whole faculty (every department in it), and
+// 'school' is unrestricted -- same as having no scoped position at all.
+const SCOPE_RANK = { own: 1, department: 2, faculty: 3, school: 4 };
 // What reach a news post from this poster should carry, snapshotted at the moment they post (so it stays
 // correct even if their own department/level changes later). A user with no verified, scoped position reaches
 // everyone, exactly as before this feature existed -- scoping only ever narrows reach for someone it applies to.
 function newsReachFor(user) {
   if (!user || user.position_status !== 'approved' || !user.position_scope) return { scope_type: null, scope_department: null, scope_level: null, scope_faculty: null };
   if (user.position_scope === 'own') return { scope_type: 'own', scope_department: user.department || null, scope_level: user.level || null, scope_faculty: null };
+  if (user.position_scope === 'department') return { scope_type: 'department', scope_department: user.department || null, scope_level: null, scope_faculty: null };
   if (user.position_scope === 'faculty') return { scope_type: 'faculty', scope_department: null, scope_level: null, scope_faculty: facultyOf(user.department) };
   return { scope_type: null, scope_department: null, scope_level: null, scope_faculty: null }; // 'school' -- same unrestricted reach as the default
 }
@@ -463,6 +470,7 @@ function canSeeNewsItem(item, viewer) {
   if (!item.scope_type) return true; // unrestricted: every post made before this feature, and every school-wide one, stays visible to all
   if (!viewer) return false; // department/faculty-scoped posts need a known department -- only logged-in students have one
   if (item.scope_type === 'own') return viewer.department === item.scope_department && Number(viewer.level) === Number(item.scope_level);
+  if (item.scope_type === 'department') return viewer.department === item.scope_department;
   if (item.scope_type === 'faculty') return !!item.scope_faculty && facultyOf(viewer.department) === item.scope_faculty;
   return true;
 }
@@ -706,7 +714,7 @@ const can = {
   allKinds: u => !!u && ['admin', 'content'].includes(u.role),
   news: u => !!u && ['admin', 'news'].includes(u.role),
   support: u => !!u && ['admin', 'support'].includes(u.role),
-  anyAdmin: u => !!u && ROLES.includes(u.role) && u.role !== 'user',
+  anyAdmin: u => !!u && ((ROLES.includes(u.role) && u.role !== 'user') || !!u.position_can_verify),
 };
 const guard = ok => (req, res, next) =>
   ok(req.user) ? next() : req.method === 'GET' ? res.redirect('/login?next=/admin') : res.sendStatus(403);
@@ -2084,27 +2092,37 @@ function saveProfile(user, d) {
     else if (can.full(user)) db.prepare("UPDATE users SET position=?, position_status='approved', title=? WHERE id=?").run(d.position, d.position, user.id);
     else {
       db.prepare("UPDATE users SET position=?, position_status='pending', title=NULL WHERE id=?").run(d.position, user.id);
-      notify(fullAdminIds(), { title: 'Position to verify', body: `${d.name} says: ${d.position}`, url: '/admin#positions', tag: 'position' });
+      const claimant = { department: d.department, level: d.level };
+      const delegate = db.prepare("SELECT * FROM users WHERE position_status='approved' AND position_can_verify=1").all()
+        .filter(v => canVerifyClaim(v, claimant))
+        .sort((a, b) => (SCOPE_RANK[a.position_scope] || 1) - (SCOPE_RANK[b.position_scope] || 1))[0];
+      if (delegate) notify([delegate.id], { title: 'Position to verify', body: `${d.name} says: ${d.position}`, url: '/settings', tag: 'position' });
+      else notify(fullAdminIds(), { title: 'Position to verify', body: `${d.name} says: ${d.position}`, url: '/admin#positions', tag: 'position' });
     }
   }
   return '';
 }
 const welcomePage = (user, err, v) => layout('Welcome', `<div class="auth" style="max-width:520px"><h1>Welcome to Studies Hub</h1>
 <p class="mut">Tell us a little about yourself so we can show you the courses that are meant for you.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
-<form method="post" action="/welcome" class="card" id="welcomeForm">${profileFields(v, user.role === 'user')}<button>Save and continue</button></form></div>
+<form method="post" action="/welcome" class="card" id="welcomeForm" enctype="multipart/form-data">${profileFields(v, user.role === 'user')}
+<label class="mut">Profile picture</label><input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" ${user.avatar_mime ? '' : 'required'}><button>Save and continue</button></form></div>
 <script>${UNAME_JS}(function(){var f=document.getElementById('welcomeForm'),go=false;f.addEventListener('submit',function(e){if(go||!window.enablePush||!window.Notification||Notification.permission!=='default')return;e.preventDefault();go=true;var done=function(){f.submit()};window.enablePush().then(done,done)})})();</script>`, user, { noPushBar: true });
 app.get('/welcome', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/welcome');
   if (profileComplete(req.user)) return res.redirect('/dashboard');
   res.send(welcomePage(req.user, '', req.user));
 });
-app.post('/welcome', (req, res) => {
+app.post('/welcome', upload.single('avatar'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/welcome');
   const { d, problem } = readProfile(req.user, req.body);
   const fail = m => res.status(400).send(welcomePage(req.user, m, { ...d, username: d.username }));
   if (problem) return fail(problem);
+  const hasExistingAvatar = !!db.prepare('SELECT avatar_mime FROM users WHERE id=?').get(req.user.id).avatar_mime;
+  if (!hasExistingAvatar && !req.file) return fail('Please add a profile picture to finish signing up.');
+  if (req.file && !/^image\//.test(req.file.mimetype)) return fail('Choose an image file for your profile picture.');
   const err = saveProfile(req.user, d);
   if (err) return fail(err);
+  if (req.file) db.prepare('UPDATE users SET avatar_data=?, avatar_mime=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.user.id);
   res.redirect('/dashboard?welcome=1');
 });
 app.get('/api/username/check', (req, res) => {
@@ -2554,11 +2572,12 @@ app.get('/admin', adminish, (req, res) => {
     return `<h3 id="positions">Positions waiting for verification (${pend.length})</h3>${pend.map(p => `<div class="card"><b>${esc(p.name)}</b> <span class="mut">${p.username ? '@' + esc(p.username) : ''} ${esc(p.department || '')} ${p.level ? p.level + ' level' : ''}</span><br>Says they are: <b>${esc(p.position)}</b>
 <form method="post" action="/admin/positions/${p.id}/approve" style="margin-top:10px">
 <label class="mut">How far their posts reach</label>
-<select name="scope"><option value="own">Their own department + level</option><option value="faculty">Their whole faculty, every level</option><option value="school">The whole school</option></select>
+<select name="scope"><option value="own">Their own department + level (e.g. a class rep)</option><option value="department">Their whole department, every level (e.g. a departmental president)</option><option value="faculty">Their whole faculty, every department (e.g. a faculty president)</option><option value="school">The whole school</option></select>
 <label class="mut">Grant automatically, once verified</label>
 <select name="auto_role"><option value="">Nothing extra -- just show the title</option><option value="news">News admin -- can post news directly</option><option value="content">Files admin -- can upload course content</option><option value="observer">Observer -- read-only view of Admin, no posting power</option></select>
 <label class="mut">Their news must be approved by</label>
 <select name="approver_id">${approverOpts}</select>
+<label class="row" style="gap:8px;margin-top:8px;cursor:pointer"><input type="checkbox" name="can_verify" value="1" style="width:auto">Let them verify other position claims within their own scope (e.g. a president verifying their reps)</label>
 <div class="row" style="gap:6px;margin-top:8px"><button>Verify</button></div>
 </form>
 <form method="post" action="/admin/positions/${p.id}/reject" style="margin-top:4px"><button class="link">Reject instead</button></form>
@@ -2566,6 +2585,28 @@ app.get('/admin', adminish, (req, res) => {
 <h3 id="departments">Departments (${depts.length})</h3><p class="mut" style="margin-top:0">This list feeds sign-up and the upload form. Add anything that is missing.</p>
 <form class="card" method="post" action="/admin/departments/add"><input name="name" placeholder="Department or programme name" required maxlength="120"><input name="faculty" list="facList" placeholder="Faculty (e.g. Science)" maxlength="80"><datalist id="facList">${facs.map(f => `<option value="${esc(f)}">`).join('')}</datalist><button>Add department</button></form>
 <details class="card"><summary style="cursor:pointer">Show all departments</summary>${facs.map(f => `<p class="chat-label">${esc(f)}</p>${depts.filter(d => d.faculty === f).map(d => `<form method="post" action="/admin/departments/${d.id}/delete" class="row" onsubmit="return confirm('Remove this department from the list?')"><span>${esc(d.name)}</span><button class="link">Remove</button></form>`).join('')}`).join('')}</details>`;
+  })() : '';
+  const delegatedVerifySection = me.position_can_verify ? (() => {
+    let pend;
+    if (me.position_scope === 'own') pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' AND department=? AND level=?").all(me.department, me.level);
+    else if (me.position_scope === 'department') pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' AND department=?").all(me.department);
+    else if (me.position_scope === 'faculty') {
+      const fac = facultyOf(me.department);
+      const depts = fac ? db.prepare('SELECT name FROM departments WHERE faculty=?').all(fac).map(d => d.name) : [];
+      pend = depts.length ? db.prepare(`SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' AND department IN (${depts.map(() => '?').join(',')})`).all(...depts) : [];
+    } else pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending'").all();
+    const myRank = SCOPE_RANK[me.position_scope] || 1;
+    const SCOPE_LABEL = { own: 'Their own department + level', department: 'Their whole department', faculty: 'Their whole faculty', school: 'The whole school' };
+    const scopeOpts = Object.keys(SCOPE_RANK).filter(s => SCOPE_RANK[s] <= myRank).map(s => `<option value="${s}">${SCOPE_LABEL[s]}</option>`).join('');
+    return `<h3 id="verify-queue">Position claims waiting for you to verify (${pend.length})</h3>${pend.map(p => `<div class="card"><b>${esc(p.name)}</b> <span class="mut">${p.username ? '@' + esc(p.username) : ''} ${esc(p.department || '')} ${p.level ? p.level + ' level' : ''}</span><br>Says they are: <b>${esc(p.position)}</b>
+<form method="post" action="/positions/${p.id}/verify" style="margin-top:8px">
+<select name="scope">${scopeOpts}</select>
+<select name="auto_role"><option value="">Nothing extra</option><option value="news">News admin</option><option value="content">Files admin</option></select>
+<label class="row" style="gap:8px;margin-top:6px;cursor:pointer"><input type="checkbox" name="can_verify" value="1" style="width:auto">Let them verify others too</label>
+<div class="row" style="gap:6px;margin-top:8px"><button>Verify</button></div>
+</form>
+<form method="post" action="/positions/${p.id}/verify-reject" style="margin-top:4px"><button class="link">Reject</button></form>
+</div>`).join('') || '<p class="mut">No one waiting on you right now.</p>'}`;
   })() : '';
   const observerSection = me.role === 'observer' ? (() => {
     const counts = {
@@ -2633,7 +2674,7 @@ ${replaceCtrl}
   }).join('')
     || '<p class="mut">No pages yet.</p>'}` : '';
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-${observerSection}${pagesSection}${newsSection}${paymentsSection}${sponsorsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
+${observerSection}${delegatedVerifySection}${pagesSection}${newsSection}${paymentsSection}${sponsorsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
 });
 
 // Reads the "who is this for?" choices: a department (or all) and a level (or all, or detected from the course code).
@@ -2690,13 +2731,45 @@ app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
   res.redirect(back('Saved who this upload is for.'));
 });
 // Positions and departments (full admin).
+// Whether `verifier` (already verified, with delegated verification power) may act on `claimant`'s pending claim.
+function canVerifyClaim(verifier, claimant) {
+  if (!verifier || verifier.position_status !== 'approved' || !verifier.position_can_verify || !verifier.position_scope) return false;
+  if (verifier.position_scope === 'own') return claimant.department === verifier.department && Number(claimant.level) === Number(verifier.level);
+  if (verifier.position_scope === 'department') return claimant.department === verifier.department;
+  if (verifier.position_scope === 'faculty') { const f = facultyOf(verifier.department); return !!f && facultyOf(claimant.department) === f; }
+  return true; // school-scoped verifier (rare -- central admin normally covers this) can verify anyone
+}
+// A president (or class rep) verifying someone within their own scope -- open to anyone with that delegated
+// power, not just central/full admin. They can never grant more reach than they hold themselves.
+app.post('/positions/:id/verify', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const t = db.prepare("SELECT id,position,role,department,level FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
+  if (!t || !canVerifyClaim(req.user, t)) return res.redirect(back('You cannot verify that claim.'));
+  const myRank = SCOPE_RANK[req.user.position_scope] || 1;
+  let scope = ['own', 'department', 'faculty', 'school'].includes(req.body.scope) ? req.body.scope : 'own';
+  if (SCOPE_RANK[scope] > myRank) scope = req.user.position_scope;
+  const autoRole = ['news', 'content'].includes(req.body.auto_role) ? req.body.auto_role : null;
+  const canVerify = req.body.can_verify ? 1 : 0;
+  db.prepare("UPDATE users SET title=position, position_status='approved', position_scope=?, position_auto_role=?, position_can_verify=? WHERE id=?").run(scope, autoRole, canVerify, t.id);
+  if (autoRole && t.role === 'user') db.prepare('UPDATE users SET role=? WHERE id=?').run(autoRole, t.id);
+  notify([t.id], { title: 'Position verified', body: `${t.position} now shows beside your name.`, url: '/settings', tag: 'position' });
+  res.redirect(back('Position verified.'));
+});
+app.post('/positions/:id/verify-reject', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const t = db.prepare("SELECT id,department,level FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
+  if (!t || !canVerifyClaim(req.user, t)) return res.redirect(back('You cannot act on that claim.'));
+  db.prepare("UPDATE users SET position_status='rejected' WHERE id=?").run(req.params.id);
+  res.redirect(back('Rejected.'));
+});
 app.post('/admin/positions/:id/approve', admin, (req, res) => {
   const t = db.prepare("SELECT id,position,role FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
   if (!t) return res.redirect(back('Nothing to verify.'));
-  const scope = ['own', 'faculty', 'school'].includes(req.body.scope) ? req.body.scope : 'own';
+  const scope = ['own', 'department', 'faculty', 'school'].includes(req.body.scope) ? req.body.scope : 'own';
   const autoRole = ['news', 'content', 'observer'].includes(req.body.auto_role) ? req.body.auto_role : null;
   const approverId = req.body.approver_id ? Number(req.body.approver_id) : null;
-  db.prepare("UPDATE users SET title=position, position_status='approved', position_scope=?, position_auto_role=?, position_approver_id=? WHERE id=?").run(scope, autoRole, approverId, t.id);
+  const canVerify = req.body.can_verify ? 1 : 0;
+  db.prepare("UPDATE users SET title=position, position_status='approved', position_scope=?, position_auto_role=?, position_approver_id=?, position_can_verify=? WHERE id=?").run(scope, autoRole, approverId, canVerify, t.id);
   if (autoRole && t.role === 'user') db.prepare('UPDATE users SET role=? WHERE id=?').run(autoRole, t.id);
   notify([t.id], { title: 'Position verified', body: `${t.position} now shows beside your name.`, url: '/settings', tag: 'position' });
   res.redirect(back('Position verified.'));
