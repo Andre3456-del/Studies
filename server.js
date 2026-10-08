@@ -742,7 +742,8 @@ main{max-width:1000px;margin:0 auto;padding:12px 20px 32px}
 .btn:hover,button:hover{filter:brightness(1.1);text-decoration:none}
 .btn.ghost,button.ghost{background:transparent;color:var(--blue);border:1px solid var(--line);box-shadow:none}
 button.link{background:none;color:var(--mut);box-shadow:none;padding:0;margin:0;font-weight:500}button.link:hover{color:var(--blue);filter:none}
-input{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px;outline:0}
+input,textarea{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px;outline:0}
+#msgInput{resize:none;max-height:120px;overflow-y:auto;line-height:1.3}
 input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(56,176,248,.2)}
 input::placeholder{color:#6b7794}input[type=checkbox]{width:auto}
 .card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin:14px 0}
@@ -816,7 +817,7 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .bubble.them{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:4px}
 .bubble time{display:block;font-size:11px;opacity:.65;margin-top:3px}
 .chat-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line);max-width:1000px;margin:0 auto}
-.chat-bar input{margin:0;flex:1}.chat-bar button{margin:0}
+.chat-bar input,.chat-bar textarea{margin:0;flex:1}.chat-bar button{margin:0}
 .chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:6px 0 12px;z-index:5}
 .news-body p.news-snip{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:0 0 8px}
 .role-tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;border:1px solid rgba(240,0,232,.45);color:#ff9cf7;margin-left:6px;vertical-align:middle;line-height:1.5}
@@ -1426,6 +1427,8 @@ const CHAT_JS = `(function(){
 var myId=__MY__,convType='__CTYPE__',convId=__CID__;
 var qs=convType==='group'?('group='+convId):('to='+convId);
 var thread=document.getElementById('thread'),form=document.getElementById('sendForm'),input=document.getElementById('msgInput');
+function resizeInput(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,120)+'px'}
+input.addEventListener('input',resizeInput);
 var panel=document.getElementById('panel'),pBtn=document.getElementById('panelBtn'),micBtn=document.getElementById('micBtn');
 var recBar=document.getElementById('recBar'),recTime=document.getElementById('recTime'),recSend=document.getElementById('recSend'),recCancel=document.getElementById('recCancel');
 var pEmoji=document.getElementById('pEmoji'),pStickers=document.getElementById('pStickers'),ec=document.getElementById('ecats'),eg=document.getElementById('egrid'),sg=document.getElementById('sgrid'),stFile=document.getElementById('stFile'),stZip=document.getElementById('stZip'),upStatus=document.getElementById('upStatus');
@@ -1466,7 +1469,7 @@ function react(id,emoji){fetch('/api/messages/'+id+'/react',{method:'POST',heade
 function renderReactions(id,reactions){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var old=b.querySelector('.reactions');if(old)old.remove();
   var keys=Object.keys(reactions||{});if(!keys.length)return;var row=el('div','reactions');keys.forEach(function(em){row.appendChild(el('span','rchip',em+' '+reactions[em]))});
   var t=b.querySelector('time');b.insertBefore(row,t)}
-function startEdit(id){var b=thread.querySelector('[data-id="'+id+'"]'),span=b.querySelector('.msg-text');if(!span)return;editingId=id;input.value=span.textContent;input.focus()}
+function startEdit(id){var b=thread.querySelector('[data-id="'+id+'"]'),span=b.querySelector('.msg-text');if(!span)return;editingId=id;input.value=span.textContent;resizeInput();input.focus()}
 function doDelete(id,scope){if(!confirm(scope==='everyone'?'Delete this message for everyone?':'Delete this message for you?'))return;
   fetch('/api/messages/'+id+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:scope})}).then(function(r){return r.json()}).then(function(j){
     var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;
@@ -1500,8 +1503,8 @@ function poll(){fetch('/api/messages/poll?'+qs+'&after='+lastId).then(function(r
 function post(url,obj,cb){fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id)cb(j);else alert((j&&j.error)||'Could not send.')}).catch(function(){alert('Could not send. Check your connection.')})}
 toBottom();setInterval(poll,3000);
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
-  if(editingId){var id=editingId;editingId=null;input.value='';fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
-  input.value='';var body=Object.assign({body:text},convType==='group'?{group:convId}:{to:convId});
+  if(editingId){var id=editingId;editingId=null;input.value='';resizeInput();fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
+  input.value='';resizeInput();var body=Object.assign({body:text},convType==='group'?{group:convId}:{to:convId});
   if(!navigator.onLine)return queueAndShow(body,text);
   fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){
     if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:text,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}
@@ -1672,7 +1675,7 @@ function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastI
 <div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
 <div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker(s)<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" multiple></label>
 <label class="btn ghost st-add">+ Add a .zip of pictures<input type="file" id="stZip" accept=".zip,application/zip,application/x-zip-compressed"></label><div id="sgrid" class="sgrid"></div></div></div>
-<form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" style="display:none">📎</label><input id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
+<form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" style="display:none">📎</label><textarea id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required rows="1"></textarea><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
 <div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
 <p id="upStatus" class="mut" style="margin:4px 0 0" hidden></p>
 <script>${script}</script>`, req.user, { noAI: true }));
@@ -2296,7 +2299,37 @@ app.get('/sponsor/:id', (req, res) => {
   if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
   const statusLine = s.status === 'approved' ? `<p class="pill">&#10003; Live until ${esc((s.expires_at || '').slice(0, 10))}</p>` : s.status === 'rejected' ? '<p class="err">This submission was not approved.</p>' : '<p class="pill pending">Waiting for payment to be confirmed</p>';
   res.send(layout('Your sponsor post', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>${esc(s.title)}</h1>${statusLine}
+<p class="mut"><a href="/sponsor/${s.id}/edit">Edit this post &rarr;</a></p>
 ${s.status === 'pending_payment' ? `<div class="card"><p>Pay <b>₦${SPONSOR_PRICE_NGN}</b> by bank transfer to:</p><p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p><p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p><form method="post" action="/sponsor/${s.id}/claim"><button>I've paid</button></form></div>` : ''}`, req.user));
+});
+app.get('/sponsor/:id/edit', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const s = db.prepare('SELECT * FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
+  res.send(layout('Edit your sponsor post', `<p class="mut"><a href="/sponsor/${s.id}">&larr; Back</a></p><h1>Edit your sponsor post</h1>
+${s.status === 'approved' ? '<p class="mut">This is already live -- changes show right away, no need to pay again.</p>' : ''}
+<form class="card" method="post" action="/sponsor/${s.id}/edit" enctype="multipart/form-data">
+<input name="title" value="${esc(s.title)}" required maxlength="140">
+<textarea name="body" required maxlength="2000" style="width:100%;min-height:80px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(s.body)}</textarea>
+<input name="contact" value="${esc(s.contact || '')}" placeholder="How should people reach you?" maxlength="140">
+${s.image_data ? `<img src="/sponsor-image/${s.id}" style="max-width:100%;border-radius:10px;margin:6px 0;display:block">` : ''}
+<label class="mut">${s.image_data ? 'Replace photo (optional)' : 'Add a photo (optional)'}</label>
+<input type="file" name="image" accept="image/*" style="padding:9px 0">
+<button>Save changes</button>
+</form>`, req.user));
+});
+app.post('/sponsor/:id/edit', upload.single('image'), (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const s = db.prepare('SELECT id FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
+  const title = String(req.body.title || '').trim().slice(0, 140);
+  const body = String(req.body.body || '').trim().slice(0, 2000);
+  const contact = String(req.body.contact || '').trim().slice(0, 140);
+  if (!title || !body) return res.redirect(`/sponsor/${s.id}/edit`);
+  if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect(`/sponsor/${s.id}/edit`);
+  if (req.file) db.prepare('UPDATE sponsor_posts SET title=?, body=?, contact=?, image_data=?, image_mime=? WHERE id=?').run(title, body, contact, req.file.buffer, req.file.mimetype, s.id);
+  else db.prepare('UPDATE sponsor_posts SET title=?, body=?, contact=? WHERE id=?').run(title, body, contact, s.id);
+  res.redirect('/sponsor/' + s.id);
 });
 app.post('/sponsor/:id/claim', (req, res) => {
   if (!req.user) return res.redirect('/login');
