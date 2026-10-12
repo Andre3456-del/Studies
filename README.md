@@ -1,17 +1,72 @@
 # Studies Hub
 
-Host your HTML pages online with sign-up, login, an admin panel and a built-in AI assistant.
-One Node.js app, one folder. Needs Node.js 22.13 or newer (no native modules, so it installs anywhere).
+A study hub for a university: sign up, get sorted into your department and level, browse pages and CBT practice made just for you, read news, and chat with friends and groups — with push notifications. One Node.js app, one file. Needs Node.js 22.13 or newer (no native modules, so it installs anywhere).
 
 ## What is inside
 
-- **Dashboard:** there is no separate dashboard page or button to tap. The moment you log in, the home page itself becomes your dashboard — a greeting, shortcuts, the latest pages and your account, on a glowing gradient background. Admins also see counts and quick links to upload, manage pages and users.
-- **Pages:** upload HTML files in `/admin`. Each lives at `/p/<name>`, open to everyone or members only.
+- **Home (`/`) is the news feed** for anyone not logged in — just the news cards, nothing else, no share form. **Logging in takes you straight to your Dashboard.**
+- **Dashboard (`/dashboard`):** your greeting, then picture previews of every upload sorted for you — split into **Available to you** (free, plus anything you've paid for) and, only if you have any, **Locked — pay to view** (CBT practice you haven't unlocked yet).
+- **Sign-up details (`/welcome`):** right after verifying their email (or signing in with Google), a student is asked for a **username**, **university**, **department** and **level**; anyone can also claim a **position** (e.g. "Director of Socials"), which a full admin checks before it shows next to their name. Nothing else on the site is reachable until this is filled in. Staff accounts (any admin role) only need a username.
+- **Sorted uploads:** every upload is either for *everyone*, for one or several *departments* (tick as many as apply when uploading), for one *level*, or both. A student only ever sees what matches their own department and level. Course-code levels are auto-detected from the title (`GST 121` → 100 level) or can be set by hand. Change who an existing upload is for any time from `/admin`.
+- **Pages:** upload HTML files, PDFs, Word documents, YouTube videos or CBT (quiz) HTML in `/admin`. Each page lives at `/p/<name>`, open to everyone, members-only, or sorted to a department/level.
+- **Pay-to-view is CBT-only:** a full admin can mark a **CBT upload only** as "Payment to view" (₦100 by default, `PRICE_NGN` to change it). Nothing else can be paid content. There's no payment gateway — the visitor sees your bank transfer details, sends the money, and taps "I have made this payment," which creates a pending claim for a full admin to approve by hand in `/admin`.
 - **Accounts:** email + password sign-up with a verification link, plus **Continue with Google**.
-- **Forgot password:** a 6-digit code emailed to the user (valid 10 minutes, 5 tries). Same flow for every account, admin included.
-- **Email:** sent through your Gmail with the Gmail API over HTTPS, so it works on Railway. Resend, Brevo or SMTP also work.
-- **AI assistant:** an "Ask AI" button for logged-in members, powered by Groq or Claude.
-- **Storage:** SQLite in `data/site.db` (accounts, pages, sessions).
+- **Admin roles:** `donryscott28@gmail.com` is the permanent central admin, and the only account that can create or change admins (dropdown in `/admin` → Users). Six roles: **User**; **Partial admin** (upload/manage plain HTML pages); **Files admin** (upload/manage every kind of file); **News admin** (post news, approve or reject what members submit); **Login-help admin** (verify someone by hand, resend a verification link, email a password-reset code, sign someone out everywhere — never sees the code, can't touch full admins, can't remove users or change roles); **Full admin** (everything, including payments, positions and departments). Only a full admin verifies a claimed position or edits the department list.
+- **Who's online:** in `/admin` and in Chat, a green dot means active in the last two minutes.
+- **Forgot password:** a 6-digit code emailed to the user (valid 10 minutes, 5 tries).
+- **Email:** sent through Gmail with the Gmail API over HTTPS (works on Railway). Resend, Brevo or SMTP also work.
+- **Push notifications:** built in, no third-party service — messages, friend requests, new uploads sorted for you, news, and payment/position approvals all push straight to the browser or phone, even with the site closed. No extra account or API key needed; it self-generates its own keys on first run.
+- **Installable:** Studies Hub has an app icon and manifest, so "Add to Home Screen" / "Install" works like a real app, using your logo.
+- **AI assistant:** an "Ask AI" button for logged-in members (not shown inside Chat), powered by Groq or Claude.
+- **Storage:** SQLite in `data/site.db` (accounts, pages, messages, everything).
+
+## Navigation, News, Settings
+
+- **Sidebar:** tap ☰ (top left, every page) — Home, and once logged in, Dashboard, News, Browse pages, Chat, Settings, plus whichever admin links your role allows.
+- **News (`/news`):** public reading, no account needed. Any logged-in member can submit a post ("Share something") with an optional real uploaded picture; it waits for a news admin's approval, who can also **edit** it any time afterward (title, text, or picture) from `/admin`. Tapping a card opens the full picture and text — exactly as typed or pasted, real line breaks kept, nothing squashed together, and any http(s) link inside it becomes a real, tappable, underlined link that opens in a new tab. The same goes for links typed in chat.
+- **Settings (`/settings`):** name, username, university, department, level, a profile picture, and a claimed position (if any).
+- **Profiles (`/u/:id`):** any logged-in member can view another's picture, username, university, department, level, verified position/title and their news — with a Message button once you're friends. Email is never shown.
+- **Privacy Policy (`/privacy`):** a public page, linked in every footer, plainly describing what the site collects — sign-up details, chat (encrypted at rest, not end-to-end), push notifications, the AI assistant, cookies, and who your data is shared with. This is a good-faith description, not legal advice — have it checked for your jurisdiction (e.g. Nigeria's NDPA).
+
+## Chat: friends, groups, and everything WhatsApp-style
+
+- **Friends first:** open Chat → **Find people** to search by `@username` or name and send a friend request; the other person accepts it from the same tab (with a badge showing how many requests are waiting, "15+" past fifteen). Only friends can message each other. The **Chats** tab lists your friends (online or not) and groups, each with an unread-count badge; the same badge total shows on the Chat nav link and the menu button.
+- **Groups:** made from your friends (Chat → **+ New group**), with their own picture (tap it on the group info page to change it). The creator is the group's first admin, and any admin can rename the group, add friends, remove members, or make another member an admin too (a group can have more than one, and the last remaining admin can't be demoted). If an admin leaves, the next member is promoted automatically, and an empty group is deleted. Tap a member's name in a group message to see who sent it, or the group's name/picture in the thread for the full group-info page.
+- **Messages** can be text, a **voice note** (tap the mic, tap Send — needs microphone permission), a **photo or any file**, or a **sticker**. The smiley button opens an emoji picker and your personal sticker board -- add pictures one at a time or several at once, or drop in a **.zip of pictures** and every image inside it is unzipped straight onto your board. Stickers live on your own phone (see "Writing space and storage limits" below), so there's no size or count cap any more. Tap a sticker to send it, and tap "+ Save sticker" on one someone sends you.
+- **The message box grows** as you type more than one line, up to a point (then it scrolls inside itself). Press **Enter for a new line** -- send with the **Send** button, same as any multi-line message box.
+- **Delivery ticks** on your own sent messages: one blue tick = sent while they're offline; two blue ticks = delivered (they're online but haven't opened the chat); two **green** ticks = read.
+- **Attachments:** tap 📎 to send a photo or any file from your gallery or phone storage (up to 20 MB) -- photos show inline, other files show as a named, downloadable card.
+- **React, edit, delete:** tap a message's actions to react with an emoji, edit your own text (voice notes and stickers can't be edited), delete it just for yourself, or — if you sent it — delete it for everyone (it's replaced with "This message was deleted" and the stored content is actually wiped, not just hidden).
+- **Encryption:** every message (text, voice, sticker) is stored **encrypted at rest** (AES-256-GCM) — a stolen copy of the database is unreadable. This is **not end-to-end encryption**: the server can still decrypt messages, e.g. to look into abuse reports. True end-to-end encryption is a bigger, different feature with a real trade-off (a lost device can mean unrecoverable messages) — ask if you want that built instead.
+
+## Push notifications
+
+No setup needed — it's built into the app itself (Web Push, VAPID keys generated once and stored in the database) rather than a third-party push service, so there's no extra account, API key, or monthly limit. The first time a logged-in member is shown the "Turn on notifications" bar (or taps the button in Settings), their browser asks permission; once granted, the site can notify their device about new messages, friend requests, uploads sorted for them, news, and payment/position approvals, even with the site closed. `Settings` also has a manual "Turn on notifications" button. Because it's self-contained, this works out of the box on Railway with no extra Variables.
+
+The same service worker also shows a branded "You're offline" page (`/offline.html`) if a page fails to load with no connection, instead of the browser's blank default error.
+
+**Works properly with no connection, not just a fallback page:**
+- **Browsing** — every page you successfully open is remembered, so opening it again with no signal shows what you last saw instead of an error. A page you've never opened before still falls back to the "You're offline" page.
+- **Chat** — type and send a message with no connection (or it fails mid-send) and it shows with a small ⌛ instead of a tick. It's saved on the phone and sent for real the moment a connection is back, even if the app has been closed in the meantime (on browsers that support Background Sync; otherwise it sends as soon as the app is reopened online).
+- **Admin uploads** — tap Upload with no connection and you'll see "Saved on your device" instead of an error. The file and everything you filled in are kept and uploaded automatically once you're back online -- the admin page refreshes itself when that happens.
+
+## App Capabilities (PWA Builder)
+
+Six of PWA Builder's "App Capabilities" are wired up:
+- **Shortcuts** — long-press the installed icon for quick jumps to Dashboard, Chat, News, and Settings.
+- **Launch handler** — re-opening the app (from a notification, a share, the icon) focuses the existing window instead of opening a duplicate.
+- **Share target** — share a link, some text, or a photo from any other app "to Studies Hub," and it lands on a pre-filled News post for you to finish and submit (goes through the same admin approval as any other post).
+- **File handlers** — "Open with Studies Hub" on a PDF or Word file in the phone's file manager lands a files/full admin straight on the upload form with that file already attached.
+- **Protocol handler** — registers `web+studieshub://`, a foundation for deep links (e.g. from a QR code) that open straight inside the installed app.
+- **Window controls overlay** — a small polish for anyone who installs the site on a laptop/desktop, giving the app its own header instead of a plain browser-style window.
+
+The remaining ones from PWA Builder's audit are now in too:
+- **Periodic Background Sync** (Service Worker section) — on phones that support it, the app quietly refreshes Dashboard/News/Chat in the background every so often, so offline browsing shows something fresher than whatever was last open. The browser decides if and how often this actually runs; there's no way to force it.
+- **Widgets** — a "Studies Hub News" card for the Windows 11 Widgets Board, showing the 3 latest approved posts, tapping through to News. Built correctly per Microsoft's spec, but realistically **Windows-only** — it won't appear for an Android phone at all.
+- **Edge Side Panel** and **Tabbed Display** — one-line manifest additions for anyone who installs the site in Edge on a laptop. No visible effect on a phone.
+- **Note Taking** — Windows' global "new note" shortcut opens straight to the News "Share something" form, the closest match the site has to jotting something down. Also desktop-only.
+
+Honest summary: every item PWA Builder listed is now implemented. The ones that matter day-to-day for your actual students (Shortcuts, Share Target, File Handlers, Launch Handler, Background Sync, Offline Support) are real, tested features. The Windows-desktop-only ones (Widgets, Edge Side Panel, Tabbed Display, Note Taking, Window Controls Overlay) are correctly built to spec but will go unseen by anyone browsing on a phone.
 
 ## Run it on your computer
 
@@ -20,10 +75,8 @@ npm install
 ADMIN_PASSWORD='a-long-password' npm start
 ```
 
-Open http://localhost:3000 and log in at `/login` as `donryscott28@gmail.com` with whatever `ADMIN_PASSWORD` you set.
-Set your own real password there — never write it into `server.js` or any file. `ADMIN_PASSWORD` is checked and re-applied on every start, so changing it (on Railway: edit the Variable and redeploy) always takes effect immediately, even for an account created earlier.
+Open http://localhost:3000. Log in at `/login` as `donryscott28@gmail.com` with whatever `ADMIN_PASSWORD` you set — set your own real password there, never write it into `server.js`. `ADMIN_PASSWORD` re-applies on every start, so changing it (on Railway: edit the Variable and redeploy) always takes effect, even for an account created earlier.
 Without email settings, verification links and reset codes print in the terminal instead of being emailed, and `/admin` has a "verify now" button.
-"Forgot password?" is on the login page for anyone, admin included: it emails a 6-digit code. New signups also get a "Resend verification email" button if the first email does not arrive.
 On an Android phone the same works in Termux (`pkg install nodejs unzip`, unzip this folder, `npm install`, `npm start`).
 
 ## Put it online with Railway (no GitHub needed)
@@ -39,7 +92,7 @@ railway up
 If `railway up` asks for a service, create one. Then in the Railway dashboard, open the service:
 
 1. **Networking**: click "Generate Domain" (your public https address).
-2. **Volume**: add one, mount path `/data` (keeps accounts and pages between deploys).
+2. **Volume**: add one, mount path `/data` (keeps accounts, pages, messages between deploys).
 3. **Variables**: add the ones in `env.example`, then redeploy. At minimum: `ADMIN_PASSWORD`, `NODE_ENV=production`, `RAILPACK_NODE_VERSION=22`, `BASE_URL`.
 
 Never paste keys or secrets into chats or commit them; put them only in Railway Variables.
@@ -65,12 +118,73 @@ Set one of these in Variables:
 - `GROQ_API_KEY` from console.groq.com (default model `llama-3.3-70b-versatile`)
 - `ANTHROPIC_API_KEY` from console.anthropic.com (default model `claude-haiku-4-5-20251001`)
 
-Optional: `AI_MODEL` to pick a different model. Only logged-in members see the "Ask AI" button, each is limited to 20 questions per 10 minutes, and the assistant knows the titles of your pages.
+Optional: `AI_MODEL` to pick a different model. Only logged-in members see the "Ask AI" button (not inside Chat), each limited to 20 questions per 10 minutes.
 
 ## Uploading pages
 
-Each upload opens full-screen exactly as you designed it, for members and visitors alike (members-only pages ask for login first). The site adds only a small "Studies Hub" back button and, if your file has none, a mobile viewport tag.
-Best results: one self-contained file, with CSS, JavaScript and images inside it or loaded from full https:// links. Files that point to other uploaded files (like `style.css` or `about.html`) will not find them. Limit: 5 MB per file.
+In `/admin`, every upload can be aimed at **all departments or one**, and **all levels or one** (or auto-detected from a course code like `GST 121` in the title). Each opens full-screen exactly as you designed it, for whoever it's sorted for (members-only pages ask for login first; sorted pages tell a mismatched visitor plainly that it isn't for their department or level). The site adds only a small "Studies Hub" back button and, if your file has none, a mobile viewport tag.
+Best results: one self-contained file, with CSS, JavaScript and images inside it or loaded from full https:// links. Files that point to other uploaded files (like `style.css` or `about.html`) will not find them. Limit: 5 MB per file (20 MB for the whole request).
+
+## Departments and positions
+
+Full admins manage the department list in `/admin` (Positions & departments) — it seeds itself with University of Uyo's faculties and departments on first run, and you can add or remove entries any time; the list feeds both sign-up and the upload form's "who is this for?" picker, which lets you tick more than one department (leave all unticked for every department). When a member claims a position (in Settings), it shows up for verification — but not necessarily to a full admin.
+
+**Verification is a real chain, not a single admin queue.** A full admin verifies the first person at the top of a scope (say, a Faculty President) and can tick "let them verify others too." From then on, that person sees their own small "waiting on you" list right on `/admin` and can verify anyone within their own scope directly — no central admin involved. If that person also gets verify-power, the chain keeps going: a Faculty President can verify Department Presidents in their faculty, who can then verify Class Representatives in their own department, who can then verify further claims in their own department+level. A claim with no eligible delegate yet simply falls back to a full admin, so nothing ever gets stuck.
+
+Verifying someone sets three things:
+- **How far their news posts reach** — their own department + level only, their whole department (every level), their whole faculty (every department in it), or the whole school.
+- **What it grants automatically** — News admin, Files admin, Observer (read-only -- see below), or nothing beyond the title. This only ever *upgrades* a plain member; someone who already holds a special role is never demoted by a lesser position being verified for them.
+- **Whether they can verify others too**, and if so, at what scope — capped so no one can hand out reach wider than their own (a department president can't grant someone school-wide reach, even by mistake).
+
+A Director of Academics (or anyone else) can separately be set to need one specific person's sign-off on their posts — e.g. their faculty's Director of Information — rather than going through the general news queue; that person's approval (from a small queue on their own News page) publishes it directly.
+
+Anyone with real posting power from a verified position gets a small blue ✓ next to their name — on news, their profile, wherever their title shows.
+
+**The Observer role** is for someone like a SUG President: a real admin login, but read-only. They can open `/admin` and see the same counts and verified-position list a full admin would, but there is no upload form, no approve/reject button, nothing that changes anything — and that's enforced at the route level, not just hidden in the page.
+
+**End of a session,** the **central admin only** (not any other full admin) can click "Advance everyone to the next level" in `/admin` to move every student up one level at once (100→200, 200→300, and so on). Students already at the top level are left as they are — there's no "graduated" state yet.
+
+## Ads and sponsor posts
+
+The News section (not the home page) loads your Google AdSense script, so Auto ads can run there once you turn them on in your AdSense dashboard. If you'd rather a specific, manually-placed ad unit instead of relying on Auto ads, create one in AdSense and send me its ad-slot code.
+
+Separately, anyone logged in can pay **₦2000 (`SPONSOR_PRICE_NGN` to change it) to advertise a business or service** for 30 days at `/sponsor` — title, description, contact info, optional photo. It works exactly like the CBT payment flow: pay by bank transfer, tap "I've paid," a full admin confirms it in `/admin`, and it goes live in News (clearly marked "Sponsored") until it quietly expires 30 days later. The person who submitted it can edit it any time from their own post's page — while waiting on payment or even after it's already live (a live edit shows right away, no re-approval or re-payment needed).
+
+## Writing space and storage limits
+
+- **News posts** can now run up to 2,000,000 characters (up from 600) -- plenty of room for a full write-up, not just a short update.
+- **Stickers now live on your own phone** (in the browser's on-device storage), not on the server -- so there's no 1MB-per-sticker or 60-sticker cap any more; it's limited only by your phone's own storage. Stickers you already had before this change still show up (pulled from the server as before), so nothing old is lost; every new one just gets saved locally from here on. Sending a sticker still has to transmit its bytes, obviously, since the other person needs to actually receive the picture.
+- **The shared upload-size ceiling was raised from 20MB to 200MB** (news images, admin uploads, chat attachments, avatars -- it's one setting used everywhere). This one honestly can't go to "unlimited": every upload is currently held in memory before being saved, so a Railway instance only has so much RAM to work with, and a truly unbounded limit risks crashing the server on a very large file. 200MB comfortably covers any PDF, Word doc, or HTML page, and most videos. If you outgrow that -- say, long lecture-recording videos -- the real fix is switching uploads to stream to disk (or outside storage like S3) instead of holding them in memory, which is a bigger change than a one-line limit.
+- **Admin-uploaded content (CBT, PDFs, pages) can't move to phone storage** the way stickers did -- that content is for every student to see from their *own* different phones, so it has to live somewhere all of them can reach, which means the server, not any one person's device.
+
+## Lecturer accounts
+
+A completely separate side of the site, for teaching staff -- not students.
+
+- **Sign up at `/lecturer/signup`** (own link, own page) -- email+password with the same verification-code flow as students, or "Continue with Google." Never mixed into the student sign-up.
+- **Then a short profile**: name, institution, an optional staff/registration number, and which course(s) they teach -- picked from existing courses, or typed in if it's not listed yet (that adds it to the catalog automatically).
+- **Verification**: goes to a full admin, who sees the claimed institution and courses before clicking Verify. There's no automatic credential check against the institution -- a human confirms it, same spirit as everything else verified on this site.
+- **Once verified**, a lecturer's whole interface is just their own courses: upload a PDF, Word doc, or HTML page for one of their courses, pick which departments and level it's for (reusing the same picker admin uploads use), and it **goes live immediately** -- no approval queue. They can edit or delete anything they uploaded, any time, but never touch another lecturer's upload -- not a colleague's, not even from the same course or university.
+- **Browsing a course is folder-style, not a flat list**: tap the course, see it broken down by institution, then by lecturer, then their files -- so a lecturer (or admin) can find a specific colleague's material without scrolling past everyone else's.
+- **Known gap**: there's no way yet for an already-verified lecturer to add a course to their account later -- re-running the welcome form would incorrectly reset them to pending. Worth fixing if this comes up.
+
+## Viewing PDFs and Word documents in the browser
+
+- **PDFs** embed directly using the browser's own built-in PDF viewer.
+- **Word documents (.docx)** are converted to readable HTML right in the browser (via Mammoth.js, loaded from a CDN) by fetching the file through the same authenticated route everything else uses -- so department/level access control still applies, nothing is exposed to an outside service. Older `.doc` files, or anything Mammoth can't parse, fall back to a plain download link instead of a broken preview.
+
+## Paid content: CBT only (direct bank transfer)
+
+Only CBT (quiz) uploads can be marked "Payment to view" — everything else is always free. Payments go straight to your own account, with no gateway or fees. In Variables you can optionally override the defaults already baked in:
+
+```
+BANK_NAME=OPay
+BANK_ACCOUNT_NUMBER=7043309103
+BANK_ACCOUNT_NAME=Esseabasi Usen Inyangmme
+PRICE_NGN=100
+```
+
+When someone claims a payment, it shows up under "Payment claims waiting for you" in `/admin`. Check your bank/OPay app, then click Approve (unlocks it — it moves from Locked to Available on their dashboard) or Reject.
 
 ## Other email options
 
