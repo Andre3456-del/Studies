@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, ema
 CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS pages(id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, html TEXT NOT NULL, members_only INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, page_id INTEGER NOT NULL, reference TEXT UNIQUE NOT NULL, amount INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, page_id));
+CREATE TABLE IF NOT EXISTS courses(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS lecturer_courses(lecturer_id INTEGER NOT NULL, course_id INTEGER NOT NULL, PRIMARY KEY(lecturer_id, course_id));
 `);
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
@@ -27,11 +29,15 @@ for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_has
   // A verified position can carry real reach and capability: how far their news posts travel (their own
   // department+level, their whole faculty, or the whole school), what admin capability it grants automatically,
   // and -- for positions that need a specific person's sign-off rather than the general news queue -- who that is.
-  ['position_scope', 'TEXT'], ['position_auto_role', 'TEXT'], ['position_approver_id', 'INTEGER'], ['position_can_verify', 'INTEGER NOT NULL DEFAULT 0']])
+  ['position_scope', 'TEXT'], ['position_auto_role', 'TEXT'], ['position_approver_id', 'INTEGER'], ['position_can_verify', 'INTEGER NOT NULL DEFAULT 0'],
+  // Lecturers are a separate account type entirely -- their own signup link, their own verification
+  // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
+  // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
+  ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
-for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['video_id', 'TEXT'], ['dept', 'TEXT'], ['level', 'INTEGER']])
+for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['video_id', 'TEXT'], ['dept', 'TEXT'], ['level', 'INTEGER'], ['author_id', 'INTEGER'], ['course_id', 'INTEGER']])
   if (!pageCols.includes(c)) db.exec(`ALTER TABLE pages ADD COLUMN ${c} ${def}`);
 db.exec('CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL, body_enc BLOB NOT NULL, iv BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
@@ -475,10 +481,12 @@ function canSeeNewsItem(item, viewer) {
   return true;
 }
 // Members finish their details (username, university, department, level) before anything else; staff only need a username.
-const profileComplete = u => !!u.username && !!u.name && (u.role !== 'user' || (!!u.department && !!u.level && !!u.university));
-const GATE_OPEN = ['/welcome', '/logout', '/privacy', '/health', '/sw.js', '/offline.html', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const profileComplete = u => u.is_lecturer
+  ? !!u.name && !!u.university && !!u.lecturer_status
+  : !!u.username && !!u.name && (u.role !== 'user' || (!!u.department && !!u.level && !!u.university));
+const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/health', '/sw.js', '/offline.html', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
-  if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect('/welcome');
+  if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
   next();
 });
 
@@ -822,6 +830,7 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .news-body p.news-snip{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:0 0 8px}
 .role-tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;border:1px solid rgba(240,0,232,.45);color:#ff9cf7;margin-left:6px;vertical-align:middle;line-height:1.5}
 .verified-badge{color:#5bc8ff;font-weight:700;margin-left:2px}
+.doc-viewer{max-width:100%;overflow-wrap:break-word;line-height:1.55}.doc-viewer img{max-width:100%;height:auto;border-radius:8px}.doc-viewer table{width:100%;border-collapse:collapse;margin:10px 0}.doc-viewer td,.doc-viewer th{border:1px solid var(--line);padding:6px 8px}
 .pv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
 .pv{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;color:var(--fg);transition:.2s}
 .pv:hover{transform:translateY(-3px);border-color:var(--blue);text-decoration:none}
@@ -879,7 +888,9 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .sender-name{font-size:12px;font-weight:700;color:var(--blue);margin-bottom:2px}
 .sticker-msg .msg-actions{justify-content:flex-end}`;
 
-const navItems = (user, badge = 0) => user ? [
+const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
+  { href: '/lecturer', icon: '🎓', label: 'My courses' },
+] : [
   { href: '/dashboard', icon: '📊', label: 'Dashboard' },
   { href: '/news', icon: '📰', label: 'News' },
   { href: '/browse', icon: '🌐', label: 'Browse pages' },
@@ -888,7 +899,7 @@ const navItems = (user, badge = 0) => user ? [
   ...(can.news(user) ? [{ href: '/admin#news', icon: '📢', label: 'Manage news' }] : []),
   ...(can.full(user) ? [{ href: '/admin#positions', icon: '🎖️', label: 'Positions & departments' }] : []),
   ...(can.support(user) ? [{ href: '/admin#users', icon: '👥', label: can.full(user) ? 'Users' : 'Login help' }] : []),
-] : [
+]) : [
   { href: '/', icon: '🏠', label: 'Home' },
   { href: '/browse', icon: '🌐', label: 'Browse pages' },
 ];
@@ -2112,6 +2123,7 @@ const welcomePage = (user, err, v) => layout('Welcome', `<div class="auth" style
 <script>${UNAME_JS}(function(){var f=document.getElementById('welcomeForm'),go=false;f.addEventListener('submit',function(e){if(go||!window.enablePush||!window.Notification||Notification.permission!=='default')return;e.preventDefault();go=true;var done=function(){f.submit()};window.enablePush().then(done,done)})})();</script>`, user, { noPushBar: true });
 app.get('/welcome', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/welcome');
+  if (req.user.is_lecturer) return res.redirect('/lecturer/welcome');
   if (profileComplete(req.user)) return res.redirect('/dashboard');
   res.send(welcomePage(req.user, '', req.user));
 });
@@ -2127,6 +2139,152 @@ app.post('/welcome', upload.single('avatar'), (req, res) => {
   if (err) return fail(err);
   if (req.file) db.prepare('UPDATE users SET avatar_data=?, avatar_mime=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.user.id);
   res.redirect('/dashboard?welcome=1');
+});
+app.get('/lecturer/welcome', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/lecturer/welcome');
+  if (!req.user.is_lecturer) return res.redirect('/welcome');
+  if (profileComplete(req.user)) return res.redirect('/lecturer');
+  res.send(lecturerWelcomePage(req.user));
+});
+function lecturerWelcomePage(u, err = '') {
+  const courses = db.prepare('SELECT id, name FROM courses ORDER BY name').all();
+  const picked = db.prepare('SELECT course_id FROM lecturer_courses WHERE lecturer_id=?').all(u.id).map(r => r.course_id);
+  return layout('Finish setting up', `<div class="auth"><h1>A few details</h1><p class="mut">This goes to a full admin to verify you're really on staff at the institution you name.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
+<form method="post" class="card">
+<input name="name" value="${esc(u.name || '')}" placeholder="Your name" required maxlength="80">
+<input name="university" value="${esc(u.university || '')}" placeholder="Institution you teach at" required maxlength="120">
+<input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number (optional)" maxlength="60">
+<label class="mut">Which course(s) do you teach? (pick any that already exist)</label>
+<div style="max-height:180px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0">${courses.map(c => `<label class="row" style="justify-content:flex-start;gap:8px;margin:4px 0;cursor:pointer"><input type="checkbox" name="course_id" value="${c.id}" style="width:auto"${picked.includes(c.id) ? ' checked' : ''}>${esc(c.name)}</label>`).join('') || '<p class="mut" style="margin:0">No courses listed yet -- add yours below.</p>'}</div>
+<input name="new_course" placeholder="Course not listed? Type its name" maxlength="120">
+<button>Submit for verification</button></form></div>`, u);
+}
+app.post('/lecturer/welcome', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/lecturer/welcome');
+  if (!req.user.is_lecturer) return res.redirect('/welcome');
+  const name = String(req.body.name || '').trim().slice(0, 80);
+  const university = String(req.body.university || '').trim().slice(0, 120);
+  const regNo = String(req.body.reg_no || '').trim().slice(0, 60) || null;
+  const newCourseName = String(req.body.new_course || '').trim().slice(0, 120);
+  const pickedIds = (Array.isArray(req.body.course_id) ? req.body.course_id : req.body.course_id ? [req.body.course_id] : []).map(Number).filter(Boolean);
+  const fail = m => res.status(400).send(lecturerWelcomePage({ ...req.user, name, university, lecturer_reg_no: regNo }, m));
+  if (!name || !university) return fail('Please fill in your name and institution.');
+  let newCourseId = null;
+  if (newCourseName) {
+    const existing = db.prepare('SELECT id FROM courses WHERE name=?').get(newCourseName);
+    newCourseId = existing ? existing.id : Number(db.prepare('INSERT INTO courses(name) VALUES(?)').run(newCourseName).lastInsertRowid);
+  }
+  const allCourseIds = [...new Set([...pickedIds, ...(newCourseId ? [newCourseId] : [])])];
+  if (!allCourseIds.length) return fail('Pick at least one course, or add one that is not listed yet.');
+  db.prepare('UPDATE users SET name=?, university=?, lecturer_reg_no=?, lecturer_status=? WHERE id=?').run(name, university, regNo, 'pending', req.user.id);
+  db.prepare('DELETE FROM lecturer_courses WHERE lecturer_id=?').run(req.user.id);
+  const ins = db.prepare('INSERT OR IGNORE INTO lecturer_courses(lecturer_id,course_id) VALUES(?,?)');
+  allCourseIds.forEach(cid => ins.run(req.user.id, cid));
+  const courseNames = db.prepare(`SELECT name FROM courses WHERE id IN (${allCourseIds.map(() => '?').join(',')})`).all(...allCourseIds).map(c => c.name).join(', ');
+  notify(fullAdminIds(), { title: 'Lecturer to verify', body: `${name} (${university}) -- ${courseNames}`, url: '/admin#lecturers', tag: 'lecturer' });
+  res.redirect('/lecturer');
+});
+app.get('/lecturer', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/lecturer');
+  if (!req.user.is_lecturer) return res.redirect('/dashboard');
+  if (!profileComplete(req.user)) return res.redirect('/lecturer/welcome');
+  if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user));
+  if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
+  const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
+  const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
+  const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
+  const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
+<select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option></select>
+<div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
+<label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
+<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
+<button>Publish -- goes live immediately</button></form>
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');function sync(){fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+  const pagesList = myPages.map(p => {
+    const [icon, label] = KIND_META[p.kind] || KIND_META.html;
+    return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+<div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
+  }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
+  res.send(layout('My courses', `<h1>My courses</h1><p class="mut" style="margin-top:0">${esc(req.user.university)}${req.user.lecturer_reg_no ? ' &middot; ' + esc(req.user.lecturer_reg_no) : ''}</p>
+${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+<div>${courseLinks}</div>
+${uploadForm}<h3>Your uploads (${myPages.length})</h3>${pagesList}`, req.user));
+});
+app.post('/lecturer/upload', upload.single('file'), (req, res) => {
+  if (!req.user || !req.user.is_lecturer) return res.sendStatus(403);
+  if (req.user.lecturer_status !== 'approved') return res.sendStatus(403);
+  const courseId = Number(req.body.course_id);
+  const owns = courseId && db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(req.user.id, courseId);
+  if (!owns) return res.redirect(back('Pick one of your own courses.'));
+  const kind = ['pdf', 'doc', 'html'].includes(req.body.kind) ? req.body.kind : 'pdf';
+  const title = (req.body.title || '').trim();
+  if (!req.file) return res.redirect(back('Choose a file first.'));
+  const base = req.file.originalname.replace(/\.[a-z0-9]+$/i, '');
+  const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base);
+  if (kind === 'pdf' || kind === 'doc') {
+    db.prepare('INSERT INTO pages(slug,title,html,kind,file_data,file_mime,file_name,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+      .run(slug, title || base, '', kind, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, req.user.id, courseId);
+  } else {
+    db.prepare('INSERT INTO pages(slug,title,html,kind,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?)')
+      .run(slug, title || base, req.file.buffer.toString('utf8'), kind, aud.dept, aud.level, req.user.id, courseId);
+  }
+  announceUpload({ title: title || base, slug, paid: 0, ...aud });
+  res.redirect('/lecturer?msg=' + encodeURIComponent(`Published at /p/${slug}`));
+});
+app.get('/lecturer/pages/:id/edit', (req, res) => {
+  if (!req.user || !req.user.is_lecturer) return res.redirect('/login');
+  const p = db.prepare('SELECT * FROM pages WHERE id=? AND author_id=?').get(req.params.id, req.user.id);
+  if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
+  res.send(layout('Edit upload', `<p class="mut"><a href="/lecturer">&larr; Back</a></p><h1 style="font-size:24px">${esc(p.title)}</h1>
+<form class="card" method="post" action="/lecturer/pages/${p.id}/edit" enctype="multipart/form-data">
+<input name="title" value="${esc(p.title)}" required maxlength="140">
+<label class="mut">Replace the file (optional -- leave blank to keep the current one)</label>
+<input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : '.html,.htm'}">
+<label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
+<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>
+<button>Save changes</button></form>`, req.user));
+});
+app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
+  if (!req.user || !req.user.is_lecturer) return res.redirect('/login');
+  const p = db.prepare('SELECT * FROM pages WHERE id=? AND author_id=?').get(req.params.id, req.user.id);
+  if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
+  const title = (req.body.title || '').trim() || p.title;
+  const aud = readAudience(req.body, title);
+  if (req.file) {
+    if (p.kind === 'pdf' || p.kind === 'doc') db.prepare('UPDATE pages SET title=?, file_data=?, file_mime=?, file_name=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, p.id);
+    else db.prepare('UPDATE pages SET title=?, html=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer.toString('utf8'), aud.dept, aud.level, p.id);
+  } else {
+    db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
+  }
+  res.redirect('/lecturer?msg=' + encodeURIComponent('Saved.'));
+});
+app.post('/lecturer/pages/:id/delete', (req, res) => {
+  if (!req.user || !req.user.is_lecturer) return res.redirect('/login');
+  const p = db.prepare('SELECT id FROM pages WHERE id=? AND author_id=?').get(req.params.id, req.user.id);
+  if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
+  db.prepare('DELETE FROM pages WHERE id=?').run(p.id);
+  res.redirect('/lecturer?msg=' + encodeURIComponent('Deleted.'));
+});
+// Browse a course's uploads folder-style: university, then lecturer, then their files -- so one lecturer
+// never has to wade through a long flat list to find a colleague's (or another institution's) material.
+app.get('/lecturer/course/:id', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const course = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id);
+  if (!course) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
+  if (req.user.is_lecturer) {
+    const owns = db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(req.user.id, course.id);
+    if (!owns && !can.full(req.user)) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
+  } else if (!can.full(req.user)) return res.status(404).send(layout('Not found', '<p><a href="/dashboard">Back</a></p>', req.user));
+  const rows = db.prepare(`SELECT p.*, u.name AS author_name, u.university AS author_university FROM pages p JOIN users u ON u.id=p.author_id WHERE p.course_id=? ORDER BY u.university, u.name, p.id DESC`).all(course.id);
+  const byUni = {};
+  rows.forEach(r => { (byUni[r.author_university] = byUni[r.author_university] || {})[r.author_name] = (byUni[r.author_university][r.author_name] || []).concat(r); });
+  const html = Object.keys(byUni).sort().map(uni => `<details class="card"><summary style="cursor:pointer;font-weight:600">${esc(uni)}</summary>
+${Object.keys(byUni[uni]).sort().map(name => `<details style="margin:8px 0 0 10px"><summary style="cursor:pointer">${esc(name)}</summary>
+${byUni[uni][name].map(p => { const [icon, label] = KIND_META[p.kind] || KIND_META.html; return `<p style="margin:6px 0 6px 14px"><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a> <span class="mut">${label}</span></p>`; }).join('')}
+</details>`).join('')}
+</details>`).join('') || '<p class="mut">No uploads for this course yet.</p>';
+  res.send(layout(course.name, `<p class="mut"><a href="${req.user.is_lecturer ? '/lecturer' : '/admin'}">&larr; Back</a></p><h1>${esc(course.name)}</h1>${html}`, req.user));
 });
 app.get('/api/username/check', (req, res) => {
   if (!req.user) return res.sendStatus(401);
@@ -2230,10 +2388,13 @@ app.get('/p/:slug', (req, res) => {
   if (p.kind === 'video') {
     return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
   }
-  // pdf / doc: a small wrapper page; the file itself streams from /p/:slug/raw
+  // pdf: the browser's own PDF viewer, embedded. doc: converted to HTML right in the browser (Mammoth.js),
+  // so the file is only ever fetched through the same authenticated request everything else here uses.
   const embed = p.kind === 'pdf'
     ? `<embed src="/p/${p.slug}/raw" type="application/pdf" style="width:100%;height:75vh;border:0;border-radius:12px">`
-    : `<p class="mut">Word documents open in your device's document app.</p>`;
+    : `<div id="docViewer" class="doc-viewer"><p class="mut">Loading document&hellip;</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script>fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return mammoth.convertToHtml({arrayBuffer:buf})}).then(function(result){document.getElementById('docViewer').innerHTML=result.value||'<p class="mut">This document has no readable text to preview.</p>'}).catch(function(){document.getElementById('docViewer').innerHTML='<p class="mut">Could not preview this document here -- try the download link below.</p>'})</script>`;
   res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
 });
 
@@ -2378,6 +2539,33 @@ app.post('/signup', async (req, res) => {
   res.send(checkEmailPage(email));
 });
 
+app.get('/lecturer/signup', (req, res) => res.send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1>
+<p class="mut">For teaching staff only. Students should use the regular <a href="/signup">sign up</a> instead.</p>
+<form method="post" class="card">
+<input name="name" placeholder="Your name" required maxlength="80">
+<input name="email" type="email" placeholder="Email address" required>
+<input name="password" type="password" placeholder="Password (8+ characters)" required>
+<button>Create lecturer account</button></form>
+${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
+<p class="mut">Already registered? <a href="/login">Log in</a></p></div>`, null)));
+app.post('/lecturer/signup', async (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 80);
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const pw = String(req.body.password || '');
+  const bad = m => res.status(400).send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1><p class="err">${esc(m)}</p>
+<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required><button>Create lecturer account</button></form></div>`, null));
+  if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
+  if (pw.length < 8) return bad('Password must be at least 8 characters.');
+  let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+  if (u && u.verified) return bad('That email is already registered. Try logging in.');
+  if (!u) {
+    const id = db.prepare('INSERT INTO users(name,email,hash,is_lecturer) VALUES(?,?,?,1)').run(name, email, bcrypt.hashSync(pw, 12)).lastInsertRowid;
+    u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+  }
+  if ((await sendSafely(req, u)) === 'fail') return bad("We couldn't send the verification email. Please try again in a minute.");
+  res.send(checkEmailPage(email));
+});
+
 app.get('/login', (req, res) => res.send(authForm('login', '', safeNext(req.query.next))));
 app.post('/login', (req, res) => {
   const next = safeNext(req.body.next);
@@ -2446,7 +2634,9 @@ const gRedirect = req => process.env.GOOGLE_REDIRECT_URI || `${baseUrl(req)}/aut
 app.get('/auth/google', (req, res) => {
   if (!GOOGLE_ON) return res.redirect('/login');
   const state = crypto.randomBytes(16).toString('hex');
-  res.setHeader('Set-Cookie', `gstate=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${SECURE}`);
+  const cookies = [`gstate=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${SECURE}`];
+  if (req.query.as === 'lecturer') cookies.push(`gaslecturer=1; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${SECURE}`);
+  res.setHeader('Set-Cookie', cookies);
   res.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID, redirect_uri: gRedirect(req), response_type: 'code',
     scope: 'openid email profile', state, prompt: 'select_account'
@@ -2465,9 +2655,10 @@ app.get('/auth/google/callback', async (req, res) => {
     const g = await (await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${t.access_token}` } })).json();
     if (!g.email || !g.email_verified) throw new Error('Google email not verified');
     const email = g.email.toLowerCase(), rnd = () => bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 10);
+    const asLecturer = (req.headers.cookie || '').split(';').map(x => x.trim()).some(x => x === 'gaslecturer=1');
     let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
     if (!u) {
-      const id = db.prepare('INSERT INTO users(name,email,hash,verified) VALUES(?,?,?,1)').run(String(g.name || email.split('@')[0]).slice(0, 80), email, rnd()).lastInsertRowid;
+      const id = db.prepare('INSERT INTO users(name,email,hash,verified,is_lecturer) VALUES(?,?,?,1,?)').run(String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), asLecturer ? 1 : 0).lastInsertRowid;
       u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
     } else if (!u.verified) { // drop any password someone set before the real owner proved the email
       db.prepare('UPDATE users SET verified=1, hash=? WHERE id=?').run(rnd(), u.id);
@@ -2641,6 +2832,15 @@ app.get('/admin', adminish, (req, res) => {
 <form method="post" action="/positions/${p.id}/verify-reject" style="margin-top:4px"><button class="link">Reject</button></form>
 </div>`).join('') || '<p class="mut">No one waiting on you right now.</p>'}`;
   })() : '';
+  const lecturersSection = cf ? (() => {
+    const pend = db.prepare("SELECT id,name,email,university,lecturer_reg_no FROM users WHERE is_lecturer=1 AND lecturer_status='pending' ORDER BY id").all();
+    if (!pend.length) return '';
+    return `<h3 id="lecturers">Lecturers waiting for verification (${pend.length})</h3>${pend.map(l => {
+      const courses = db.prepare('SELECT c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=?').all(l.id).map(c => c.name).join(', ');
+      return `<div class="card"><b>${esc(l.name)}</b> <span class="mut">${esc(l.email)}</span><br><b>${esc(l.university)}</b>${l.lecturer_reg_no ? ' &middot; reg. no. ' + esc(l.lecturer_reg_no) : ''}<br><span class="mut">Teaches: ${esc(courses) || '(none picked)'}</span>
+<div class="row" style="gap:6px;margin-top:8px"><form method="post" action="/admin/lecturers/${l.id}/approve"><button>Verify</button></form><form method="post" action="/admin/lecturers/${l.id}/reject"><button class="link">Reject</button></form></div></div>`;
+    }).join('')}`;
+  })() : '';
   const observerSection = me.role === 'observer' ? (() => {
     const counts = {
       users: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user'").get().n,
@@ -2707,7 +2907,7 @@ ${replaceCtrl}
   }).join('')
     || '<p class="mut">No pages yet.</p>'}` : '';
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-${observerSection}${delegatedVerifySection}${pagesSection}${newsSection}${paymentsSection}${sponsorsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
+${observerSection}${delegatedVerifySection}${lecturersSection}${pagesSection}${newsSection}${paymentsSection}${sponsorsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
 });
 
 // Reads the "who is this for?" choices: a department (or all) and a level (or all, or detected from the course code).
@@ -2794,6 +2994,19 @@ app.post('/positions/:id/verify-reject', (req, res) => {
   if (!t || !canVerifyClaim(req.user, t)) return res.redirect(back('You cannot act on that claim.'));
   db.prepare("UPDATE users SET position_status='rejected' WHERE id=?").run(req.params.id);
   res.redirect(back('Rejected.'));
+});
+app.post('/admin/lecturers/:id/approve', admin, (req, res) => {
+  const t = db.prepare("SELECT id FROM users WHERE id=? AND is_lecturer=1 AND lecturer_status='pending'").get(req.params.id);
+  if (!t) return res.redirect(back('Nothing to verify.'));
+  db.prepare("UPDATE users SET lecturer_status='approved' WHERE id=?").run(t.id);
+  notify([t.id], { title: 'You are verified', body: 'You can now upload for your courses.', url: '/lecturer', tag: 'lecturer' });
+  res.redirect(back('Lecturer verified.'));
+});
+app.post('/admin/lecturers/:id/reject', admin, (req, res) => {
+  const t = db.prepare("SELECT id FROM users WHERE id=? AND is_lecturer=1 AND lecturer_status='pending'").get(req.params.id);
+  if (!t) return res.redirect(back('Nothing to reject.'));
+  db.prepare("UPDATE users SET lecturer_status='rejected' WHERE id=?").run(t.id);
+  res.redirect(back('Lecturer rejected.'));
 });
 app.post('/admin/positions/:id/approve', admin, (req, res) => {
   const t = db.prepare("SELECT id,position,role FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
