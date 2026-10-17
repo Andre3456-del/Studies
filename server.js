@@ -33,7 +33,8 @@ for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_has
   // Lecturers are a separate account type entirely -- their own signup link, their own verification
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
-  ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT']])
+  ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -375,7 +376,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
+    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -420,6 +421,12 @@ function usernameProblem(v, exceptId) {
   return '';
 }
 const LEVELS = [100, 200, 300, 400, 500, 600];
+// A representative (not exhaustive -- NUC lists ~280+) set of Nigerian federal, state and private
+// universities, for the lecturer institution picker. "Other" lets anyone not listed type their own.
+const NIGERIAN_UNIVERSITIES = ['University of Uyo', 'University of Ibadan', 'University of Lagos', 'Ahmadu Bello University', 'University of Nigeria, Nsukka', 'Obafemi Awolowo University', 'Bayero University, Kano', 'University of Benin', 'University of Calabar', 'University of Ilorin', 'University of Jos', 'University of Port Harcourt', 'University of Maiduguri', 'Usmanu Danfodiyo University', 'Federal University of Technology, Akure', 'Federal University of Technology, Minna', 'Federal University of Technology, Owerri', 'Federal University, Oye-Ekiti', 'Federal University, Dutse', 'Federal University, Dutsin-Ma', 'Federal University, Kashere', 'Federal University, Lafia', 'Federal University, Lokoja', 'Federal University, Otuoke', 'Federal University, Wukari', 'Federal University, Birnin Kebbi', 'Federal University, Gusau', 'Federal University, Gashua', 'Federal University of Agriculture, Abeokuta', 'Nnamdi Azikiwe University', 'Nasarawa State University, Keffi', 'National Open University of Nigeria', 'Nigerian Defence Academy', 'Abubakar Tafawa Balewa University',
+  'Abia State University', 'Adamawa State University', 'Akwa Ibom State University', 'Bauchi State University', 'Benue State University', 'Borno State University', 'Cross River State University of Technology', 'Delta State University, Abraka', 'Ebonyi State University', 'Ekiti State University', 'Enugu State University of Science and Technology', 'Gombe State University', 'Imo State University', 'Kaduna State University', 'Kano State University', 'Kebbi State University of Science and Technology', 'Kogi State University', 'Kwara State University', 'Lagos State University', 'Nasarawa State University', 'Ondo State University of Science and Technology', 'Osun State University', 'Plateau State University', 'Rivers State University', 'Sokoto State University', 'Taraba State University', 'Zamfara State University',
+  'Covenant University', 'Babcock University', 'Bowen University', 'Afe Babalola University', 'American University of Nigeria', 'Nile University of Nigeria', "Redeemer's University", 'Lead City University', 'Madonna University', 'Igbinedion University', 'Benson Idahosa University', 'Joseph Ayo Babalola University', 'Caleb University', 'Achievers University', 'Landmark University', 'Bingham University', 'Veritas University', 'Al-Hikmah University', 'Crescent University', 'Pan-Atlantic University', 'Crawford University', 'Novena University', 'Salem University', 'Tansian University', 'Gregory University', 'Augustine University',
+  'Other (type it in below)'];
 // A course code's first digit is the level: GST 121 / ENT 121 = 100 level, PHY 2xx = 200 level ... up to 6xx.
 function levelFromText(text) {
   const m = /\b[A-Za-z]{2,5}[\s_-]?([1-6])\d{2}\b/.exec(String(text || ''));
@@ -709,7 +716,7 @@ app.post('/api/push/unsubscribe', (req, res) => {
 });
 
 const ONLINE_MS = 2 * 60 * 1000; // a user counts as "online" if seen in the last 2 minutes
-const isOnline = u => !!u.last_seen && Date.now() - u.last_seen < ONLINE_MS;
+const isOnline = u => !!u.last_seen && Date.now() - u.last_seen < ONLINE_MS && !u.hide_active;
 const presenceDot = u => `<span title="${isOnline(u) ? 'Online' : 'Offline'}" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${isOnline(u) ? '#22c55e' : '#ef4444'};margin-right:7px;vertical-align:middle"></span>`;
 
 // Roles: user | partial (HTML pages only) | content (all file types) | news | support (login help) | admin (everything).
@@ -736,6 +743,7 @@ const isCentral = u => !!u && u.email === ADMIN_EMAIL;
 const central = (req, res, next) => isCentral(req.user) ? next() : res.sendStatus(403);
 
 const CSS = `:root{--bg:#12121c;--panel:rgba(32,48,96,.30);--line:rgba(56,176,248,.24);--fg:#eaf2ff;--mut:#93a0bd;--blue:#38b0f8;--blue2:#1c7fe0;--pink:#f000e8;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+:root[data-theme="light"]{--bg:#f4f7fc;--panel:rgba(56,176,248,.08);--line:rgba(28,96,160,.22);--fg:#0e1a2b;--mut:#51607a;--blue:#1c7fe0;--blue2:#145fb0;--pink:#c400bc;color-scheme:light}
 html{background:var(--bg);scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:radial-gradient(900px 520px at 12% -8%,rgba(56,176,248,.22),transparent 62%),radial-gradient(700px 440px at 96% 4%,rgba(240,0,232,.13),transparent 60%),var(--bg);background-attachment:fixed}
@@ -946,7 +954,8 @@ const layout = (title, body, user, opts = {}) => {
   const drawerBottom = user
     ? `<a class="drawer-item" href="/settings"><span>⚙️</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item" style="width:100%;text-align:left;background:none;color:inherit;box-shadow:none;font:inherit;border:0;cursor:pointer"><span>🚪</span>Log out</button></form>`
     : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title><link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#12121c"><style>${CSS}</style></head><body>
+  const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title><link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body>
 <div id="scrim" class="scrim"></div>
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
@@ -1177,13 +1186,13 @@ app.get('/open', (req, res) => {
 // A member's profile: what they've chosen to share (university, department, level, their verified position) plus their approved news.
 app.get('/u/:id', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
-  const u = db.prepare('SELECT id,name,title,position_auto_role,avatar_mime,username,department,university,level,last_seen FROM users WHERE id=?').get(Number(req.params.id));
+  const u = db.prepare('SELECT id,name,title,position_auto_role,avatar_mime,username,department,university,level,last_seen,hide_active FROM users WHERE id=?').get(Number(req.params.id));
   if (!u) return res.status(404).send(layout('Not found', '<h2>Member not found</h2>', req.user));
   const facts = [['University', u.university], ['Department', u.department], ['Level', u.level ? u.level + ' level' : null]].filter(r => r[1])
     .map(r => `<tr><td class="mut">${r[0]}</td><td>${esc(String(r[1]))}</td></tr>`).join('');
   const posts = db.prepare("SELECT id,title,created_at FROM news WHERE author_id=? AND status='approved' ORDER BY id DESC LIMIT 5").all(u.id);
   const me = u.id === req.user.id, areFriends = !me && friendStatus(req.user.id, u.id) === 'friends';
-  const action = me ? '<a class="btn ghost" href="/settings">Edit my profile</a>'
+  const action = me ? '<a class="btn ghost" href="/settings/profile">Edit my profile</a>'
     : areFriends ? `<a class="btn" href="/chat/${u.id}">Message ${esc(u.name.split(' ')[0])}</a>`
     : friendActionHtml(req.user.id, u.id);
   res.send(layout(u.name, `<p class="mut" style="margin:0 0 12px"><a href="javascript:history.back()">&larr; Back</a></p>
@@ -1418,7 +1427,7 @@ app.get('/chat', (req, res) => {
 <form method="post" action="/api/friends/${u.id}/decline" style="display:inline"><button class="link">Decline</button></form></div>`).join('')}` : '';
     return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
   }
-  const friends = db.prepare('SELECT id,name,avatar_mime,last_seen FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ')').all();
+  const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ')').all();
   const row = (avatarHtml, name, sub, href, unread, dot) => `<a class="chat-item" href="${href}"><span class="av-wrap" style="position:relative">${avatarHtml}${dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${dot}"></span>` : ''}</span><span class="meta"><b>${esc(name)}</b><span>${sub}</span></span>${unread ? `<b class="nbadge">${badgeText(unread)}</b>` : ''}</a>`;
   const friendRows = friends.map(u => {
     const m = lastMessageWith(me, u.id);
@@ -1696,7 +1705,7 @@ app.get('/chat/:id', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
   const otherId = Number(req.params.id);
   if (otherId === req.user.id) return res.redirect('/chat');
-  const other = db.prepare('SELECT id,name,title,avatar_mime,last_seen FROM users WHERE id=?').get(otherId);
+  const other = db.prepare('SELECT id,name,title,avatar_mime,last_seen,hide_active FROM users WHERE id=?').get(otherId);
   if (!other) return res.status(404).send(layout('Not found', '<h2>User not found</h2>', req.user));
   if (friendStatus(req.user.id, otherId) !== 'friends') return res.status(403).send(layout('Not friends yet', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h2>You are not friends with ${esc(other.name)} yet</h2><p>${friendActionHtml(req.user.id, otherId)}</p>`, req.user));
   const rows = db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id ASC').all(req.user.id, otherId, otherId, req.user.id)
@@ -2149,12 +2158,18 @@ app.get('/lecturer/welcome', (req, res) => {
 function lecturerWelcomePage(u, err = '') {
   const courses = db.prepare('SELECT id, name FROM courses ORDER BY name').all();
   const picked = db.prepare('SELECT course_id FROM lecturer_courses WHERE lecturer_id=?').all(u.id).map(r => r.course_id);
+  const uniKnown = u.university && NIGERIAN_UNIVERSITIES.includes(u.university);
   return layout('Finish setting up', `<div class="auth"><h1>A few details</h1><p class="mut">This goes to a full admin to verify you're really on staff at the institution you name.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
 <form method="post" class="card">
 <input name="name" value="${esc(u.name || '')}" placeholder="Your name" required maxlength="80">
-<input name="university" value="${esc(u.university || '')}" placeholder="Institution you teach at" required maxlength="120">
+<select name="university" id="uniSelect" required>
+<option value="">Institution you teach at&hellip;</option>
+${NIGERIAN_UNIVERSITIES.map(n => `<option value="${esc(n)}"${u.university === n ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+</select>
+<input name="university_other" id="uniOther" placeholder="Type your institution's name" maxlength="120" value="${!uniKnown ? esc(u.university || '') : ''}" style="${u.university && !uniKnown ? '' : 'display:none'}">
+<script>(function(){var s=document.getElementById('uniSelect'),o=document.getElementById('uniOther');function sync(){var other=s.value==='Other (type it in below)';o.style.display=other?'':'none';o.required=other}s.addEventListener('change',sync);sync()})()</script>
 <input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number (optional)" maxlength="60">
-<label class="mut">Which course(s) do you teach? (pick any that already exist)</label>
+<label class="mut">Which course(s) do you teach? (pick any that already exist -- you can pick more than one)</label>
 <div style="max-height:180px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0">${courses.map(c => `<label class="row" style="justify-content:flex-start;gap:8px;margin:4px 0;cursor:pointer"><input type="checkbox" name="course_id" value="${c.id}" style="width:auto"${picked.includes(c.id) ? ' checked' : ''}>${esc(c.name)}</label>`).join('') || '<p class="mut" style="margin:0">No courses listed yet -- add yours below.</p>'}</div>
 <input name="new_course" placeholder="Course not listed? Type its name" maxlength="120">
 <button>Submit for verification</button></form></div>`, u);
@@ -2163,7 +2178,8 @@ app.post('/lecturer/welcome', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/lecturer/welcome');
   if (!req.user.is_lecturer) return res.redirect('/welcome');
   const name = String(req.body.name || '').trim().slice(0, 80);
-  const university = String(req.body.university || '').trim().slice(0, 120);
+  const uniChoice = String(req.body.university || '').trim();
+  const university = (uniChoice === 'Other (type it in below)' ? String(req.body.university_other || '').trim() : uniChoice).slice(0, 120);
   const regNo = String(req.body.reg_no || '').trim().slice(0, 60) || null;
   const newCourseName = String(req.body.new_course || '').trim().slice(0, 120);
   const pickedIds = (Array.isArray(req.body.course_id) ? req.body.course_id : req.body.course_id ? [req.body.course_id] : []).map(Number).filter(Boolean);
@@ -2293,31 +2309,88 @@ app.get('/api/username/check', (req, res) => {
   res.json({ ok: !p, message: p || 'That username is available.' });
 });
 
+const SETTINGS_PAGES = [
+  ['/settings/profile', '👤', 'Profile', 'Your picture, name, and details'],
+  ['/settings/active-status', '🟢', 'Active status', 'Whether others see when you\u2019re online'],
+  ['/settings/appearance', '🎨', 'Appearance', 'Light or dark mode'],
+  ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
+];
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
+  const links = SETTINGS_PAGES.map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
+});
+app.get('/settings/profile', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/settings/profile');
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
   const avatarPreview = u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:64px;height:64px">` : `<span class="avatar" style="width:64px;height:64px;font-size:22px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
+  const avatarForm = `<div class="card row" style="align-items:center;gap:16px">${avatarPreview}<form method="post" action="/settings/avatar" enctype="multipart/form-data" style="flex:1;min-width:180px"><input type="file" name="file" accept="image/png,image/jpeg,image/webp" required><button class="ghost">Upload picture</button></form></div>`;
+  const msg = req.query.msg ? `<p class="${req.query.err ? 'err' : 'mut'}">${esc(req.query.msg)}</p>` : '';
+  if (u.is_lecturer) {
+    return res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
+<form method="post" action="/settings/profile" class="card">
+<input name="name" value="${esc(u.name || '')}" placeholder="Your name" required maxlength="80">
+<input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number (optional)" maxlength="60">
+<p class="mut" style="margin:4px 0">Institution: <b>${esc(u.university || '')}</b> (set once, verified -- contact a full admin to change it)</p>
+<button>Save</button></form>`, req.user));
+  }
   const posNote = u.position_status === 'pending' ? '<p class="pill pending">Position waiting for verification</p>' : u.position_status === 'approved' ? '<p class="pill">&#10003; Position verified</p>' : u.position_status === 'rejected' ? '<p class="err">Your position could not be verified.</p>' : '';
-  res.send(layout('Settings', `<h1>Settings</h1>${req.query.msg ? `<p class="${req.query.err ? 'err' : 'mut'}">${esc(req.query.msg)}</p>` : ''}
-<div class="card row" style="align-items:center;gap:16px">${avatarPreview}<form method="post" action="/settings/avatar" enctype="multipart/form-data" style="flex:1;min-width:180px"><input type="file" name="file" accept="image/png,image/jpeg,image/webp" required><button class="ghost">Upload picture</button></form></div>
-<form method="post" action="/settings" class="card">${profileFields(u, u.role === 'user')}${posNote}<button>Save</button></form>
-<div class="card"><b>Notifications</b><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>
+  res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
+<form method="post" action="/settings/profile" class="card">${profileFields(u, u.role === 'user')}${posNote}<button>Save</button></form>
 <script>${UNAME_JS}</script>`, req.user));
 });
-app.post('/settings', (req, res) => {
+app.post('/settings/profile', (req, res) => {
   if (!req.user) return res.sendStatus(401);
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  if (u.is_lecturer) {
+    const name = String(req.body.name || '').trim().slice(0, 80);
+    const regNo = String(req.body.reg_no || '').trim().slice(0, 60) || null;
+    if (!name) return res.redirect('/settings/profile?err=1&msg=' + encodeURIComponent('Enter your name.'));
+    db.prepare('UPDATE users SET name=?, lecturer_reg_no=? WHERE id=?').run(name, regNo, u.id);
+    return res.redirect('/settings/profile?msg=' + encodeURIComponent('Saved.'));
+  }
   const { d, problem } = readProfile(u, req.body);
-  if (problem) return res.redirect('/settings?err=1&msg=' + encodeURIComponent(problem));
+  if (problem) return res.redirect('/settings/profile?err=1&msg=' + encodeURIComponent(problem));
   const err = saveProfile(u, d);
-  if (err) return res.redirect('/settings?err=1&msg=' + encodeURIComponent(err));
-  res.redirect('/settings?msg=' + encodeURIComponent('Saved.'));
+  if (err) return res.redirect('/settings/profile?err=1&msg=' + encodeURIComponent(err));
+  res.redirect('/settings/profile?msg=' + encodeURIComponent('Saved.'));
 });
 app.post('/settings/avatar', upload.single('file'), (req, res) => {
   if (!req.user) return res.sendStatus(401);
-  if (!req.file || !/^image\//.test(req.file.mimetype)) return res.redirect('/settings?msg=' + encodeURIComponent('Choose an image file.'));
+  if (!req.file || !/^image\//.test(req.file.mimetype)) return res.redirect('/settings/profile?msg=' + encodeURIComponent('Choose an image file.'));
   db.prepare('UPDATE users SET avatar_data=?, avatar_mime=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.user.id);
-  res.redirect('/settings?msg=' + encodeURIComponent('Picture updated.'));
+  res.redirect('/settings/profile?msg=' + encodeURIComponent('Picture updated.'));
+});
+app.get('/settings/active-status', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/settings/active-status');
+  const hidden = !!db.prepare('SELECT hide_active FROM users WHERE id=?').get(req.user.id).hide_active;
+  res.send(layout('Active status', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Active status</h1>
+<p class="mut">When this is on, friends can see when you're online in chat. Turn it off to always appear offline to them.</p>
+<form method="post" action="/settings/active-status" class="card row" style="align-items:center"><div style="flex:1"><b>Show when I'm online</b></div><button name="hide" value="${hidden ? '0' : '1'}">${hidden ? 'Turn on' : 'Turn off'}</button></form>`, req.user));
+});
+app.post('/settings/active-status', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  db.prepare('UPDATE users SET hide_active=? WHERE id=?').run(req.body.hide === '1' ? 1 : 0, req.user.id);
+  res.redirect('/settings/active-status');
+});
+app.get('/settings/appearance', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/settings/appearance');
+  const theme = db.prepare('SELECT theme FROM users WHERE id=?').get(req.user.id).theme || 'dark';
+  res.send(layout('Appearance', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Appearance</h1>
+<form method="post" action="/settings/appearance" class="card">
+<label class="row" style="gap:10px;cursor:pointer"><input type="radio" name="theme" value="dark" style="width:auto"${theme === 'dark' ? ' checked' : ''}> Dark mode</label>
+<label class="row" style="gap:10px;cursor:pointer;margin-top:8px"><input type="radio" name="theme" value="light" style="width:auto"${theme === 'light' ? ' checked' : ''}> Light mode</label>
+<button style="margin-top:10px">Save</button></form>`, req.user));
+});
+app.post('/settings/appearance', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  db.prepare('UPDATE users SET theme=? WHERE id=?').run(req.body.theme === 'light' ? 'light' : 'dark', req.user.id);
+  res.redirect('/settings/appearance');
+});
+app.get('/settings/notifications', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/settings/notifications');
+  res.send(layout('Notifications', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Notifications</h1>
+<div class="card"><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>`, req.user));
 });
 
 function youtubeId(url) {
@@ -2388,10 +2461,30 @@ app.get('/p/:slug', (req, res) => {
   if (p.kind === 'video') {
     return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
   }
-  // pdf: the browser's own PDF viewer, embedded. doc: converted to HTML right in the browser (Mammoth.js),
-  // so the file is only ever fetched through the same authenticated request everything else here uses.
+  // pdf: rendered page-by-page onto <canvas> with PDF.js -- the browser's native <embed> PDF viewer does not
+  // reliably work on mobile Chrome/Android, which is why this needed replacing rather than just embedding.
+  // doc: converted to HTML right in the browser (Mammoth.js). Both fetch through the same authenticated route
+  // everything else here uses, so department/level access control still applies either way.
   const embed = p.kind === 'pdf'
-    ? `<embed src="/p/${p.slug}/raw" type="application/pdf" style="width:100%;height:75vh;border:0;border-radius:12px">`
+    ? `<div id="pdfViewer" class="doc-viewer"><p class="mut">Loading PDF&hellip;</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.min.js"></script>
+<script>(function(){
+  var box=document.getElementById('pdfViewer');
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.worker.min.js';
+  fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return pdfjsLib.getDocument({data:buf}).promise}).then(function(doc){
+    box.innerHTML='';
+    var chain=Promise.resolve();
+    var _loop=function(n){chain=chain.then(function(){return doc.getPage(n)}).then(function(page){
+      var scale=Math.min(2,(box.clientWidth||320)/page.getViewport({scale:1}).width);
+      var vp=page.getViewport({scale:scale}),canvas=document.createElement('canvas');
+      canvas.width=vp.width;canvas.height=vp.height;canvas.style.width='100%';canvas.style.marginBottom='10px';canvas.style.borderRadius='8px';
+      box.appendChild(canvas);
+      return page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
+    })};
+    for(var n=1;n<=doc.numPages;n++)_loop(n);
+    return chain;
+  }).catch(function(){box.innerHTML='<p class="mut">Could not preview this PDF here -- try the download link below.</p>'});
+})()</script>`
     : `<div id="docViewer" class="doc-viewer"><p class="mut">Loading document&hellip;</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script>fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return mammoth.convertToHtml({arrayBuffer:buf})}).then(function(result){document.getElementById('docViewer').innerHTML=result.value||'<p class="mut">This document has no readable text to preview.</p>'}).catch(function(){document.getElementById('docViewer').innerHTML='<p class="mut">Could not preview this document here -- try the download link below.</p>'})</script>`;
@@ -2766,7 +2859,7 @@ app.get('/dashboard', (req, res) => {
 app.get('/admin', adminish, (req, res) => {
   const me = req.user, central_ = isCentral(me);
   const cp = can.pages(me), ck = can.allKinds(me), cn = can.news(me), cs = can.support(me), cf = can.full(me);
-  const pages = cp ? db.prepare('SELECT * FROM pages ORDER BY id DESC').all() : [];
+  const pages = cp ? db.prepare('SELECT * FROM pages WHERE author_id IS NULL ORDER BY id DESC').all() : [];
   const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${ROLES.map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
   const paymentsSection = cf ? (() => {
     const claims = db.prepare("SELECT p.*, u.name un, u.email ue, pg.title pt, pg.slug ps, pg.price_kobo FROM purchases p JOIN users u ON u.id=p.user_id JOIN pages pg ON pg.id=p.page_id WHERE p.status='pending' ORDER BY p.id DESC").all();
@@ -2890,22 +2983,27 @@ ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name=
 ${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
 <script>if('launchQueue' in window){window.launchQueue.setConsumer(function(lp){if(!lp.files||!lp.files.length)return;lp.files[0].getFile().then(function(file){var dt=new DataTransfer();dt.items.add(file);var fi=document.querySelector('#fileField input[type=file]');fi.files=dt.files;var n=file.name.toLowerCase();var ks=document.getElementById('kindSelect');ks.value=n.indexOf('.pdf')>-1?'pdf':(n.indexOf('.doc')>-1?'doc':'html');ks.dispatchEvent(new Event('change'));document.getElementById('upload').scrollIntoView({behavior:'smooth'})})})}</script>` : ''}
 ${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',function(e){if(e.data&&e.data.type==='uploads-synced')location.reload()})}</script>` : ''}
-<h3 id="pages">Pages (${pages.length})</h3>${pages.map(p => {
-    const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
-    const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
-    const replaceCtrl = p.kind === 'video'
-      ? (ck ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form>` : '')
-      : (p.kind === 'html' || ck ? `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>` : '');
-    const deptList = deptListOf(p);
-    const forWho = `${deptList.length ? esc(deptList.join(', ')) : 'All departments'} &middot; ${p.level ? p.level + ' level' : 'All levels'}`;
-    return `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${pIcon} ${esc(p.title)}</a><span class="mut">/p/${p.slug} &middot; ${pLabel} &middot; ${status}</span></div>
+<h3 id="pages">Pages (${pages.length})</h3>${(() => {
+    if (!pages.length) return '<p class="mut">No pages yet.</p>';
+    const pageCard = p => {
+      const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
+      const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
+      const replaceCtrl = p.kind === 'video'
+        ? (ck ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form>` : '')
+        : (p.kind === 'html' || ck ? `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>` : '');
+      const deptList = deptListOf(p);
+      const forWho = `${deptList.length ? esc(deptList.join(', ')) : 'All departments'} &middot; ${p.level ? p.level + ' level' : 'All levels'}`;
+      return `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${pIcon} ${esc(p.title)}</a><span class="mut">/p/${p.slug} &middot; ${pLabel} &middot; ${status}</span></div>
 <p class="mut" style="margin:6px 0 0">For: ${forWho} &middot; <a href="/admin/pages/${p.id}/sort">Change</a></p>
 <div class="row" style="margin-top:10px">
 <form method="post" action="/admin/pages/${p.id}/toggle"><button class="link">${p.members_only ? '🔒 Members only — make open' : 'Open — make members only'}</button></form>
 ${replaceCtrl}
 <form method="post" action="/admin/pages/${p.id}/delete" onsubmit="return confirm('Delete this page?')"><button class="link">Delete</button></form></div></div>`;
-  }).join('')
-    || '<p class="mut">No pages yet.</p>'}` : '';
+    };
+    // Folders by level -- "All levels" first, then 100 up to 600, each only shown if it actually has pages.
+    const groups = [['All levels', pages.filter(p => !p.level)]].concat(LEVELS.map(l => [`${l} level`, pages.filter(p => p.level === l)]));
+    return groups.filter(([, list]) => list.length).map(([label, list]) => `<details class="card"><summary style="cursor:pointer;font-weight:600">${esc(label)} (${list.length})</summary><div style="margin-top:10px">${list.map(pageCard).join('')}</div></details>`).join('');
+  })()}` : '';
   res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 ${observerSection}${delegatedVerifySection}${lecturersSection}${pagesSection}${newsSection}${paymentsSection}${sponsorsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
 });
@@ -2957,8 +3055,9 @@ app.get('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select><button>Save</button></form>`, req.user));
 });
 app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
-  const p = db.prepare('SELECT id FROM pages WHERE id=?').get(req.params.id);
+  const p = db.prepare('SELECT id, author_id FROM pages WHERE id=?').get(req.params.id);
   if (!p) return res.redirect(back('Page not found.'));
+  if (p.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can change it.'));
   const aud = readAudience({ dept: req.body.dept, level: req.body.level === '' ? 'all' : req.body.level }, '');
   db.prepare('UPDATE pages SET dept=?, level=? WHERE id=?').run(aud.dept, aud.level, p.id);
   res.redirect(back('Saved who this upload is for.'));
@@ -3044,8 +3143,9 @@ app.post('/admin/levels/advance', central, (req, res) => {
 });
 
 app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, res) => {
-  const page = db.prepare('SELECT kind FROM pages WHERE id=?').get(req.params.id);
+  const page = db.prepare('SELECT kind, author_id FROM pages WHERE id=?').get(req.params.id);
   if (!page) return res.redirect(back('Page not found.'));
+  if (page.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can change it.'));
   if (page.kind !== 'html' && !can.allKinds(req.user)) return res.sendStatus(403);
   if (!req.file) return res.redirect(back('Choose a file first.'));
   if (page.kind === 'pdf' || page.kind === 'doc') {
@@ -3124,10 +3224,14 @@ app.post('/admin/news/:id/edit', newsAdmin, upload.single('image'), (req, res) =
   res.redirect(back('News updated.'));
 });
 app.post('/admin/pages/:id/toggle', pagesAdmin, (req, res) => {
+  const p = db.prepare('SELECT author_id FROM pages WHERE id=?').get(req.params.id);
+  if (p && p.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can change it.'));
   db.prepare('UPDATE pages SET members_only = 1 - members_only WHERE id=?').run(req.params.id);
   res.redirect('/admin');
 });
 app.post('/admin/pages/:id/delete', pagesAdmin, (req, res) => {
+  const p = db.prepare('SELECT author_id FROM pages WHERE id=?').get(req.params.id);
+  if (p && p.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can delete it.'));
   db.prepare('DELETE FROM pages WHERE id=?').run(req.params.id);
   res.redirect(back('Page deleted.'));
 });
