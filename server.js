@@ -67,7 +67,9 @@ if (!newsCols.includes('image_mime')) db.exec('ALTER TABLE news ADD COLUMN image
 for (const [c, def] of [['scope_type', 'TEXT'], ['scope_department', 'TEXT'], ['scope_level', 'INTEGER'], ['scope_faculty', 'TEXT'], ['approver_id', 'INTEGER'], ['approver_status', 'TEXT']])
   if (!newsCols.includes(c)) db.exec(`ALTER TABLE news ADD COLUMN ${c} ${def}`);
 // Paid promotional posts from businesses/services -- shown in News, separately from regular submissions.
-db.exec(`CREATE TABLE IF NOT EXISTS sponsor_posts(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, contact TEXT, image_data BLOB, image_mime TEXT, reference TEXT UNIQUE NOT NULL, amount_kobo INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending_payment', created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT)`);
+db.exec(`CREATE TABLE IF NOT EXISTS sponsor_posts(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, contact TEXT, image_data BLOB, image_mime TEXT, reference TEXT UNIQUE NOT NULL, amount_kobo INTEGER NOT NULL, duration_days INTEGER NOT NULL DEFAULT 30, status TEXT NOT NULL DEFAULT 'pending_payment', created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT)`);
+const sponsorCols = db.prepare('PRAGMA table_info(sponsor_posts)').all().map(c => c.name);
+if (!sponsorCols.includes('duration_days')) db.exec("ALTER TABLE sponsor_posts ADD COLUMN duration_days INTEGER NOT NULL DEFAULT 30");
 // ---- usernames, departments, friends, groups, receipts, reactions, push subscriptions ----
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(lower(username))');
 db.exec(`
@@ -148,7 +150,7 @@ const BANK_NAME = process.env.BANK_NAME || 'OPay';
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || '7043309103';
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'Esseabasi Usen Inyangmme';
 const PRICE_KOBO = Math.round(PRICE_NGN * 100);
-const SPONSOR_PRICE_NGN = Number(process.env.SPONSOR_PRICE_NGN || 2000);
+const SPONSOR_PRICE_NGN = Number(process.env.SPONSOR_PRICE_NGN || 2500);
 const SPONSOR_PRICE_KOBO = Math.round(SPONSOR_PRICE_NGN * 100);
 
 // Messages are encrypted at rest with AES-256-GCM, so a stolen copy of the database file is unreadable.
@@ -2525,14 +2527,34 @@ app.post('/admin/payments/:id/reject', admin, (req, res) => {
 app.get('/sponsor', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/sponsor');
   res.send(layout('Advertise on Studies Hub', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>Advertise your business or service</h1>
-<p class="mut">₦${SPONSOR_PRICE_NGN} gets your post shown in the News section for 30 days, clearly marked "Sponsored".</p>
+<p class="mut">₦${SPONSOR_PRICE_NGN} a month to show your post in the News section, clearly marked "Sponsored". Pick how long you want it to run and the price is worked out for you.</p>
 <form class="card" method="post" action="/sponsor" enctype="multipart/form-data">
 <input name="title" placeholder="What are you advertising?" required maxlength="140">
 <textarea name="body" placeholder="Describe it" required maxlength="2000" style="width:100%;min-height:80px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea>
 <input name="contact" placeholder="How should people reach you? (phone, @username, etc.)" maxlength="140">
 <input type="file" name="image" accept="image/*" style="padding:9px 0">
+<label class="mut">Start date</label><input type="date" name="start_date" id="sponsorStart" required>
+<label class="mut">End date</label><input type="date" name="end_date" id="sponsorEnd" required>
+<p class="pill" id="sponsorBill" style="margin:8px 0">Pick your dates to see the price.</p>
 <button>Continue to payment</button>
-</form>`, req.user));
+</form>
+<script>(function(){
+  var sd=document.getElementById('sponsorStart'),ed=document.getElementById('sponsorEnd'),bp=document.getElementById('sponsorBill'),rate=${SPONSOR_PRICE_NGN};
+  var today=new Date();today.setHours(0,0,0,0);var todayStr=today.toISOString().slice(0,10);
+  sd.min=todayStr;
+  function sync(){
+    if(!sd.value){ed.min=todayStr;return}
+    var startD=new Date(sd.value+'T00:00:00'),minEnd=new Date(startD.getTime()+86400000),minEndStr=minEnd.toISOString().slice(0,10);
+    ed.min=minEndStr;
+    if(ed.value&&ed.value<minEndStr)ed.value=minEndStr;
+    if(sd.value&&ed.value){
+      var days=Math.round((new Date(ed.value+'T00:00:00')-startD)/86400000);
+      var price=Math.ceil((days/30)*rate);
+      bp.textContent='₦'+price.toLocaleString()+' for '+days+' day'+(days===1?'':'s')+' ('+sd.value+' to '+ed.value+')';
+    } else bp.textContent='Pick your dates to see the price.';
+  }
+  sd.addEventListener('change',sync);ed.addEventListener('change',sync);sync();
+})()</script>`, req.user));
 });
 app.post('/sponsor', upload.single('image'), (req, res) => {
   if (!req.user) return res.redirect('/login?next=/sponsor');
@@ -2541,10 +2563,17 @@ app.post('/sponsor', upload.single('image'), (req, res) => {
   const contact = String(req.body.contact || '').trim().slice(0, 140);
   if (!title || !body) return res.redirect('/sponsor');
   if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect('/sponsor');
+  const startDate = new Date(String(req.body.start_date || '') + 'T00:00:00');
+  const endDate = new Date(String(req.body.end_date || '') + 'T00:00:00');
+  const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+  if (isNaN(startDate) || isNaN(endDate) || startDate < todayMid || endDate <= startDate) return res.redirect('/sponsor');
+  const days = Math.round((endDate - startDate) / 86400000);
+  if (days < 1 || days > 366) return res.redirect('/sponsor'); // a year is a generous, sane ceiling
+  const amountKobo = Math.round(Math.ceil((days / 30) * SPONSOR_PRICE_NGN) * 100);
   const reference = `sponsor_${req.user.id}_${Date.now()}`;
-  const info = db.prepare("INSERT INTO sponsor_posts(user_id,title,body,contact,image_data,image_mime,reference,amount_kobo,status) VALUES(?,?,?,?,?,?,?,?,'pending_payment')")
-    .run(req.user.id, title, body, contact, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, reference, SPONSOR_PRICE_KOBO);
-  notify(fullAdminIds(), { title: 'Sponsor post payment claim', body: `${req.user.name} wants to advertise "${title}"`, url: '/admin#sponsors', tag: 'sponsor' });
+  const info = db.prepare("INSERT INTO sponsor_posts(user_id,title,body,contact,image_data,image_mime,reference,amount_kobo,duration_days,status) VALUES(?,?,?,?,?,?,?,?,?,'pending_payment')")
+    .run(req.user.id, title, body, contact, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, reference, amountKobo, days);
+  notify(fullAdminIds(), { title: 'Sponsor post payment claim', body: `${req.user.name} wants to advertise "${title}" for ${days} days`, url: '/admin#sponsors', tag: 'sponsor' });
   res.redirect('/sponsor/' + info.lastInsertRowid);
 });
 app.get('/sponsor/:id', (req, res) => {
@@ -2553,8 +2582,10 @@ app.get('/sponsor/:id', (req, res) => {
   if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
   const statusLine = s.status === 'approved' ? `<p class="pill">&#10003; Live until ${esc((s.expires_at || '').slice(0, 10))}</p>` : s.status === 'rejected' ? '<p class="err">This submission was not approved.</p>' : '<p class="pill pending">Waiting for payment to be confirmed</p>';
   res.send(layout('Your sponsor post', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>${esc(s.title)}</h1>${statusLine}
+<p class="mut">${s.duration_days} day${s.duration_days === 1 ? '' : 's'} &middot; ₦${(s.amount_kobo / 100).toLocaleString()}</p>
 <p class="mut"><a href="/sponsor/${s.id}/edit">Edit this post &rarr;</a></p>
-${s.status === 'pending_payment' ? `<div class="card"><p>Pay <b>₦${SPONSOR_PRICE_NGN}</b> by bank transfer to:</p><p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p><p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p><form method="post" action="/sponsor/${s.id}/claim"><button>I've paid</button></form></div>` : ''}`, req.user));
+${s.status === 'pending_payment' ? `<div class="card"><p>Pay <b>₦${(s.amount_kobo / 100).toLocaleString()}</b> by bank transfer to:</p><p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p><p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p><form method="post" action="/sponsor/${s.id}/claim"><button>I've paid</button></form></div>` : ''}
+<form method="post" action="/sponsor/${s.id}/delete" onsubmit="return confirm('Delete this sponsor post? This cannot be undone.')" style="margin-top:14px"><button class="link">Delete this post</button></form>`, req.user));
 });
 app.get('/sponsor/:id/edit', (req, res) => {
   if (!req.user) return res.redirect('/login');
@@ -2585,6 +2616,13 @@ app.post('/sponsor/:id/edit', upload.single('image'), (req, res) => {
   else db.prepare('UPDATE sponsor_posts SET title=?, body=?, contact=? WHERE id=?').run(title, body, contact, s.id);
   res.redirect('/sponsor/' + s.id);
 });
+app.post('/sponsor/:id/delete', (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const s = db.prepare('SELECT id FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
+  db.prepare('DELETE FROM sponsor_posts WHERE id=?').run(s.id);
+  res.redirect('/news');
+});
 app.post('/sponsor/:id/claim', (req, res) => {
   if (!req.user) return res.redirect('/login');
   const s = db.prepare("SELECT id FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(req.params.id, req.user.id);
@@ -2601,11 +2639,11 @@ app.get('/sponsor-image/:id', (req, res) => {
   res.send(Buffer.from(row.image_data));
 });
 app.post('/admin/sponsors/:id/approve', admin, (req, res) => {
-  const s = db.prepare('SELECT user_id, title FROM sponsor_posts WHERE id=?').get(req.params.id);
+  const s = db.prepare('SELECT user_id, title, duration_days FROM sponsor_posts WHERE id=?').get(req.params.id);
   if (!s) return res.redirect(back('Not found.'));
-  db.prepare("UPDATE sponsor_posts SET status='approved', expires_at=datetime('now','+30 days') WHERE id=?").run(req.params.id);
-  notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for 30 days.`, url: '/sponsor/' + req.params.id, tag: 'sponsor' });
-  res.redirect(back('Sponsor post approved -- live for 30 days.'));
+  db.prepare("UPDATE sponsor_posts SET status='approved', expires_at=datetime('now','+' || ? || ' days') WHERE id=?").run(s.duration_days, req.params.id);
+  notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for ${s.duration_days} days.`, url: '/sponsor/' + req.params.id, tag: 'sponsor' });
+  res.redirect(back(`Sponsor post approved -- live for ${s.duration_days} days.`));
 });
 app.post('/admin/sponsors/:id/reject', admin, (req, res) => {
   const s = db.prepare('SELECT user_id, title FROM sponsor_posts WHERE id=?').get(req.params.id);
@@ -2870,8 +2908,8 @@ app.get('/admin', adminish, (req, res) => {
   const sponsorsSection = cf ? (() => {
     const claims = db.prepare("SELECT s.*, u.name un FROM sponsor_posts s JOIN users u ON u.id=s.user_id WHERE s.status='pending_payment' ORDER BY s.id DESC").all();
     if (!claims.length) return '';
-    return `<h3 id="sponsors">Sponsor post payment claims (${claims.length})</h3>${claims.map(c => `<div class="card"><b>${esc(c.un)}</b> wants to advertise: <b>${esc(c.title)}</b><p class="mut">${esc(c.body.slice(0, 150))}${c.body.length > 150 ? '…' : ''}</p><p class="mut">₦${(c.amount_kobo / 100).toFixed(0)}</p>
-<div class="row" style="gap:6px"><form method="post" action="/admin/sponsors/${c.id}/approve"><button>Approve -- 30 days live</button></form><form method="post" action="/admin/sponsors/${c.id}/reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
+    return `<h3 id="sponsors">Sponsor post payment claims (${claims.length})</h3>${claims.map(c => `<div class="card"><b>${esc(c.un)}</b> wants to advertise: <b>${esc(c.title)}</b><p class="mut">${esc(c.body.slice(0, 150))}${c.body.length > 150 ? '…' : ''}</p><p class="mut">₦${(c.amount_kobo / 100).toLocaleString()} for ${c.duration_days} day${c.duration_days === 1 ? '' : 's'}</p>
+<div class="row" style="gap:6px"><form method="post" action="/admin/sponsors/${c.id}/approve"><button>Approve -- ${c.duration_days} days live</button></form><form method="post" action="/admin/sponsors/${c.id}/reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
   })() : '';
   const levelSection = central_ ? (() => {
     const counts = LEVELS.map(l => ({ l, n: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND level=?").get(l).n }));
