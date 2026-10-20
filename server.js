@@ -1711,6 +1711,27 @@ thread.addEventListener('click',function(e){
   if(kind==='reply')startReply(id);else if(kind==='react')openReact(id);else if(kind==='edit')startEdit(id);else if(kind==='delete-me')doDelete(id,'me');else if(kind==='delete-everyone')doDelete(id,'everyone');
 });
 
+/* ---- mobile reply gestures: swipe a message horizontally or long-press it ---- */
+var touchStart=null,pressTimer=null,gestureHandled=false;
+thread.addEventListener('touchstart',function(e){
+  var b=e.target.closest?e.target.closest('[data-id]'):null;
+  if(!b||e.target.closest('button,a,input'))return;
+  var t=e.touches[0];touchStart={id:b.getAttribute('data-id'),x:t.clientX,y:t.clientY};
+  gestureHandled=false;
+  clearTimeout(pressTimer);
+  pressTimer=setTimeout(function(){if(touchStart){startReply(touchStart.id);gestureHandled=true;touchStart=null}},550);
+},{passive:true});
+thread.addEventListener('touchmove',function(e){
+  if(!touchStart)return;
+  var t=e.touches[0],dx=t.clientX-touchStart.x,dy=t.clientY-touchStart.y;
+  if(Math.abs(dx)>12||Math.abs(dy)>12)clearTimeout(pressTimer);
+  if(Math.abs(dx)>70&&Math.abs(dx)>Math.abs(dy)*1.3){
+    var id=touchStart.id;touchStart=null;gestureHandled=true;clearTimeout(pressTimer);startReply(id);
+  }
+},{passive:true});
+thread.addEventListener('touchend',function(){clearTimeout(pressTimer);touchStart=null},{passive:true});
+thread.addEventListener('touchcancel',function(){clearTimeout(pressTimer);touchStart=null},{passive:true});
+
 /* ---- voice notes: tap the mic to record, tap Send to deliver ---- */
 var rec=null,chunks=[],stream=null,t0=0,tick=null,cancelled=false;
 function pickMime(){var c=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus'];for(var i=0;i<c.length;i++){if(window.MediaRecorder&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(c[i]))return c[i]}return ''}
