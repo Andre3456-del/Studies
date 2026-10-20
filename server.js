@@ -1518,12 +1518,17 @@ function bubble(m){
 }
 function updateTick(id,status){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var tk=b.querySelector('[data-tick]');if(!tk)return;tk.innerHTML=tickHtml(status)}
 Array.prototype.forEach.call(thread.querySelectorAll('time[data-t]'),stamp);
-function poll(){fetch('/api/messages/poll?'+qs+'&after='+lastId).then(function(r){return r.json()}).then(function(j){
+var polling=false;
+function poll(){if(polling)return;polling=true;fetch('/api/messages/poll?'+qs+'&after='+lastId,{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
   (j.messages||[]).forEach(function(m){bubble(m);if(m.id>lastId)lastId=m.id});
   (j.receipts||[]).forEach(function(r){updateTick(r.id,r.status)});
-}).catch(function(){})}
+  polling=false;
+}).catch(function(){polling=false})}
+document.addEventListener('visibilitychange',function(){if(!document.hidden)poll()});
+window.addEventListener('focus',poll);
+window.addEventListener('online',poll);
 function post(url,obj,cb){fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id)cb(j);else alert((j&&j.error)||'Could not send.')}).catch(function(){alert('Could not send. Check your connection.')})}
-toBottom();setInterval(poll,3000);
+toBottom();setInterval(poll,1500);
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
   if(editingId){var id=editingId;editingId=null;input.value='';resizeInput();fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
   input.value='';resizeInput();var body=Object.assign({body:text},convType==='group'?{group:convId}:{to:convId});
@@ -1900,7 +1905,7 @@ app.get('/api/messages/poll', (req, res) => {
     const names = Object.fromEntries(groupMembers(gid).map(m => [m.id, m.name]));
     rows.forEach(m => { meta[m.id] = { from_name: names[m.sender_id] }; });
   } else {
-    const withId = Number(req.query.with);
+    const withId = Number(req.query.with || req.query.to);
     if (!withId) return res.status(400).json({ error: 'Missing conversation.' });
     rows = db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND id>? AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id ASC')
       .all(after, req.user.id, withId, withId, req.user.id);
@@ -1918,7 +1923,7 @@ app.get('/api/messages/poll', (req, res) => {
   // Tick refresh for messages I sent earlier in this conversation, so the sender's ticks update live even with no new messages.
   let receipts = [];
   if (!req.query.group) {
-    const withId = Number(req.query.with);
+    const withId = Number(req.query.with || req.query.to);
     const mine = db.prepare("SELECT id,recipient_id FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 30").all(req.user.id, withId);
     receipts = mine.map(m => ({ id: m.id, status: tickFor(m, m.recipient_id) }));
   }
