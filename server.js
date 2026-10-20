@@ -1038,9 +1038,10 @@ app.get('/privacy', (req, res) => {
 <ul>
 <li><b>Account details:</b> your name and email address, and a password (we never store your actual password -- only a one-way scrambled/hashed version that can't be reversed).</li>
 <li>${GOOGLE_ON ? '<b>Google sign-in:</b> if you use "Continue with Google," Google shares your name, email address, and whether Google has verified that email -- we don\'t see or store your Google password.' : ''}</li>
-<li><b>Account details:</b> your name and email address, and a password (we never store your actual password -- only a one-way scrambled/hashed version that can't be reversed).</li>
 <li><b>A username</b> (like @yourname) that other members use to find and add you as a friend. It is visible to any logged-in member.</li>
 <li><b>Student details:</b> your university, department and level, so we can show you the pages and CBT practice meant for your course. If you tell us you hold a position (like "Director of Socials"), that claim is checked by a school-authority admin before it shows beside your name.</li>
+<li><b>Lecturer details:</b> if you register as a lecturer, we collect your institution and the courses you select, plus an optional staff/registration number. A full admin reviews your lecturer details before upload permissions are enabled.</li>
+<li><b>Educational materials:</b> files or HTML learning materials you upload, their titles, course links, and the department/level audience you select.</li>
 <li><b>Profile details you choose to add:</b> a profile picture, from the Settings page. Other logged-in members can see your profile (picture, username, university, department, level, verified position) and your online/offline status.</li>
 <li><b>Activity used to run the site:</b> when you were last active, and, if you submit news or a payment claim, that submission and its status (pending/approved/rejected).</li>
 <li><b>Friends and groups:</b> who you have sent or received a friend request with, who you are friends with, and any group you create or are added to (its name and member list).</li>
@@ -1051,7 +1052,8 @@ app.get('/privacy', (req, res) => {
 <h2>How we use it</h2>
 <ul>
 <li>To create and secure your account, verify your email, and let you reset your password.</li>
-<li>To personalize your dashboard and show you only the uploads sorted for your department and level.</li>
+<li>To personalize your dashboard and show you educational materials sorted for your department and level.</li>
+<li>To verify lecturer accounts, link lecturers to their selected courses, and publish the learning materials they choose to upload.</li>
 <li>To show your name, photo, profile details and online/offline status to other logged-in members -- not to the public.</li>
 <li>To let you find and message friends, and to run groups you are part of.</li>
 <li>To send you a notification (if you turned them on) about things like a new message, friend request or upload.</li>
