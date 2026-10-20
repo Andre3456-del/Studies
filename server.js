@@ -844,6 +844,18 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .bubble{max-width:78%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;word-wrap:break-word}
 .bubble.me{align-self:flex-end;background:linear-gradient(135deg,#5bc8ff,var(--blue) 60%);color:#04101f;border-bottom-right-radius:4px}
 .bubble.them{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:4px}
+.reply-preview{display:flex;align-items:stretch;gap:8px;margin:0 0 6px;border-radius:9px;overflow:hidden;background:rgba(255,255,255,.07);border-left:4px solid #a78bfa}
+.bubble.me .reply-preview{background:rgba(4,16,31,.16);border-left-color:rgba(4,16,31,.6)}
+.reply-preview .rp-body,.reply-bar .rp-body{flex:1;min-width:0;padding:6px 4px 6px 8px;display:flex;flex-direction:column;gap:1px;font-size:12.5px;line-height:1.35}
+.reply-preview .rp-name,.reply-bar .rp-name{color:#c4b5fd;font-size:12.5px}
+.bubble.me .reply-preview .rp-name{color:#04101f}
+.reply-preview .rp-text,.reply-bar .rp-text{opacity:.85;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.rp-thumb{width:52px;height:52px;flex:none;object-fit:cover;background:rgba(0,0,0,.18)}
+.rp-thumb.st{object-fit:contain;padding:4px}
+.sticker-msg .reply-preview{align-self:stretch;background:var(--panel);border:1px solid var(--line);border-left:4px solid #a78bfa}
+.reply-bar{margin-top:8px;border-radius:10px;overflow:hidden;background:var(--panel);border:1px solid var(--line);border-left:4px solid #a78bfa;align-items:center;gap:8px}
+.reply-bar:not([hidden]){display:flex}
+.reply-bar button{margin:0 8px 0 0}
 .bubble time{display:block;text-align:right;font-size:11px;opacity:.65;margin-top:3px}
 .chat-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line);max-width:1000px;margin:0 auto}
 .chat-bar input,.chat-bar textarea{margin:0;flex:1}.chat-bar button{margin:0}
@@ -1430,13 +1442,15 @@ function messageReplyInfo(m, viewerId, isGroup) {
   return {
     id: parent.id,
     from_name: parent.sender_id === viewerId ? 'You' : (author ? author.name : 'Member'),
-    text: snippetOf(parent)
+    text: parent.kind === 'voice' ? '🎤 Voice note · ' + fmtDur(parent.media_ms) : snippetOf(parent),
+    kind: parent.kind || 'text'
   };
 }
 function replyPreviewHtml(m, viewerId, isGroup) {
   const reply = messageReplyInfo(m, viewerId, isGroup);
   if (!reply) return '';
-  return '<div class="reply-preview" data-reply-to="' + reply.id + '" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--accent,#64748b);border-radius:6px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere"><b>↪ ' + esc(reply.from_name) + '</b><span>' + esc(reply.text) + '</span></div>';
+  const thumb = reply.kind === 'sticker' || reply.kind === 'image' ? `<img class="rp-thumb${reply.kind === 'sticker' ? ' st' : ''}" src="/api/messages/media/${reply.id}" alt="" loading="lazy">` : '';
+  return `<div class="reply-preview" data-reply-to="${reply.id}"><div class="rp-body"><b class="rp-name">${esc(reply.from_name)}</b><span class="rp-text">${esc(reply.text)}</span></div>${thumb}</div>`;
 }
 function bubbleHtml(m, meId, isGroup) {
   const side = m.sender_id === meId ? 'me' : 'them';
@@ -1542,14 +1556,17 @@ function actionsRow(id,mine,kind){
   } else {var d1b=el('button','link','Delete for me');d1b.type='button';d1b.setAttribute('data-act','delete-me');r.appendChild(d1b)}
   return r;
 }
-function clearReply(){replyTarget=null;replyBar.hidden=true}
+function clearReply(){replyTarget=null;replyBar.hidden=true;var t=document.getElementById('replyThumb');if(t)t.hidden=true}
+var replyThumb=document.getElementById('replyThumb');
 function startReply(id){
   var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;
-  var textEl=b.querySelector('.msg-text'),fileEl=b.querySelector('.file-name'),audioEl=b.querySelector('audio'),imgEl=b.querySelector('img');
-  var text=textEl?textEl.textContent.trim():(audioEl?'Voice note':imgEl?'Sticker or photo':fileEl?fileEl.textContent.trim():'Message');
+  var kind=b.getAttribute('data-kind')||'text',textEl=b.querySelector('.msg-text'),fileEl=b.querySelector('.file-name'),tm=b.querySelector('time'),dm=/(\\d+:\\d\\d)/.exec((tm&&tm.getAttribute('data-pre'))||'');
+  var text=kind==='voice'?('🎤 Voice note'+(dm?' · '+dm[1]:'')):kind==='sticker'?'Sticker':kind==='image'?'📷 Photo':kind==='file'?('📄 '+(fileEl?fileEl.textContent.trim():'File')):(textEl?textEl.textContent.trim():'Message');
   var author=b.classList.contains('me')?'You':(b.querySelector('.sender-name')?b.querySelector('.sender-name').textContent:(convType==='group'?'Group member':((document.querySelector('.chat-head b')||{}).textContent||'Member')));
-  replyTarget={id:Number(id),from_name:author,text:text.slice(0,160)||'Message'};
-  replyWho.textContent='Replying to '+author;replyWhat.textContent=replyTarget.text;replyBar.hidden=false;input.focus();
+  replyTarget={id:Number(id),from_name:author,text:text.slice(0,160)||'Message',kind:kind};
+  replyWho.textContent='Replying to '+author;replyWhat.textContent=replyTarget.text;
+  if(kind==='sticker'||kind==='image'){replyThumb.src='/api/messages/media/'+id;replyThumb.className='rp-thumb'+(kind==='sticker'?' st':'');replyThumb.hidden=false}else{replyThumb.hidden=true;replyThumb.removeAttribute('src')}
+  replyBar.hidden=false;input.focus();
 }
 replyCancel.addEventListener('click',clearReply);
 var REACT_SET=['👍','❤️','😂','😮','😢','🙏'];
@@ -1568,6 +1585,9 @@ function doDelete(id,scope){if(!confirm(scope==='everyone'?'Delete this message 
     if(scope==='me'){b.parentNode.removeChild(b)}else{b.classList.add('deleted');b.innerHTML='';b.appendChild(el('span','mut','This message was deleted'));var t=el('time');t.setAttribute('data-t',j.created_at||'');stamp(t);b.appendChild(t)}
   }).catch(function(){})}
 function senderTag(m){if(convType!=='group'||m.from===myId)return'';return el('div','sender-name',m.from_name||'')}
+function replyBox(r){var rp=el('div','reply-preview'),bd=el('div','rp-body');rp.setAttribute('data-reply-to',r.id||'');bd.appendChild(el('b','rp-name',r.from_name||'Reply'));bd.appendChild(el('span','rp-text',r.text||'Message'));rp.appendChild(bd);
+  if(r.kind==='sticker'||r.kind==='image'){var im=document.createElement('img');im.className='rp-thumb'+(r.kind==='sticker'?' st':'');im.src='/api/messages/media/'+r.id;im.alt='';im.loading='lazy';rp.appendChild(im)}
+  return rp}
 function bubble(m){
   if(seen[m.id]){if(m.reactions)renderReactions(m.id,m.reactions);return}
   seen[m.id]=1;
@@ -1579,7 +1599,7 @@ function bubble(m){
   else if(m.kind==='image'){d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);var ia=document.createElement('a');ia.href='/api/messages/media/'+m.id;ia.target='_blank';ia.rel='noopener noreferrer';var iim=document.createElement('img');iim.src='/api/messages/media/'+m.id;iim.alt='photo';iim.loading='lazy';ia.appendChild(iim);d.appendChild(ia)}
   else if(m.kind==='file'){d=el('div','bubble '+side);var fa=document.createElement('a');fa.className='file-chip';fa.href='/api/messages/media/'+m.id;fa.setAttribute('download',m.name||'file');fa.appendChild(document.createTextNode('📄 '));var fn=el('span','file-name',m.name||'File');fa.appendChild(fn);d.appendChild(fa)}
   else{d=el('div','bubble '+side);var st3=senderTag(m);if(st3)d.appendChild(st3);var sp=el('span','msg-text');linkifyInto(sp,m.body);d.appendChild(sp);if(m.edited)d.appendChild(el('span','mut',' (edited)'))}
-  if(m.reply&&!m.deleted){var rp=el('div','reply-preview');rp.setAttribute('data-reply-to',m.reply.id||'');rp.style.cssText='margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--accent,#64748b);border-radius:6px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere';rp.appendChild(el('b',null,'↪ '+(m.reply.from_name||'Reply')));rp.appendChild(el('span',null,m.reply.text||'Message'));d.insertBefore(rp,d.firstChild)}
+  if(m.reply&&!m.deleted)d.insertBefore(replyBox(m.reply),d.firstChild);
   d.setAttribute('data-id',m.id);d.setAttribute('data-kind',m.kind);
   if(!m.deleted)d.appendChild(actionsRow(m.id,mine,m.kind));
   if(m.reactions&&Object.keys(m.reactions).length){var row=el('div','reactions');Object.keys(m.reactions).forEach(function(em){row.appendChild(el('span','rchip',em+' '+m.reactions[em]))});d.appendChild(row)}
@@ -1800,7 +1820,7 @@ function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastI
 <div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
 <div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker(s)<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" multiple></label>
 <label class="btn ghost st-add">+ Add a .zip of pictures<input type="file" id="stZip" accept=".zip,application/zip,application/x-zip-compressed"></label><div id="sgrid" class="sgrid"></div></div></div>
-<div id="replyBar" class="reply-bar" hidden style="padding:9px 12px;margin-top:8px;border-left:3px solid var(--accent,#64748b);border-radius:8px;background:rgba(100,116,139,.12);align-items:center;gap:10px"><div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:2px"><b id="replyWho" style="font-size:12px">Replying</b><span id="replyWhat" class="mut" style="font-size:12px;overflow-wrap:anywhere"></span></div><button type="button" id="replyCancel" class="link">Cancel</button></div>
+<div id="replyBar" class="reply-bar" hidden><div class="rp-body"><b id="replyWho" class="rp-name">Replying</b><span id="replyWhat" class="rp-text"></span></div><img id="replyThumb" class="rp-thumb" alt="" hidden><button type="button" id="replyCancel" class="link" aria-label="Cancel reply">&#10005;</button></div>
 <form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" style="display:none">📎</label><textarea id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required rows="1"></textarea><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
 <div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
 <p id="upStatus" class="mut" style="margin:4px 0 0" hidden></p>
