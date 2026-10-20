@@ -894,7 +894,7 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .ok{color:#22c55e}
 .tab-link{padding:10px 16px;color:var(--mut);font-weight:600;border-bottom:2px solid transparent}
 .tab-link.active{color:var(--blue);border-color:var(--blue)}
-.tick{opacity:.95}.tick-un{color:#8ab4f8}.tick-read{color:#22c55e}.tick-queued{color:#93a0bd}
+.tick{opacity:.95;font-weight:700}.tick-un{color:#dc2626}.tick-read{color:#22c55e}.tick-queued{color:#93a0bd}
 .msg-actions{display:flex;gap:10px;margin-top:4px;opacity:0}
 .bubble:hover .msg-actions,.sticker-msg:hover .msg-actions,.bubble:focus-within .msg-actions{opacity:1}
 .msg-actions button{font-size:11px;color:var(--mut);background:none;box-shadow:none;padding:0;margin:0}
@@ -1567,7 +1567,7 @@ function bubble(m){
 function updateTick(id,status){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var tk=b.querySelector('[data-tick]');if(!tk)return;tk.innerHTML=tickHtml(status)}
 Array.prototype.forEach.call(thread.querySelectorAll('time[data-t]'),stamp);
 var polling=false;
-function poll(){if(polling)return;polling=true;fetch('/api/messages/poll?'+qs+'&after='+lastId,{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
+function poll(){if(polling)return;polling=true;fetch('/api/messages/poll?'+qs+'&after='+lastId+'&seen='+(document.hidden?'0':'1'),{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
   (j.messages||[]).forEach(function(m){bubble(m);if(m.id>lastId)lastId=m.id});
   (j.receipts||[]).forEach(function(r){updateTick(r.id,r.status)});
   polling=false;
@@ -1988,7 +1988,16 @@ app.get('/api/messages/poll', (req, res) => {
       .all(after, req.user.id, withId, withId, req.user.id);
   }
   rows = rows.filter(m => !isHiddenFor(m.id, req.user.id));
-  markRead(rows, req.user.id);
+  // Read receipts: a message only counts as viewed while the chat tab is actually showing (the page sends seen=0 when it is in the
+  // background). The moment it is showing again, everything still unread in this conversation is marked read, so the sender's ticks turn green.
+  if (req.query.seen !== '0') {
+    markRead(rows, req.user.id);
+    const unreadSql = 'AND NOT EXISTS (SELECT 1 FROM message_reads r WHERE r.message_id=messages.id AND r.user_id=?)';
+    const waiting = req.query.group
+      ? db.prepare('SELECT * FROM messages WHERE group_id=? AND sender_id!=? ' + unreadSql).all(Number(req.query.group), req.user.id, req.user.id)
+      : db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? ' + unreadSql).all(Number(req.query.with || req.query.to), req.user.id, req.user.id);
+    markRead(waiting, req.user.id);
+  }
   const messages = rows.map(m => ({
     id: m.id, from: m.sender_id, from_name: (meta[m.id] || {}).from_name, kind: m.kind || 'text',
     deleted: !!m.deleted_at, edited: !!m.edited_at,
