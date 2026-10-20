@@ -1455,7 +1455,7 @@ app.get('/chat', (req, res) => {
     const pendingHtml = pending.length ? `<p class="chat-label">Friend requests</p>${pending.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b>${esc(u.name)}</b><span>${u.username ? '@' + esc(u.username) : ''}</span></span>
 <form method="post" action="/api/friends/${u.id}/accept" style="display:inline"><button>Accept</button></form>
 <form method="post" action="/api/friends/${u.id}/decline" style="display:inline"><button class="link">Decline</button></form></div>`).join('')}` : '';
-    return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
+    return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search students and admins by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
   }
   const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ')').all();
   const row = (avatarHtml, name, sub, href, unread, dot) => `<a class="chat-item" href="${href}"><span class="av-wrap" style="position:relative">${avatarHtml}${dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${dot}"></span>` : ''}</span><span class="meta"><b>${esc(name)}</b><span>${sub}</span></span>${unread ? `<b class="nbadge">${badgeText(unread)}</b>` : ''}</a>`;
@@ -1712,21 +1712,20 @@ thread.addEventListener('click',function(e){
 });
 
 /* ---- mobile reply gestures: swipe a message horizontally or long-press it ---- */
-var touchStart=null,pressTimer=null,gestureHandled=false;
+var touchStart=null,pressTimer=null;
 thread.addEventListener('touchstart',function(e){
   var b=e.target.closest?e.target.closest('[data-id]'):null;
   if(!b||e.target.closest('button,a,input'))return;
   var t=e.touches[0];touchStart={id:b.getAttribute('data-id'),x:t.clientX,y:t.clientY};
-  gestureHandled=false;
   clearTimeout(pressTimer);
-  pressTimer=setTimeout(function(){if(touchStart){startReply(touchStart.id);gestureHandled=true;touchStart=null}},550);
+  pressTimer=setTimeout(function(){if(touchStart){startReply(touchStart.id);touchStart=null}},550);
 },{passive:true});
 thread.addEventListener('touchmove',function(e){
   if(!touchStart)return;
   var t=e.touches[0],dx=t.clientX-touchStart.x,dy=t.clientY-touchStart.y;
   if(Math.abs(dx)>12||Math.abs(dy)>12)clearTimeout(pressTimer);
   if(Math.abs(dx)>70&&Math.abs(dx)>Math.abs(dy)*1.3){
-    var id=touchStart.id;touchStart=null;gestureHandled=true;clearTimeout(pressTimer);startReply(id);
+    var id=touchStart.id;touchStart=null;clearTimeout(pressTimer);startReply(id);
   }
 },{passive:true});
 thread.addEventListener('touchend',function(){clearTimeout(pressTimer);touchStart=null},{passive:true});
