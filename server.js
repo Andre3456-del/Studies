@@ -913,7 +913,7 @@ const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
 ]) : [
   { href: '/', icon: '🏠', label: 'Home' },
   { href: '/browse', icon: '🌐', label: 'Browse pages' },
-  { href: '/lecturer/signup', icon: '🎓', label: 'Lecturer portal' },
+  { href: '/lecturer/portal', icon: '🎓', label: 'Lecturer portal' },
 ];
 const badgeText = n => n > 15 ? '15+' : String(n);
 const PUSH_CLIENT_JS = `(function(){
@@ -959,7 +959,8 @@ const layout = (title, body, user, opts = {}) => {
     ? `<a class="drawer-item" href="/settings"><span>⚙️</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item" style="width:100%;text-align:left;background:none;color:inherit;box-shadow:none;font:inherit;border:0;cursor:pointer"><span>🚪</span>Log out</button></form>`
     : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title><link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body>
+  const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body>
 <div id="scrim" class="scrim"></div>
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
@@ -969,7 +970,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
-<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications so you never miss a message, a friend request or a new upload.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a> &middot; <a href="/lecturer/signup">Lecturer portal</a></footer>${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications so you never miss a message, a friend request or a new upload.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a> &middot; <a href="/lecturer/portal">Lecturer portal</a></footer>${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script>` : ''}
 </body></html>`;
@@ -2677,6 +2678,26 @@ app.post('/signup', async (req, res) => {
   res.send(checkEmailPage(email));
 });
 
+// Public lecturer portal landing page: discoverable without exposing lecturer-only content.
+app.get('/lecturer/portal', (req, res) => {
+  res.send(layout('Lecturer Portal | Studies Hub', `<div class="auth" style="max-width:720px">
+<h1>Studies Hub Lecturer Portal</h1>
+<p>Lecturers can register, sign in, manage their linked courses, and share learning materials with students through Studies Hub.</p>
+<div class="card">
+<h2>New lecturer?</h2>
+<p class="mut">Create a lecturer account and complete your institution details. A full admin must verify your lecturer status before uploads are enabled.</p>
+<a class="btn" href="/lecturer/signup">Register as a lecturer</a>
+</div>
+<div class="card">
+<h2>Already registered?</h2>
+<p class="mut">Sign in to continue to your lecturer courses and uploads.</p>
+<a class="btn ghost" href="/lecturer/login">Lecturer log in</a>
+</div>
+<p class="mut">Students should use the regular <a href="/signup">student sign-up</a>.</p>
+</div>`, null, { description: 'Official Studies Hub lecturer portal. Register or sign in to manage courses and share educational materials with students.' }));
+});
+app.get('/lecturer/login', (req, res) => res.redirect('/login?next=%2Flecturer'));
+
 app.get('/lecturer/signup', (req, res) => res.send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1>
 <p class="mut">For teaching staff only. Students should use the regular <a href="/signup">sign up</a> instead.</p>
 <form method="post" class="card">
@@ -2685,7 +2706,7 @@ app.get('/lecturer/signup', (req, res) => res.send(layout('Lecturer sign up', `<
 <input name="password" type="password" placeholder="Password (8+ characters)" required>
 <button>Create lecturer account</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
-<p class="mut">Already registered? <a href="/login">Log in</a></p></div>`, null)));
+<p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`, null)));
 app.post('/lecturer/signup', async (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
   const email = String(req.body.email || '').trim().toLowerCase();
