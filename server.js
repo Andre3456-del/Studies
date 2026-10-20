@@ -900,6 +900,7 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 
 const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
   { href: '/lecturer', icon: '🎓', label: 'My courses' },
+  { href: '/settings/profile', icon: '👤', label: 'Lecturer profile' },
 ] : [
   { href: '/dashboard', icon: '📊', label: 'Dashboard' },
   { href: '/news', icon: '📰', label: 'News' },
@@ -912,6 +913,7 @@ const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
 ]) : [
   { href: '/', icon: '🏠', label: 'Home' },
   { href: '/browse', icon: '🌐', label: 'Browse pages' },
+  { href: '/lecturer/signup', icon: '🎓', label: 'Lecturer portal' },
 ];
 const badgeText = n => n > 15 ? '15+' : String(n);
 const PUSH_CLIENT_JS = `(function(){
@@ -967,7 +969,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
-<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications so you never miss a message, a friend request or a new upload.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a></footer>${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications so you never miss a message, a friend request or a new upload.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a> &middot; <a href="/lecturer/signup">Lecturer portal</a></footer>${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script>` : ''}
 </body></html>`;
