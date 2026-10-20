@@ -684,12 +684,16 @@ self.addEventListener('push',function(e){
   e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
     var url=d.url||'/';
     for(var i=0;i<cs.length;i++){var c=cs[i];if(c.visibilityState==='visible'&&c.focused&&new URL(c.url).pathname===url.split('?')[0])return}
-    return self.registration.showNotification(d.title||'Studies Hub',{body:d.body||'',icon:d.icon||'/icon-192.png',badge:'/icon-192.png',tag:d.tag||undefined,renotify:!!d.tag,data:{url:url}});
+    var replyTo=d.quickReply&&d.quickReply.reply_to_id;
+    var options={body:d.body||'',icon:d.icon||'/icon-192.png',badge:'/icon-192.png',tag:d.tag||undefined,renotify:!!d.tag,data:{url:url,replyTo:replyTo||null}};
+    if(d.quickReply)options.actions=[{action:'reply',title:'Reply'}];
+    return self.registration.showNotification(d.title||'Studies Hub',options);
   }));
 });
 self.addEventListener('notificationclick',function(e){
-  e.notification.close();
-  var url=(e.notification.data&&e.notification.data.url)||'/';
+  var n=e.notification,data=n.data||{},url=data.url||'/';
+  n.close();
+  if(e.action==='reply'&&data.replyTo&&!/[?&]reply_to=/.test(url))url+=(url.indexOf('?')>=0?'&':'?')+'reply_to='+encodeURIComponent(data.replyTo);
   e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
     for(var i=0;i<cs.length;i++){var c=cs[i];if('focus' in c){if(c.navigate)c.navigate(url);return c.focus()}}
     return self.clients.openWindow(url);
@@ -970,7 +974,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
-<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications so you never miss a message, a friend request or a new upload.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a> &middot; <a href="/lecturer/portal">Lecturer portal</a></footer>${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to receive new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main><footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a> &middot; <a href="/lecturer/portal">Lecturer portal</a></footer>${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script>` : ''}
 </body></html>`;
@@ -1567,7 +1571,7 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden)poll
 window.addEventListener('focus',poll);
 window.addEventListener('online',poll);
 function post(url,obj,cb){fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id)cb(j);else alert((j&&j.error)||'Could not send.')}).catch(function(){alert('Could not send. Check your connection.')})}
-toBottom();setInterval(poll,1500);
+toBottom();var initialReplyId=Number(new URLSearchParams(location.search).get('reply_to'));if(initialReplyId)setTimeout(function(){startReply(initialReplyId)},180);setInterval(poll,1500);
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
   if(editingId){var id=editingId;editingId=null;input.value='';resizeInput();fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
   var selectedReply=replyTarget;input.value='';resizeInput();var body=Object.assign({body:text,reply_to_id:selectedReply?selectedReply.id:null},convType==='group'?{group:convId}:{to:convId});
@@ -1851,7 +1855,7 @@ app.post('/api/messages/send', (req, res) => {
   const { body_enc, iv } = encryptMsg(text);
   const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,reply_to_id) VALUES(?,?,?,?,?,?)').run(req.user.id, target.recipient_id, target.group_id, body_enc, iv, replyId);
   const row = db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid);
-  notifyNewMessage(req.user, target, text.slice(0, 120));
+  notifyNewMessage(req.user, target, text.slice(0, 120), Number(info.lastInsertRowid));
   res.json({ id: Number(info.lastInsertRowid), created_at: row.created_at });
 });
 
@@ -1867,13 +1871,13 @@ function resolveTarget(req) {
   if (!to || to === req.user.id || friendStatus(req.user.id, to) !== 'friends') return null;
   return { recipient_id: to, group_id: null };
 }
-function notifyNewMessage(sender, target, preview) {
+function notifyNewMessage(sender, target, preview, messageId) {
   if (target.group_id) {
     const others = db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id != ?').all(target.group_id, sender.id).map(r => r.user_id);
     const g = db.prepare('SELECT name FROM groups WHERE id=?').get(target.group_id);
-    notify(others, { title: g.name, body: `${sender.name}: ${preview}`, url: '/chat/group/' + target.group_id, tag: 'group-' + target.group_id });
+    notify(others, { title: g.name, body: `${sender.name}: ${preview}`, url: '/chat/group/' + target.group_id + (messageId ? '?reply_to=' + messageId : ''), tag: 'group-' + target.group_id, quickReply: { group: target.group_id, reply_to_id: messageId || null } });
   } else {
-    notify([target.recipient_id], { title: sender.name, body: preview, url: '/chat/' + sender.id, tag: 'dm-' + sender.id });
+    notify([target.recipient_id], { title: sender.name, body: preview, url: '/chat/' + sender.id + (messageId ? '?reply_to=' + messageId : ''), tag: 'dm-' + sender.id, quickReply: { to: sender.id, reply_to_id: messageId || null } });
   }
 }
 
@@ -1912,7 +1916,7 @@ app.post('/api/messages/voice', upload.single('audio'), (req, res) => {
   if (limited('voice:' + req.user.id, 30, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
   const ms = Math.max(0, Math.min(Number(req.body.ms) || 0, 300000));
   const result = insertMedia(req.user.id, target, 'voice', req.file.buffer, req.file.mimetype, ms);
-  notifyNewMessage(req.user, target, '🎤 Voice note');
+  notifyNewMessage(req.user, target, '🎤 Voice note', result.id);
   res.json(result);
 });
 // Stickers: sent from your own sticker board; the picture is copied into the message so it never breaks if you later delete it.
@@ -1924,7 +1928,7 @@ app.post('/api/messages/sticker', (req, res) => {
   if (!target || !st) return res.status(400).json({ error: 'Invalid sticker.' });
   if (limited('sticker:' + req.user.id, 60, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
   const result = insertMedia(req.user.id, target, 'sticker', Buffer.from(st.data), st.mime, null);
-  notifyNewMessage(req.user, target, 'Sticker');
+  notifyNewMessage(req.user, target, 'Sticker', result.id);
   res.json(result);
 });
 // A sticker that only ever lived on the sender's device: the recipient still needs the bytes themselves, so
@@ -1935,7 +1939,7 @@ app.post('/api/messages/local-sticker', upload.single('sticker'), (req, res) => 
   if (!target || !req.file || !STICKER_MIMES.includes(req.file.mimetype)) return res.status(400).json({ error: 'Invalid sticker.' });
   if (limited('sticker:' + req.user.id, 60, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
   const result = insertMedia(req.user.id, target, 'sticker', req.file.buffer, req.file.mimetype, null);
-  notifyNewMessage(req.user, target, 'Sticker');
+  notifyNewMessage(req.user, target, 'Sticker', result.id);
   res.json(result);
 });
 // A photo or any other file picked from the gallery or phone storage -- same encrypted storage as everything else.
@@ -1947,7 +1951,7 @@ app.post('/api/messages/attachment', upload.single('file'), (req, res) => {
   if (limited('attach:' + req.user.id, 20, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
   const kind = /^image\//.test(req.file.mimetype) ? 'image' : 'file';
   const result = insertMedia(req.user.id, target, kind, req.file.buffer, req.file.mimetype, null, req.file.originalname.slice(0, 150));
-  notifyNewMessage(req.user, target, kind === 'image' ? '📷 Photo' : `📄 ${req.file.originalname.slice(0, 60)}`);
+  notifyNewMessage(req.user, target, kind === 'image' ? '📷 Photo' : `📄 ${req.file.originalname.slice(0, 60)}`, result.id);
   res.json(result);
 });
 // A voice note or sticker's file -- only people in that conversation can fetch it.
