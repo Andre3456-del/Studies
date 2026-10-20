@@ -1416,27 +1416,27 @@ const fmtDur = ms => { const t = Math.round((ms || 0) / 1000); return Math.floor
 const fmtSize = b => b == null ? '' : b < 1024 * 1024 ? Math.round(b / 1024) + ' KB' : (b / (1024 * 1024)).toFixed(1) + ' MB';
 const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'file' ? `📄 ${m.media_name || 'File'}` : decryptMsg(m.body_enc, m.iv).slice(0, 40);
 function messageReplyInfo(m, viewerId, isGroup) {
-  if (!m.reply_to_id) return null;
+  if (!m.reply_to_id || m.deleted_at) return null;
   const parent = db.prepare('SELECT * FROM messages WHERE id=?').get(m.reply_to_id);
-  if (!parent) return { id: null, from_name: 'Original message', text: 'Original message unavailable' };
+  if (!parent || parent.deleted_at) return null;
   const sameConversation = isGroup
     ? !!m.group_id && parent.group_id === m.group_id
     : !m.group_id && !parent.group_id && (
         (parent.sender_id === m.sender_id && parent.recipient_id === m.recipient_id) ||
         (parent.sender_id === m.recipient_id && parent.recipient_id === m.sender_id)
       );
-  if (!sameConversation || isHiddenFor(parent.id, viewerId)) return { id: null, from_name: 'Original message', text: 'Original message unavailable' };
+  if (!sameConversation || isHiddenFor(parent.id, viewerId)) return null;
   const author = db.prepare('SELECT name FROM users WHERE id=?').get(parent.sender_id);
   return {
     id: parent.id,
     from_name: parent.sender_id === viewerId ? 'You' : (author ? author.name : 'Member'),
-    text: parent.deleted_at ? 'Message deleted' : snippetOf(parent)
+    text: snippetOf(parent)
   };
 }
 function replyPreviewHtml(m, viewerId, isGroup) {
   const reply = messageReplyInfo(m, viewerId, isGroup);
   if (!reply) return '';
-  return '<div class="reply-preview" style="margin:0 0 7px;padding:6px 9px;border-left:3px solid var(--accent,#64748b);border-radius:5px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:2px"><b>' + esc(reply.from_name) + '</b><span>' + esc(reply.text) + '</span></div>';
+  return '<div class="reply-preview" data-reply-to="' + reply.id + '" style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--accent,#64748b);border-radius:6px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere"><b>↪ ' + esc(reply.from_name) + '</b><span>' + esc(reply.text) + '</span></div>';
 }
 function bubbleHtml(m, meId, isGroup) {
   const side = m.sender_id === meId ? 'me' : 'them';
@@ -1445,7 +1445,7 @@ function bubbleHtml(m, meId, isGroup) {
   const senderTag = isGroup && side === 'them' ? `<div class="sender-name">${esc(m.sender_name || '')}</div>` : '';
   const tick = side === 'me' && !isGroup ? `<span class="tickwrap" data-tick="1">${(() => { const html = { read: ' <span class="tick tick-read">&#10003;&#10003;</span>', delivered: ' <span class="tick tick-un">&#10003;&#10003;</span>', sent: ' <span class="tick tick-un">&#10003;</span>' }; return html[tickFor(m, m.recipient_id)] || ''; })()}</span>` : '';
   const actions = `<div class="msg-actions"><button type="button" class="link" data-act="reply">Reply</button><button type="button" class="link" data-act="react">React</button>${side === 'me' ? `${m.kind === 'text' ? `<button type="button" class="link" data-act="edit">Edit</button>` : ''}<button type="button" class="link" data-act="delete-me">Delete for me</button><button type="button" class="link" data-act="delete-everyone">Delete for everyone</button>` : `<button type="button" class="link" data-act="delete-me">Delete for me</button>`}</div>`;
-  if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}" data-kind="${m.kind}">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
+  if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}" data-kind="${m.kind}">${senderTag}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
   if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="voice">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio>${actions}${reactHtml}<time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${tick}</time></div>`;
   if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}" data-kind="sticker">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
   if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}" data-kind="image">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a>${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
@@ -1562,6 +1562,8 @@ function renderReactions(id,reactions){var b=thread.querySelector('[data-id="'+i
 function startEdit(id){var b=thread.querySelector('[data-id="'+id+'"]'),span=b.querySelector('.msg-text');if(!span)return;editingId=id;input.value=span.textContent;resizeInput();input.focus()}
 function doDelete(id,scope){if(!confirm(scope==='everyone'?'Delete this message for everyone?':'Delete this message for you?'))return;
   fetch('/api/messages/'+id+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:scope})}).then(function(r){return r.json()}).then(function(j){
+    var previews=thread.querySelectorAll('.reply-preview[data-reply-to="'+id+'"]');
+    Array.prototype.forEach.call(previews,function(p){p.parentNode.removeChild(p)});
     var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;
     if(scope==='me'){b.parentNode.removeChild(b)}else{b.classList.add('deleted');b.innerHTML='';b.appendChild(el('span','mut','This message was deleted'));var t=el('time');t.setAttribute('data-t',j.created_at||'');stamp(t);b.appendChild(t)}
   }).catch(function(){})}
@@ -1577,7 +1579,7 @@ function bubble(m){
   else if(m.kind==='image'){d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);var ia=document.createElement('a');ia.href='/api/messages/media/'+m.id;ia.target='_blank';ia.rel='noopener noreferrer';var iim=document.createElement('img');iim.src='/api/messages/media/'+m.id;iim.alt='photo';iim.loading='lazy';ia.appendChild(iim);d.appendChild(ia)}
   else if(m.kind==='file'){d=el('div','bubble '+side);var fa=document.createElement('a');fa.className='file-chip';fa.href='/api/messages/media/'+m.id;fa.setAttribute('download',m.name||'file');fa.appendChild(document.createTextNode('📄 '));var fn=el('span','file-name',m.name||'File');fa.appendChild(fn);d.appendChild(fa)}
   else{d=el('div','bubble '+side);var st3=senderTag(m);if(st3)d.appendChild(st3);var sp=el('span','msg-text');linkifyInto(sp,m.body);d.appendChild(sp);if(m.edited)d.appendChild(el('span','mut',' (edited)'))}
-  if(m.reply&&!m.deleted){var rp=el('div','reply-preview');rp.style.cssText='margin:0 0 7px;padding:6px 9px;border-left:3px solid var(--accent,#64748b);border-radius:5px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:2px';rp.appendChild(el('b',null,m.reply.from_name||'Reply'));rp.appendChild(el('span',null,m.reply.text||'Message'));d.insertBefore(rp,d.firstChild)}
+  if(m.reply&&!m.deleted){var rp=el('div','reply-preview');rp.setAttribute('data-reply-to',m.reply.id||'');rp.style.cssText='margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--accent,#64748b);border-radius:6px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere';rp.appendChild(el('b',null,'↪ '+(m.reply.from_name||'Reply')));rp.appendChild(el('span',null,m.reply.text||'Message'));d.insertBefore(rp,d.firstChild)}
   d.setAttribute('data-id',m.id);d.setAttribute('data-kind',m.kind);
   if(!m.deleted)d.appendChild(actionsRow(m.id,mine,m.kind));
   if(m.reactions&&Object.keys(m.reactions).length){var row=el('div','reactions');Object.keys(m.reactions).forEach(function(em){row.appendChild(el('span','rchip',em+' '+m.reactions[em]))});d.appendChild(row)}
@@ -1665,10 +1667,11 @@ function stickerAdd(mime,blob){return stickerDB().then(function(db){return new P
 function stickerList(){return stickerDB().then(function(db){return new Promise(function(res){var rq=db.transaction('board','readonly').objectStore('board').getAll();rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){res([])}})})}
 function stickerDelete(id){return stickerDB().then(function(db){return new Promise(function(res){var tx=db.transaction('board','readwrite');tx.objectStore('board').delete(id);tx.oncomplete=function(){res()}})})}
 function sendSticker(key){
+  var selectedReply=replyTarget;
   var isLocal=typeof key==='string'&&key.indexOf('local:')===0;
   if(!isLocal){
-    var body=Object.assign({sticker_id:key},convType==='group'?{group:convId}:{to:convId});
-    post('/api/messages/sticker',body,function(j){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;panel.hidden=true;document.body.classList.remove('panel-open')});
+    var body=Object.assign({sticker_id:key,reply_to_id:selectedReply?selectedReply.id:null},convType==='group'?{group:convId}:{to:convId});
+    post('/api/messages/sticker',body,function(j){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply();panel.hidden=true;document.body.classList.remove('panel-open')});
     return;
   }
   var localId=Number(key.slice(6));
@@ -1676,8 +1679,9 @@ function sendSticker(key){
     var s=list.filter(function(x){return x.id===localId})[0];
     if(!s)return;
     var fd=new FormData();fd.append('sticker',s.blob,'sticker');if(convType==='group')fd.append('group',convId);else fd.append('to',convId);
+    if(selectedReply)fd.append('reply_to_id',String(selectedReply.id));
     fetch('/api/messages/local-sticker',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){
-      if(j&&j.id){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;panel.hidden=true;document.body.classList.remove('panel-open')}
+      if(j&&j.id){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply();panel.hidden=true;document.body.classList.remove('panel-open')}
       else alert((j&&j.error)||'Could not send that sticker.');
     }).catch(function(){alert('Could not send that sticker -- check your connection.')});
   });
@@ -1772,8 +1776,8 @@ function pickMime(){var c=['audio/webm;codecs=opus','audio/webm','audio/mp4','au
 function stopTracks(){if(stream){stream.getTracks().forEach(function(t){t.stop()});stream=null}}
 function endRec(){clearInterval(tick);recBar.hidden=true;form.hidden=false}
 function finish(cancel){cancelled=cancel;endRec();if(rec&&rec.state!=='inactive')rec.stop();else stopTracks()}
-function sendVoice(blob,ms,type){var fd=new FormData();if(convType==='group')fd.append('group',convId);else fd.append('to',convId);fd.append('ms',ms);var ext=/mp4/.test(type)?'m4a':/ogg/.test(type)?'ogg':'webm';fd.append('audio',blob,'voice.'+ext);
-  fetch('/api/messages/voice',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'voice',ms:ms,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}else alert((j&&j.error)||'Could not send the voice note.')}).catch(function(){alert('Could not send the voice note.')})}
+function sendVoice(blob,ms,type){var selectedReply=replyTarget,fd=new FormData();if(convType==='group')fd.append('group',convId);else fd.append('to',convId);fd.append('ms',ms);if(selectedReply)fd.append('reply_to_id',String(selectedReply.id));var ext=/mp4/.test(type)?'m4a':/ogg/.test(type)?'ogg':'webm';fd.append('audio',blob,'voice.'+ext);
+  fetch('/api/messages/voice',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'voice',ms:ms,created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply()}else alert((j&&j.error)||'Could not send the voice note.')}).catch(function(){alert('Could not send the voice note.')})}
 micBtn.addEventListener('click',function(){
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){alert('Voice notes are not supported in this browser.');return}
   navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){
@@ -1869,20 +1873,28 @@ ${members.map(memberRow).join('')}
 <form method="post" action="/chat/group/${gid}/leave" onsubmit="return confirm('Leave this group?')" style="margin-top:14px"><button class="link">Leave group</button></form>`, req.user));
 });
 
+function validateReplyTarget(req, target) {
+  const replyId = Number(req.body && req.body.reply_to_id) || null;
+  if (!replyId) return { id: null };
+  const parent = db.prepare('SELECT * FROM messages WHERE id=?').get(replyId);
+  const sameConversation = parent && (target.group_id
+    ? parent.group_id === target.group_id
+    : !parent.group_id && ((parent.sender_id === req.user.id && parent.recipient_id === target.recipient_id) || (parent.sender_id === target.recipient_id && parent.recipient_id === req.user.id)));
+  if (!sameConversation || parent.deleted_at || isHiddenFor(parent.id, req.user.id)) {
+    return { error: 'Choose a message from this conversation to reply to.' };
+  }
+  return { id: replyId };
+}
+
 app.post('/api/messages/send', (req, res) => {
   if (!req.user) return res.sendStatus(401);
   const text = String((req.body && req.body.body) || '').trim().slice(0, 2000);
   if (!text) return res.status(400).json({ error: 'Invalid message.' });
   const target = resolveTarget(req);
   if (!target) return res.status(400).json({ error: 'Invalid message.' });
-  const replyId = Number(req.body && req.body.reply_to_id) || null;
-  if (replyId) {
-    const parent = db.prepare('SELECT * FROM messages WHERE id=?').get(replyId);
-    const sameConversation = parent && (target.group_id
-      ? parent.group_id === target.group_id
-      : !parent.group_id && ((parent.sender_id === req.user.id && parent.recipient_id === target.recipient_id) || (parent.sender_id === target.recipient_id && parent.recipient_id === req.user.id)));
-    if (!sameConversation || parent.deleted_at || isHiddenFor(parent.id, req.user.id)) return res.status(400).json({ error: 'Choose a message from this conversation to reply to.' });
-  }
+  const reply = validateReplyTarget(req, target);
+  if (reply.error) return res.status(400).json({ error: reply.error });
+  const replyId = reply.id;
   const { body_enc, iv } = encryptMsg(text);
   const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,reply_to_id) VALUES(?,?,?,?,?,?)').run(req.user.id, target.recipient_id, target.group_id, body_enc, iv, replyId);
   const row = db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid);
@@ -1931,9 +1943,9 @@ function sendBytes(req, res, buf, mime) {
 const AUDIO_MIME = /^audio\/[a-z0-9.+-]+(;\s*codecs=[a-z0-9.,+-]+)?$/i;
 const STICKER_MIMES = ['image/png', 'image/webp', 'image/gif', 'image/jpeg'];
 const MAX_STICKERS = 60;
-const insertMedia = (from, target, kind, buf, mime, ms, name) => {
+const insertMedia = (from, target, kind, buf, mime, ms, name, replyId) => {
   const t = encryptMsg(''), m = encryptBytes(buf);
-  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_enc,media_iv,media_mime,media_ms,media_name) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(from, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, m.enc, m.iv, mime, ms || null, name || null);
+  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_enc,media_iv,media_mime,media_ms,media_name,reply_to_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(from, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, m.enc, m.iv, mime, ms || null, name || null, replyId || null);
   return { id: Number(info.lastInsertRowid), created_at: db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid).created_at };
 };
 
@@ -1946,7 +1958,9 @@ app.post('/api/messages/voice', upload.single('audio'), (req, res) => {
   if (req.file.buffer.length > 3 * 1024 * 1024) return res.status(413).json({ error: 'That voice note is too long.' });
   if (limited('voice:' + req.user.id, 30, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
   const ms = Math.max(0, Math.min(Number(req.body.ms) || 0, 300000));
-  const result = insertMedia(req.user.id, target, 'voice', req.file.buffer, req.file.mimetype, ms);
+  const reply = validateReplyTarget(req, target);
+  if (reply.error) return res.status(400).json({ error: reply.error });
+  const result = insertMedia(req.user.id, target, 'voice', req.file.buffer, req.file.mimetype, ms, null, reply.id);
   notifyNewMessage(req.user, target, '🎤 Voice note', result.id);
   res.json(result);
 });
@@ -1958,7 +1972,9 @@ app.post('/api/messages/sticker', (req, res) => {
   const st = sid ? db.prepare('SELECT * FROM stickers WHERE id=? AND user_id=?').get(sid, req.user.id) : null;
   if (!target || !st) return res.status(400).json({ error: 'Invalid sticker.' });
   if (limited('sticker:' + req.user.id, 60, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
-  const result = insertMedia(req.user.id, target, 'sticker', Buffer.from(st.data), st.mime, null);
+  const reply = validateReplyTarget(req, target);
+  if (reply.error) return res.status(400).json({ error: reply.error });
+  const result = insertMedia(req.user.id, target, 'sticker', Buffer.from(st.data), st.mime, null, null, reply.id);
   notifyNewMessage(req.user, target, 'Sticker', result.id);
   res.json(result);
 });
@@ -1969,7 +1985,9 @@ app.post('/api/messages/local-sticker', upload.single('sticker'), (req, res) => 
   const target = resolveTarget(req);
   if (!target || !req.file || !STICKER_MIMES.includes(req.file.mimetype)) return res.status(400).json({ error: 'Invalid sticker.' });
   if (limited('sticker:' + req.user.id, 60, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
-  const result = insertMedia(req.user.id, target, 'sticker', req.file.buffer, req.file.mimetype, null);
+  const reply = validateReplyTarget(req, target);
+  if (reply.error) return res.status(400).json({ error: reply.error });
+  const result = insertMedia(req.user.id, target, 'sticker', req.file.buffer, req.file.mimetype, null, null, reply.id);
   notifyNewMessage(req.user, target, 'Sticker', result.id);
   res.json(result);
 });
@@ -2078,6 +2096,8 @@ app.post('/api/messages/:id/delete', (req, res) => {
   if (scope === 'everyone') {
     if (m.sender_id !== req.user.id) return res.status(403).json({ error: 'Only the sender can delete for everyone.' });
     const t = encryptMsg('');
+    // Remove reply links to this message so its deleted content is not left behind as a reply preview.
+    db.prepare('UPDATE messages SET reply_to_id=NULL WHERE reply_to_id=?').run(m.id);
     db.prepare('UPDATE messages SET body_enc=?, iv=?, media_enc=NULL, media_iv=NULL, media_mime=NULL, media_ms=NULL, deleted_at=CURRENT_TIMESTAMP, deleted_by=? WHERE id=?').run(t.body_enc, t.iv, req.user.id, m.id);
     return res.json({ ok: true, created_at: m.created_at });
   }
