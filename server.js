@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS gm_user ON group_members(user_id);
 CREATE INDEX IF NOT EXISTS push_user ON push_subscriptions(user_id);
 `);
 const msgCols2 = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
-for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER']])
+for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER'], ['reply_to_id', 'INTEGER']])
   if (!msgCols2.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
 const groupCols = db.prepare('PRAGMA table_info(groups)').all().map(c => c.name);
 for (const [c, def] of [['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT']])
@@ -1022,7 +1022,7 @@ app.get('/browse', (req, res) => {
 // checked by a lawyer for your jurisdiction (e.g. Nigeria's NDPA) before you rely on it.
 app.get('/privacy', (req, res) => {
   const updated = new Date().toISOString().slice(0, 10);
-  const contactEmail = process.env.EMAIL_FROM || ADMIN_EMAIL;
+  const contactEmail = (process.env.CONTACT_EMAIL || 'donryscott28@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim();
   const emailProviders = [
     process.env.GOOGLE_REFRESH_TOKEN ? 'Google (Gmail)' : null,
     process.env.RESEND_API_KEY ? 'Resend' : null,
@@ -1030,7 +1030,7 @@ app.get('/privacy', (req, res) => {
     process.env.SMTP_HOST ? 'our email server' : null,
   ].filter(Boolean);
   const aiProvider = AI === 'groq' ? 'Groq' : AI === 'claude' ? 'Anthropic' : null;
-  const body = `<div class="auth" style="max-width:720px"><h1>Privacy Policy</h1><p class="mut">Last updated ${updated}</p>
+  const body = `<main class="auth privacy-policy" style="max-width:860px;width:100%;margin:24px auto;padding:clamp(18px,4vw,36px);border:1px solid var(--line);border-radius:22px;background:var(--card);box-shadow:0 12px 40px rgba(0,0,0,.12)"><style>.privacy-policy{line-height:1.7}.privacy-policy h1{font-size:clamp(28px,5vw,38px);line-height:1.15;margin:8px 0}.privacy-policy h2{font-size:19px;margin:28px 0 8px;padding-top:18px;border-top:1px solid var(--line)}.privacy-policy p{line-height:1.75}.privacy-policy li{margin:9px 0;padding-left:3px}.privacy-policy ul{padding-left:22px}.privacy-policy a{overflow-wrap:anywhere}.privacy-kicker{font-size:12px;letter-spacing:1.5px;font-weight:800;color:var(--accent,#64748b)}.privacy-contact{padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--bg);overflow-wrap:anywhere}</style><header style="padding:4px 0 18px;border-bottom:1px solid var(--line);margin-bottom:18px"><p class="privacy-kicker">STUDIES HUB · PRIVACY & DATA</p><h1>Privacy Policy</h1><p class="mut" style="margin:0">Last updated ${updated}</p></header>
 
 <p>This page explains, in plain language, what Studies Hub collects and why. It covers what this site actually does today -- nothing more, nothing hidden.</p>
 
@@ -1084,8 +1084,8 @@ ${aiProvider ? `<h2>The "Ask AI" assistant</h2><p>If you use the Ask AI assistan
 <p>If how we handle your data changes meaningfully, we'll update this page and change the date above.</p>
 
 <h2>Contact us</h2>
-<p>Questions about your data, or a request to review/correct/delete it? Email <a href="mailto:${esc(contactEmail)}">${esc(contactEmail)}</a>.</p>
-</div>`;
+<div class="privacy-contact"><b>Questions or data requests?</b><p style="margin:6px 0 0">To ask about your data or request a correction or deletion, email <a href="mailto:${esc(contactEmail)}">${esc(contactEmail)}</a>.</p></div>
+</main>`;
   res.send(layout('Privacy Policy', body, req.user));
 });
 
@@ -1396,19 +1396,42 @@ const clock = iso => new Date(iso + 'Z').toLocaleTimeString([], { hour: '2-digit
 const fmtDur = ms => { const t = Math.round((ms || 0) / 1000); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
 const fmtSize = b => b == null ? '' : b < 1024 * 1024 ? Math.round(b / 1024) + ' KB' : (b / (1024 * 1024)).toFixed(1) + ' MB';
 const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'file' ? `📄 ${m.media_name || 'File'}` : decryptMsg(m.body_enc, m.iv).slice(0, 40);
+function messageReplyInfo(m, viewerId, isGroup) {
+  if (!m.reply_to_id) return null;
+  const parent = db.prepare('SELECT * FROM messages WHERE id=?').get(m.reply_to_id);
+  if (!parent) return { id: null, from_name: 'Original message', text: 'Original message unavailable' };
+  const sameConversation = isGroup
+    ? !!m.group_id && parent.group_id === m.group_id
+    : !m.group_id && !parent.group_id && (
+        (parent.sender_id === m.sender_id && parent.recipient_id === m.recipient_id) ||
+        (parent.sender_id === m.recipient_id && parent.recipient_id === m.sender_id)
+      );
+  if (!sameConversation || isHiddenFor(parent.id, viewerId)) return { id: null, from_name: 'Original message', text: 'Original message unavailable' };
+  const author = db.prepare('SELECT name FROM users WHERE id=?').get(parent.sender_id);
+  return {
+    id: parent.id,
+    from_name: parent.sender_id === viewerId ? 'You' : (author ? author.name : 'Member'),
+    text: parent.deleted_at ? 'Message deleted' : snippetOf(parent)
+  };
+}
+function replyPreviewHtml(m, viewerId, isGroup) {
+  const reply = messageReplyInfo(m, viewerId, isGroup);
+  if (!reply) return '';
+  return '<div class="reply-preview" style="margin:0 0 7px;padding:6px 9px;border-left:3px solid var(--accent,#64748b);border-radius:5px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:2px"><b>' + esc(reply.from_name) + '</b><span>' + esc(reply.text) + '</span></div>';
+}
 function bubbleHtml(m, meId, isGroup) {
   const side = m.sender_id === meId ? 'me' : 'them';
   const reactions = reactionsFor(m.id);
   const reactHtml = Object.keys(reactions).length ? `<div class="reactions">${Object.entries(reactions).map(([e, n]) => `<span class="rchip">${e} ${n}</span>`).join('')}</div>` : '';
   const senderTag = isGroup && side === 'them' ? `<div class="sender-name">${esc(m.sender_name || '')}</div>` : '';
   const tick = side === 'me' && !isGroup ? `<span class="tickwrap" data-tick="1">${(() => { const html = { read: ' <span class="tick tick-read">&#10003;&#10003;</span>', delivered: ' <span class="tick tick-un">&#10003;&#10003;</span>', sent: ' <span class="tick tick-un">&#10003;</span>' }; return html[tickFor(m, m.recipient_id)] || ''; })()}</span>` : '';
-  const actions = `<div class="msg-actions"><button type="button" class="link" data-act="react">React</button>${side === 'me' ? `${m.kind === 'text' ? `<button type="button" class="link" data-act="edit">Edit</button>` : ''}<button type="button" class="link" data-act="delete-me">Delete for me</button><button type="button" class="link" data-act="delete-everyone">Delete for everyone</button>` : `<button type="button" class="link" data-act="delete-me">Delete for me</button>`}</div>`;
-  if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}" data-kind="${m.kind}">${senderTag}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
-  if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="voice">${senderTag}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio><time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}" data-kind="sticker">${senderTag}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}" data-kind="image">${senderTag}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a><time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  const actions = `<div class="msg-actions"><button type="button" class="link" data-act="reply">Reply</button><button type="button" class="link" data-act="react">React</button>${side === 'me' ? `${m.kind === 'text' ? `<button type="button" class="link" data-act="edit">Edit</button>` : ''}<button type="button" class="link" data-act="delete-me">Delete for me</button><button type="button" class="link" data-act="delete-everyone">Delete for everyone</button>` : `<button type="button" class="link" data-act="delete-me">Delete for me</button>`}</div>`;
+  if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}" data-kind="${m.kind}">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
+  if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="voice">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio><time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}" data-kind="sticker">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}" data-kind="image">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a><time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
   if (m.kind === 'file') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="file"><a class="file-chip" href="/api/messages/media/${m.id}" download="${esc(m.media_name || 'file')}">📄 <span class="file-name">${esc(m.media_name || 'File')}</span></a><time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
 }
 
 app.get('/chat', (req, res) => {
@@ -1423,7 +1446,7 @@ app.get('/chat', (req, res) => {
     const q = String(req.query.q || '').trim();
     let results = '';
     if (q) {
-      const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND role != 'admin' AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
+      const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
         .all(me, '%' + cleanUsername(q) + '%', '%' + q.toLowerCase() + '%');
       results = rows.length ? rows.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? '@' + esc(u.username) : ''}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')
         : '<p class="mut">No one found. Try their exact @username.</p>';
@@ -1432,7 +1455,7 @@ app.get('/chat', (req, res) => {
     const pendingHtml = pending.length ? `<p class="chat-label">Friend requests</p>${pending.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b>${esc(u.name)}</b><span>${u.username ? '@' + esc(u.username) : ''}</span></span>
 <form method="post" action="/api/friends/${u.id}/accept" style="display:inline"><button>Accept</button></form>
 <form method="post" action="/api/friends/${u.id}/decline" style="display:inline"><button class="link">Decline</button></form></div>`).join('')}` : '';
-    return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
+    return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search students and admins by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
   }
   const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ')').all();
   const row = (avatarHtml, name, sub, href, unread, dot) => `<a class="chat-item" href="${href}"><span class="av-wrap" style="position:relative">${avatarHtml}${dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${dot}"></span>` : ''}</span><span class="meta"><b>${esc(name)}</b><span>${sub}</span></span>${unread ? `<b class="nbadge">${badgeText(unread)}</b>` : ''}</a>`;
@@ -1459,7 +1482,7 @@ input.addEventListener('input',resizeInput);
 var panel=document.getElementById('panel'),pBtn=document.getElementById('panelBtn'),micBtn=document.getElementById('micBtn');
 var recBar=document.getElementById('recBar'),recTime=document.getElementById('recTime'),recSend=document.getElementById('recSend'),recCancel=document.getElementById('recCancel');
 var pEmoji=document.getElementById('pEmoji'),pStickers=document.getElementById('pStickers'),ec=document.getElementById('ecats'),eg=document.getElementById('egrid'),sg=document.getElementById('sgrid'),stFile=document.getElementById('stFile'),stZip=document.getElementById('stZip'),upStatus=document.getElementById('upStatus');
-var editingId=null,lastId=parseInt(thread.getAttribute('data-last-id'),10)||0,seen={};
+var editingId=null,replyTarget=null,replyBar=document.getElementById('replyBar'),replyWho=document.getElementById('replyWho'),replyWhat=document.getElementById('replyWhat'),replyCancel=document.getElementById('replyCancel'),lastId=parseInt(thread.getAttribute('data-last-id'),10)||0,seen={};
 Array.prototype.forEach.call(thread.querySelectorAll('[data-id]'),function(n){seen[n.getAttribute('data-id')]=1});
 function fmt(iso){return new Date(iso+'Z').toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
 function dur(ms){var t=Math.round((ms||0)/1000);return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2)}
@@ -1481,7 +1504,7 @@ function linkifyInto(container,text){
 function toBottom(){window.scrollTo(0,document.body.scrollHeight)}
 function tickHtml(t){if(!t)return'';if(t==='queued')return' <span class="tick tick-queued" title="Waiting for a connection">&#8987;</span>';if(convType==='group')return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
 function actionsRow(id,mine,kind){
-  var r=el('div','msg-actions'),react=el('button','link','React');react.type='button';react.setAttribute('data-act','react');r.appendChild(react);
+  var r=el('div','msg-actions'),reply=el('button','link','Reply');reply.type='button';reply.setAttribute('data-act','reply');r.appendChild(reply);var react=el('button','link','React');react.type='button';react.setAttribute('data-act','react');r.appendChild(react);
   if(mine){
     if(kind==='text'){var ed=el('button','link','Edit');ed.type='button';ed.setAttribute('data-act','edit');r.appendChild(ed)}
     var d1=el('button','link','Delete for me');d1.type='button';d1.setAttribute('data-act','delete-me');r.appendChild(d1);
@@ -1489,6 +1512,16 @@ function actionsRow(id,mine,kind){
   } else {var d1b=el('button','link','Delete for me');d1b.type='button';d1b.setAttribute('data-act','delete-me');r.appendChild(d1b)}
   return r;
 }
+function clearReply(){replyTarget=null;replyBar.hidden=true}
+function startReply(id){
+  var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;
+  var textEl=b.querySelector('.msg-text'),fileEl=b.querySelector('.file-name'),audioEl=b.querySelector('audio'),imgEl=b.querySelector('img');
+  var text=textEl?textEl.textContent.trim():(audioEl?'Voice note':imgEl?'Sticker or photo':fileEl?fileEl.textContent.trim():'Message');
+  var author=b.classList.contains('me')?'You':(b.querySelector('.sender-name')?b.querySelector('.sender-name').textContent:(convType==='group'?'Group member':((document.querySelector('.chat-head b')||{}).textContent||'Member')));
+  replyTarget={id:Number(id),from_name:author,text:text.slice(0,160)||'Message'};
+  replyWho.textContent='Replying to '+author;replyWhat.textContent=replyTarget.text;replyBar.hidden=false;input.focus();
+}
+replyCancel.addEventListener('click',clearReply);
 var REACT_SET=['👍','❤️','😂','😮','😢','🙏'];
 function openReact(id){var b=thread.querySelector('[data-id="'+id+'"]');var old=b.querySelector('.react-pick');if(old){old.remove();return}
   var row=el('div','react-pick');REACT_SET.forEach(function(em){var btn=el('button',null,em);btn.type='button';btn.addEventListener('click',function(){react(id,em);row.remove()});row.appendChild(btn)});b.appendChild(row)}
@@ -1514,6 +1547,7 @@ function bubble(m){
   else if(m.kind==='image'){d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);var ia=document.createElement('a');ia.href='/api/messages/media/'+m.id;ia.target='_blank';ia.rel='noopener noreferrer';var iim=document.createElement('img');iim.src='/api/messages/media/'+m.id;iim.alt='photo';iim.loading='lazy';ia.appendChild(iim);d.appendChild(ia)}
   else if(m.kind==='file'){d=el('div','bubble '+side);var fa=document.createElement('a');fa.className='file-chip';fa.href='/api/messages/media/'+m.id;fa.setAttribute('download',m.name||'file');fa.appendChild(document.createTextNode('📄 '));var fn=el('span','file-name',m.name||'File');fa.appendChild(fn);d.appendChild(fa)}
   else{d=el('div','bubble '+side);var st3=senderTag(m);if(st3)d.appendChild(st3);var sp=el('span','msg-text');linkifyInto(sp,m.body);d.appendChild(sp);if(m.edited)d.appendChild(el('span','mut',' (edited)'))}
+  if(m.reply&&!m.deleted){var rp=el('div','reply-preview');rp.style.cssText='margin:0 0 7px;padding:6px 9px;border-left:3px solid var(--accent,#64748b);border-radius:5px;background:rgba(100,116,139,.12);font-size:12px;display:flex;flex-direction:column;gap:2px';rp.appendChild(el('b',null,m.reply.from_name||'Reply'));rp.appendChild(el('span',null,m.reply.text||'Message'));d.insertBefore(rp,d.firstChild)}
   d.setAttribute('data-id',m.id);d.setAttribute('data-kind',m.kind);
   if(!m.deleted)d.appendChild(actionsRow(m.id,mine,m.kind));
   if(m.reactions&&Object.keys(m.reactions).length){var row=el('div','reactions');Object.keys(m.reactions).forEach(function(em){row.appendChild(el('span','rchip',em+' '+m.reactions[em]))});d.appendChild(row)}
@@ -1536,17 +1570,17 @@ function post(url,obj,cb){fetch(url,{method:'POST',headers:{'Content-Type':'appl
 toBottom();setInterval(poll,1500);
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
   if(editingId){var id=editingId;editingId=null;input.value='';resizeInput();fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
-  input.value='';resizeInput();var body=Object.assign({body:text},convType==='group'?{group:convId}:{to:convId});
-  if(!navigator.onLine)return queueAndShow(body,text);
+  var selectedReply=replyTarget;input.value='';resizeInput();var body=Object.assign({body:text,reply_to_id:selectedReply?selectedReply.id:null},convType==='group'?{group:convId}:{to:convId});
+  if(!navigator.onLine){queueAndShow(body,text,selectedReply);clearReply();return}
   fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){
-    if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:text,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}
+    if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:text,reply:selectedReply,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;clearReply()}
     else alert((j&&j.error)||'Could not send.')
-  }).catch(function(){queueAndShow(body,text)})});
+  }).catch(function(){queueAndShow(body,text,selectedReply);clearReply()})});
 
 /* ---- send while offline: queue in IndexedDB, auto-send once a connection is back ---- */
-function queueAndShow(body,text){
+function queueAndShow(body,text,selectedReply){
   var tempId='q'+Date.now()+Math.random().toString(36).slice(2);
-  bubble({id:tempId,from:myId,kind:'text',body:text,created_at:new Date().toISOString(),tick:'queued'});
+  bubble({id:tempId,from:myId,kind:'text',body:text,reply:selectedReply||null,created_at:new Date().toISOString(),tick:'queued'});
   pendingAdd({tempId:tempId,payload:body}).then(registerBackgroundSync);
 }
 function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',2);rq.onupgradeneeded=function(){var db=rq.result;if(!db.objectStoreNames.contains('msgs'))db.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!db.objectStoreNames.contains('uploads'))db.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
@@ -1674,8 +1708,28 @@ thread.addEventListener('click',function(e){
   if(save){fetch('/api/stickers/from-message/'+save.getAttribute('data-save'),{method:'POST'}).then(function(r){return r.json()}).then(function(j){save.textContent=(j&&j.ok)?'✓ Saved to your stickers':((j&&j.error)||'Could not save');save.disabled=true}).catch(function(){save.textContent='Could not save'});return}
   var act=e.target.closest?e.target.closest('[data-act]'):null;if(!act)return;
   var bub=act.closest('[data-id]');if(!bub)return;var id=bub.getAttribute('data-id'),kind=act.getAttribute('data-act');
-  if(kind==='react')openReact(id);else if(kind==='edit')startEdit(id);else if(kind==='delete-me')doDelete(id,'me');else if(kind==='delete-everyone')doDelete(id,'everyone');
+  if(kind==='reply')startReply(id);else if(kind==='react')openReact(id);else if(kind==='edit')startEdit(id);else if(kind==='delete-me')doDelete(id,'me');else if(kind==='delete-everyone')doDelete(id,'everyone');
 });
+
+/* ---- mobile reply gestures: swipe a message horizontally or long-press it ---- */
+var touchStart=null,pressTimer=null;
+thread.addEventListener('touchstart',function(e){
+  var b=e.target.closest?e.target.closest('[data-id]'):null;
+  if(!b||e.target.closest('button,a,input'))return;
+  var t=e.touches[0];touchStart={id:b.getAttribute('data-id'),x:t.clientX,y:t.clientY};
+  clearTimeout(pressTimer);
+  pressTimer=setTimeout(function(){if(touchStart){startReply(touchStart.id);touchStart=null}},550);
+},{passive:true});
+thread.addEventListener('touchmove',function(e){
+  if(!touchStart)return;
+  var t=e.touches[0],dx=t.clientX-touchStart.x,dy=t.clientY-touchStart.y;
+  if(Math.abs(dx)>12||Math.abs(dy)>12)clearTimeout(pressTimer);
+  if(Math.abs(dx)>70&&Math.abs(dx)>Math.abs(dy)*1.3){
+    var id=touchStart.id;touchStart=null;clearTimeout(pressTimer);startReply(id);
+  }
+},{passive:true});
+thread.addEventListener('touchend',function(){clearTimeout(pressTimer);touchStart=null},{passive:true});
+thread.addEventListener('touchcancel',function(){clearTimeout(pressTimer);touchStart=null},{passive:true});
 
 /* ---- voice notes: tap the mic to record, tap Send to deliver ---- */
 var rec=null,chunks=[],stream=null,t0=0,tick=null,cancelled=false;
@@ -1707,6 +1761,7 @@ function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastI
 <div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
 <div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker(s)<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" multiple></label>
 <label class="btn ghost st-add">+ Add a .zip of pictures<input type="file" id="stZip" accept=".zip,application/zip,application/x-zip-compressed"></label><div id="sgrid" class="sgrid"></div></div></div>
+<div id="replyBar" class="reply-bar" hidden style="padding:9px 12px;margin-top:8px;border-left:3px solid var(--accent,#64748b);border-radius:8px;background:rgba(100,116,139,.12);align-items:center;gap:10px"><div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:2px"><b id="replyWho" style="font-size:12px">Replying</b><span id="replyWhat" class="mut" style="font-size:12px;overflow-wrap:anywhere"></span></div><button type="button" id="replyCancel" class="link">Cancel</button></div>
 <form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" style="display:none">📎</label><textarea id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required rows="1"></textarea><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
 <div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
 <p id="upStatus" class="mut" style="margin:4px 0 0" hidden></p>
@@ -1785,8 +1840,16 @@ app.post('/api/messages/send', (req, res) => {
   if (!text) return res.status(400).json({ error: 'Invalid message.' });
   const target = resolveTarget(req);
   if (!target) return res.status(400).json({ error: 'Invalid message.' });
+  const replyId = Number(req.body && req.body.reply_to_id) || null;
+  if (replyId) {
+    const parent = db.prepare('SELECT * FROM messages WHERE id=?').get(replyId);
+    const sameConversation = parent && (target.group_id
+      ? parent.group_id === target.group_id
+      : !parent.group_id && ((parent.sender_id === req.user.id && parent.recipient_id === target.recipient_id) || (parent.sender_id === target.recipient_id && parent.recipient_id === req.user.id)));
+    if (!sameConversation || parent.deleted_at || isHiddenFor(parent.id, req.user.id)) return res.status(400).json({ error: 'Choose a message from this conversation to reply to.' });
+  }
   const { body_enc, iv } = encryptMsg(text);
-  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv) VALUES(?,?,?,?,?)').run(req.user.id, target.recipient_id, target.group_id, body_enc, iv);
+  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,reply_to_id) VALUES(?,?,?,?,?,?)').run(req.user.id, target.recipient_id, target.group_id, body_enc, iv, replyId);
   const row = db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid);
   notifyNewMessage(req.user, target, text.slice(0, 120));
   res.json({ id: Number(info.lastInsertRowid), created_at: row.created_at });
@@ -1923,6 +1986,7 @@ app.get('/api/messages/poll', (req, res) => {
     body: m.deleted_at ? '' : (m.kind === 'text' || !m.kind ? decryptMsg(m.body_enc, m.iv) : ''),
     ms: m.media_ms || 0, name: m.media_name || '', created_at: m.created_at,
     reactions: reactionsFor(m.id),
+    reply: messageReplyInfo(m, req.user.id, !!m.group_id),
     tick: m.sender_id === req.user.id && !m.group_id ? tickFor(m, m.recipient_id) : undefined,
   }));
   // Tick refresh for messages I sent earlier in this conversation, so the sender's ticks update live even with no new messages.
