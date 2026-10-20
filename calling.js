@@ -1,0 +1,106 @@
+'use strict';
+const { AccessToken } = require('livekit-server-sdk');
+
+function registerCalling(app, { db, crypto }) {
+  db.exec("CREATE TABLE IF NOT EXISTS call_sessions(id TEXT PRIMARY KEY,room_name TEXT UNIQUE NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('audio','video')),group_id INTEGER,created_by INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'active',created_at TEXT DEFAULT CURRENT_TIMESTAMP,ended_at TEXT); CREATE TABLE IF NOT EXISTS call_participants(call_id TEXT NOT NULL,user_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'invited',invited_by INTEGER NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(call_id,user_id)); CREATE INDEX IF NOT EXISTS call_participants_user_status ON call_participants(user_id,status);");
+  const isMember = (g,u) => !!db.prepare('SELECT 1 FROM group_members WHERE group_id=? AND user_id=?').get(g,u);
+  const friends = (a,b) => !!db.prepare("SELECT 1 FROM friendships WHERE status='friends' AND ((requester_id=? AND addressee_id=?) OR (requester_id=? AND addressee_id=?))").get(a,b,b,a);
+  const callById = id => db.prepare('SELECT * FROM call_sessions WHERE id=?').get(id);
+  const participant = (id,u) => db.prepare('SELECT * FROM call_participants WHERE call_id=? AND user_id=?').get(id,u);
+  const people = id => db.prepare('SELECT cp.user_id,cp.status,u.name FROM call_participants cp JOIN users u ON u.id=cp.user_id WHERE cp.call_id=? ORDER BY u.name').all(id);
+  const ready = () => !!(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
+  function eligible(call, uid) {
+    let rows;
+    if (call.group_id) rows = db.prepare('SELECT u.id,u.name FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? AND u.id<>? ORDER BY u.name').all(call.group_id,uid);
+    else rows = db.prepare("SELECT u.id,u.name FROM friendships f JOIN users u ON u.id=CASE WHEN f.requester_id=? THEN f.addressee_id ELSE f.requester_id END WHERE f.status='friends' AND (f.requester_id=? OR f.addressee_id=?) AND u.id<>? ORDER BY u.name").all(uid,uid,uid,uid);
+    return rows.filter(p => { const x=participant(call.id,p.id); return !x || x.status==='left' || x.status==='declined'; });
+  }
+  function mayInvite(call, uid, target) {
+    if (uid===target || !db.prepare('SELECT id FROM users WHERE id=?').get(target)) return false;
+    return call.group_id ? isMember(call.group_id,uid) && isMember(call.group_id,target) : friends(uid,target);
+  }
+  app.post('/api/calls/start',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);
+    const uid=req.user.id, kind=req.body&&req.body.kind==='video'?'video':'audio', gid=Number(req.body&&req.body.group_id)||null, peer=Number(req.body&&req.body.peer_id)||null;
+    if(gid ? !isMember(gid,uid) : (!peer || peer===uid || !friends(uid,peer))) return res.status(403).json({error:'You must be a group member or friend to start this call.'});
+    const ids=Array.isArray(req.body&&req.body.invited_user_ids)?[...new Set(req.body.invited_user_ids.map(Number).filter(n=>Number.isSafeInteger(n)&&n>0&&n!==uid))]:[];
+    if(!gid&&peer)ids.push(peer);
+    const id=crypto.randomUUID(), room='studieshub-'+id;
+    db.prepare('INSERT INTO call_sessions(id,room_name,kind,group_id,created_by,status) VALUES(?,?,?,?,?,?)').run(id,room,kind,gid,uid,'active');
+    db.prepare("INSERT INTO call_participants(call_id,user_id,status,invited_by) VALUES(?,?,?,?)").run(id,uid,'joined',uid);
+    const add=db.prepare("INSERT OR IGNORE INTO call_participants(call_id,user_id,status,invited_by) VALUES(?,?,?,?)");
+    for(const target of ids)if(mayInvite({id,group_id:gid},uid,target))add.run(id,target,'invited',uid);
+    res.status(201).json({id,kind,url:'/call/'+encodeURIComponent(id)});
+  });
+  app.get('/api/calls/incoming',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);
+    res.json({calls:db.prepare("SELECT c.id,c.kind,c.created_at,u.name caller_name,g.name group_name FROM call_participants cp JOIN call_sessions c ON c.id=cp.call_id JOIN users u ON u.id=c.created_by LEFT JOIN groups g ON g.id=c.group_id WHERE cp.user_id=? AND cp.status='invited' AND c.status='active' ORDER BY c.created_at DESC LIMIT 5").all(req.user.id)});
+  });
+  app.get('/api/calls/eligible',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);
+    const id=String(req.query.call_id||''), call=id?callById(id):null;
+    if(call){if(call.status!=='active'||!participant(id,req.user.id))return res.status(404).json({error:'Call not found.'});return res.json({people:eligible(call,req.user.id)});}
+    const gid=Number(req.query.group_id)||null;
+    if(!gid||!isMember(gid,req.user.id))return res.status(400).json({error:'Choose a valid group.'});
+    res.json({people:db.prepare('SELECT u.id,u.name FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? AND u.id<>? ORDER BY u.name').all(gid,req.user.id)});
+  });
+  app.get('/api/calls/:id',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
+    if(!c||!p)return res.status(404).json({error:'Call not found.'});
+    res.json({id:c.id,kind:c.kind,group_id:c.group_id,created_by:c.created_by,status:c.status,people:people(c.id),me:p.status,livekit_configured:ready()});
+  });
+  app.post('/api/calls/:id/accept',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
+    if(!c||c.status!=='active'||!p||!['invited','joined'].includes(p.status))return res.status(404).json({error:'This call invitation is no longer available.'});
+    db.prepare("UPDATE call_participants SET status='joined',updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=?").run(c.id,req.user.id);res.json({ok:true,url:'/call/'+encodeURIComponent(c.id)});
+  });
+  app.post('/api/calls/:id/decline',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
+    if(!c||!participant(c.id,req.user.id))return res.status(404).json({error:'Call not found.'});
+    db.prepare("UPDATE call_participants SET status='declined',updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=? AND status='invited'").run(c.id,req.user.id);res.json({ok:true});
+  });
+  app.post('/api/calls/:id/invite',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
+    if(!c||c.status!=='active'||!participant(c.id,req.user.id))return res.status(404).json({error:'Call not found.'});
+    const ids=Array.isArray(req.body&&req.body.user_ids)?[...new Set(req.body.user_ids.map(Number).filter(n=>Number.isSafeInteger(n)&&n>0))]:[];
+    if(!ids.length||ids.length>30)return res.status(400).json({error:'Choose 1–30 people.'});
+    const add=db.prepare("INSERT INTO call_participants(call_id,user_id,status,invited_by) VALUES(?,?,?,?) ON CONFLICT(call_id,user_id) DO UPDATE SET status='invited',invited_by=excluded.invited_by,updated_at=CURRENT_TIMESTAMP WHERE call_participants.status IN ('declined','left')");
+    let n=0;for(const target of ids)if(mayInvite(c,req.user.id,target)){add.run(c.id,target,'invited',req.user.id);n++;}
+    if(!n)return res.status(400).json({error:'No eligible people selected.'});res.json({ok:true,invited:n});
+  });
+  app.post('/api/calls/:id/token',async(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
+    if(!c||c.status!=='active'||!p||!['invited','joined'].includes(p.status))return res.status(404).json({error:'This call is no longer available.'});
+    if(!ready())return res.status(503).json({error:'Calling needs LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in Railway Variables.'});
+    try{const t=new AccessToken(process.env.LIVEKIT_API_KEY,process.env.LIVEKIT_API_SECRET,{identity:'user-'+req.user.id,name:String(req.user.name||'StudiesHub member').slice(0,80),ttl:'1h'});t.addGrant({roomJoin:true,room:c.room_name,canPublish:true,canSubscribe:true,canPublishData:true});res.json({serverUrl:process.env.LIVEKIT_URL,token:await t.toJwt(),kind:c.kind});}
+    catch(e){console.error('LiveKit token generation failed:',e.message);res.status(503).json({error:'Could not prepare the call. Check LiveKit settings.'});}
+  });
+  app.post('/api/calls/:id/leave',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
+    if(!c||!participant(c.id,req.user.id))return res.status(404).json({error:'Call not found.'});
+    db.prepare("UPDATE call_participants SET status='left',updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=?").run(c.id,req.user.id);res.json({ok:true});
+  });
+  app.post('/api/calls/:id/end',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
+    if(!c||c.created_by!==req.user.id)return res.status(403).json({error:'Only the call creator can end it for everyone.'});
+    db.prepare("UPDATE call_sessions SET status='ended',ended_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'").run(c.id);
+    db.prepare("UPDATE call_participants SET status='left',updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND status IN ('invited','joined')").run(c.id);res.json({ok:true});
+  });
+  app.get('/call/:id',(req,res)=>{
+    if(!req.user)return res.redirect('/login?next='+encodeURIComponent(req.originalUrl));
+    const c=callById(String(req.params.id));if(!c||c.status!=='active'||!participant(c.id,req.user.id))return res.status(404).send('This call is no longer available.');
+    const video=c.kind==='video', isHost=c.created_by===req.user.id, id=JSON.stringify(c.id), kind=JSON.stringify(c.kind);
+    res.type('html').send('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>StudiesHub call</title><style>body{margin:0;background:#07111f;color:#e8f0fb;font:16px system-ui}header,main{padding:14px}header{display:flex;justify-content:space-between;border-bottom:1px solid #2b4057}button,select{font:inherit;padding:9px 12px;border-radius:9px;border:1px solid #43576e;background:#14263a;color:inherit;cursor:pointer}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.tile{padding:10px;background:#122236;border:1px solid #30455c;border-radius:12px;min-height:130px}.tile video{width:100%;max-height:50vh;background:#000;border-radius:8px}.mut{color:#a6b8cc;font-size:13px}.danger{background:#8d2637}label.pick{display:flex;gap:9px;padding:8px}label.pick input{width:auto}</style></head><body><header><b>StudiesHub · '+(video?'Video':'Voice')+' call</b><button id="leave">Leave call</button></header><main><p id="status" class="mut">Connecting…</p><div class="toolbar"><button id="mic">Mute microphone</button><button id="cam"'+(video?'':' hidden')+'>Turn camera off</button><button id="invite">Invite people</button><button id="end" class="danger"'+(isHost?'':' hidden')+'>End for everyone</button></div><div class="toolbar"><label>Microphone <select id="audioDevice"><option value="">Default</option></select></label><label'+(video?'':' hidden')+'>Camera <select id="videoDevice"><option value="">Default</option></select></label></div><section id="inviteBox" hidden><b>Select people to invite</b><div id="choices"></div><div class="toolbar"><button id="sendInvites">Invite selected</button><button id="cancelInvites">Cancel</button></div></section><div id="tiles" class="tiles"></div></main><script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script><script>(()=>{const id='+id+',kind='+kind+',host='+JSON.stringify(isHost)+';const $=x=>document.getElementById(x);let room,micOn=true,camOn=kind==="video";const api=(url,body)=>fetch(url,{method:body?"POST":"GET",credentials:"same-origin",headers:body?{"Content-Type":"application/json"}:{},body:body?JSON.stringify(body):undefined}).then(async r=>{let j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||"Request failed");return j});function tile(key,name){let e=$("p-"+key);if(!e){e=document.createElement("div");e.id="p-"+key;e.className="tile";let n=document.createElement("b");n.textContent=name||"Participant";e.appendChild(n);$("tiles").appendChild(e)}return e}function attach(t,p){let el=t.attach();el.autoplay=true;if(t.kind==="video")el.playsInline=true;tile(p.identity,p.name||p.identity).appendChild(el)}function refresh(){api("/api/calls/"+id).then(j=>{if(j.status!=="active"){ $("status").textContent="Call ended";if(room)room.disconnect();return}$("status").textContent="Call active · "+j.people.filter(p=>p.status==="joined").length+" joined";j.people.forEach(p=>{if(p.status!=="joined")tile("u"+p.user_id,p.name+" · "+p.status)})}).catch(e=>$("status").textContent=e.message)}async function start(){try{if(!window.LivekitClient)throw Error("Calling client did not load; check your connection.");let c=await api("/api/calls/"+id+"/token",{});room=new LivekitClient.Room({adaptiveStream:true,dynacast:true});room.on(LivekitClient.RoomEvent.TrackSubscribed,(t,p,who)=>attach(t,who));room.on(LivekitClient.RoomEvent.TrackUnsubscribed,t=>t.detach().forEach(e=>e.remove()));await room.connect(c.serverUrl,c.token);await room.localParticipant.setMicrophoneEnabled(true);if(kind==="video")await room.localParticipant.setCameraEnabled(true);room.localParticipant.trackPublications.forEach(p=>{if(p.track)attach(p.track,room.localParticipant)});room.remoteParticipants.forEach(p=>p.trackPublications.forEach(pub=>{if(pub.track)attach(pub.track,p)}));await listDevices();refresh();setInterval(refresh,3500);$("status").textContent="Connected"}catch(e){$("status").textContent=e.message||"Could not join call."}}async function listDevices(){if(!navigator.mediaDevices||!navigator.mediaDevices.enumerateDevices)return;try{let d=await navigator.mediaDevices.enumerateDevices();[["audioinput","audioDevice"],["videoinput","videoDevice"]].forEach(([k,id])=>d.filter(x=>x.kind===k).forEach(x=>{let o=document.createElement("option");o.value=x.deviceId;o.textContent=x.label||"Device";$(id).appendChild(o)}))}catch(_){}}$("audioDevice").onchange=e=>room&&e.target.value&&room.switchActiveDevice&&room.switchActiveDevice("audioinput",e.target.value).catch(()=>{});$("videoDevice").onchange=e=>room&&e.target.value&&room.switchActiveDevice&&room.switchActiveDevice("videoinput",e.target.value).catch(()=>{});$("mic").onclick=async()=>{if(!room)return;micOn=!micOn;await room.localParticipant.setMicrophoneEnabled(micOn);$("mic").textContent=micOn?"Mute microphone":"Unmute microphone"};$("cam").onclick=async()=>{if(!room)return;camOn=!camOn;await room.localParticipant.setCameraEnabled(camOn);$("cam").textContent=camOn?"Turn camera off":"Turn camera on"};$("leave").onclick=async()=>{try{await api("/api/calls/"+id+"/leave",{})}catch(_){}if(room)room.disconnect();location.href="/chat"};$("end").onclick=async()=>{if(!confirm("End this call for everyone?"))return;try{await api("/api/calls/"+id+"/end",{})}catch(e){alert(e.message)}if(room)room.disconnect();location.href="/chat"};$("invite").onclick=async()=>{try{let j=await api("/api/calls/eligible?call_id="+encodeURIComponent(id));$("choices").textContent="";if(!j.people.length){$("choices").textContent="No eligible people to invite.";$("inviteBox").hidden=false;return}j.people.forEach(p=>{let l=document.createElement("label");l.className="pick";let c=document.createElement("input");c.type="checkbox";c.value=p.id;let n=document.createElement("span");n.textContent=p.name;l.append(c,n);$("choices").appendChild(l)});$("inviteBox").hidden=false}catch(e){alert(e.message)}};$("cancelInvites").onclick=()=>$("inviteBox").hidden=true;$("sendInvites").onclick=async()=>{let ids=Array.from($("choices").querySelectorAll("input:checked")).map(x=>Number(x.value));try{let j=await api("/api/calls/"+id+"/invite",{user_ids:ids});alert("Invited "+j.invited+" participant(s).");$("inviteBox").hidden=true;refresh()}catch(e){alert(e.message)}};window.addEventListener("beforeunload",()=>room&&room.disconnect());start()})();</script></body></html>');
+  });
+}
+
+const clientScript = '(' + function() {
+  const path=location.pathname, group=path.match(/^\/chat\/group\/(\d+)$/), peer=path.match(/^\/chat\/(\d+)$/), chat=!!(group||peer);
+  const post=(url,body)=>fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||'Request failed');return j;});
+  function incoming(){fetch('/api/calls/incoming',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():{calls:[]}).then(j=>{const c=(j.calls||[])[0];let b=document.getElementById('incomingCallBar');if(!c){if(b)b.remove();return}if(!b){b=document.createElement('div');b.id='incomingCallBar';b.style.cssText='position:fixed;z-index:9999;bottom:14px;left:12px;right:12px;max-width:560px;margin:auto;background:#132b42;color:#fff;border:1px solid #54718c;border-radius:14px;padding:14px;box-shadow:0 10px 40px #0008;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap';document.body.appendChild(b)}b.textContent='';let t=document.createElement('span');t.textContent=c.caller_name+' invites you to a '+(c.kind==='video'?'video':'voice')+' call'+(c.group_name?' in '+c.group_name:'');b.appendChild(t);[['Accept',true],['Decline',false]].forEach(([label,yes])=>{let x=document.createElement('button');x.textContent=label;x.onclick=()=>post('/api/calls/'+encodeURIComponent(c.id)+'/'+(yes?'accept':'decline'),{}).then(j=>yes?location.href=j.url:incoming()).catch(e=>alert(e.message));b.appendChild(x)})}).catch(()=>{})}
+  if(chat){const h=document.querySelector('.chat-head')||document.querySelector('main h1')||document.querySelector('h1');if(h&&!document.getElementById('callingBar')){const bar=document.createElement('div');bar.id='callingBar';bar.style.cssText='display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px';function btn(label,kind){const b=document.createElement('button');b.type='button';b.textContent=label;b.style.cssText='border:1px solid var(--line,#344);border-radius:10px;padding:9px 12px;background:var(--card,#132236);color:var(--fg,inherit);font:inherit;cursor:pointer';b.onclick=()=>start(kind);bar.appendChild(b)}btn('Voice call','audio');btn('Video call','video');h.insertAdjacentElement('afterend',bar)}
+    async function start(kind){try{let body={kind};if(group){const r=await fetch('/api/calls/eligible?group_id='+group[1],{credentials:'same-origin'}),j=await r.json();if(!r.ok)throw Error(j.error||'Could not load group members.');if(!j.people.length)throw Error('No other group members to invite.');const overlay=document.createElement('div');overlay.style.cssText='position:fixed;inset:0;z-index:9998;background:#0009;display:grid;place-items:center;padding:16px';const box=document.createElement('div');box.style.cssText='background:var(--card,#101e30);color:var(--fg,inherit);border:1px solid var(--line,#344);border-radius:16px;padding:16px;width:min(440px,100%);max-height:80vh;overflow:auto';const title=document.createElement('h3');title.textContent='Choose participants';box.appendChild(title);const checks=[];j.people.forEach(p=>{const l=document.createElement('label');l.style.cssText='display:flex;gap:10px;padding:8px 0';const c=document.createElement('input');c.type='checkbox';c.checked=true;c.value=p.id;c.style.width='auto';const n=document.createElement('span');n.textContent=p.name;l.append(c,n);box.appendChild(l);checks.push(c)});const go=document.createElement('button');go.textContent='Start call';go.onclick=async()=>{body.group_id=Number(group[1]);body.invited_user_ids=checks.filter(c=>c.checked).map(c=>Number(c.value));if(!body.invited_user_ids.length){alert('Select at least one participant.');return}try{const j=await post('/api/calls/start',body);location.href=j.url}catch(e){alert(e.message)}overlay.remove()};const cancel=document.createElement('button');cancel.textContent='Cancel';cancel.style.marginLeft='8px';cancel.onclick=()=>overlay.remove();box.append(go,cancel);overlay.appendChild(box);overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};document.body.appendChild(overlay)}else{body.peer_id=Number(peer[1]);const j=await post('/api/calls/start',body);location.href=j.url}}catch(e){alert(e.message||'Could not start call.')}}
+  }
+  incoming();setInterval(incoming,5000);
+}.toString() + ')();';
+module.exports = { registerCalling, clientScript };
