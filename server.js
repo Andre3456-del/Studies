@@ -86,8 +86,9 @@ CREATE INDEX IF NOT EXISTS gm_user ON group_members(user_id);
 CREATE INDEX IF NOT EXISTS push_user ON push_subscriptions(user_id);
 `);
 const msgCols2 = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
-for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER'], ['reply_to_id', 'INTEGER']])
+for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER'], ['reply_to_id', 'INTEGER'], ['delivered_at', 'TEXT']])
   if (!msgCols2.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
+db.exec('CREATE INDEX IF NOT EXISTS messages_undelivered ON messages(recipient_id, delivered_at)');
 const groupCols = db.prepare('PRAGMA table_info(groups)').all().map(c => c.name);
 for (const [c, def] of [['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT']])
   if (!groupCols.includes(c)) db.exec(`ALTER TABLE groups ADD COLUMN ${c} ${def}`);
@@ -385,6 +386,7 @@ app.use((req, res, next) => {
   if (req.user && Date.now() - (req.user.last_seen || 0) > 20000) {
     db.prepare('UPDATE users SET last_seen=? WHERE id=?').run(Date.now(), req.user.id);
     req.user.last_seen = Date.now();
+    markDelivered(req.user.id);
   }
   next();
 });
@@ -842,7 +844,7 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .bubble{max-width:78%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;word-wrap:break-word}
 .bubble.me{align-self:flex-end;background:linear-gradient(135deg,#5bc8ff,var(--blue) 60%);color:#04101f;border-bottom-right-radius:4px}
 .bubble.them{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:4px}
-.bubble time{display:block;font-size:11px;opacity:.65;margin-top:3px}
+.bubble time{display:block;text-align:right;font-size:11px;opacity:.65;margin-top:3px}
 .chat-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line);max-width:1000px;margin:0 auto}
 .chat-bar input,.chat-bar textarea{margin:0;flex:1}.chat-bar button{margin:0}
 .chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:6px 0 12px;z-index:5}
@@ -865,7 +867,7 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .file-chip{display:flex;align-items:center;gap:6px;color:inherit;text-decoration:none;font-weight:600}
 .file-chip:hover{text-decoration:underline}
 .file-name{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
-.sticker-msg time{font-size:11px;opacity:.65}
+.sticker-msg time{font-size:11px;opacity:.65;align-self:flex-end;text-align:right}
 .save-st{font-size:12px;color:var(--blue)}
 .chat-bar[hidden],.chat-panel[hidden]{display:none}
 .chat-bar .ic{padding:9px 12px;font-size:18px;line-height:1;background:transparent;border:1px solid var(--line);color:var(--fg);box-shadow:none}
@@ -1388,11 +1390,19 @@ const lastMessageWith = (me, other) => db.prepare('SELECT * FROM messages WHERE 
 const lastGroupMessage = gid => db.prepare('SELECT * FROM messages WHERE group_id=? ORDER BY id DESC LIMIT 1').get(gid);
 const isRead = (mid, uid) => !!db.prepare('SELECT 1 FROM message_reads WHERE message_id=? AND user_id=?').get(mid, uid);
 const isHiddenFor = (mid, uid) => !!db.prepare('SELECT 1 FROM message_hidden WHERE message_id=? AND user_id=?').get(mid, uid);
+// Delivered is permanent: the first time the recipient is online after a message was sent, it is stamped on the message, so the
+// double tick never goes back to a single tick when they go offline again (or when the page is refreshed).
+function markDelivered(recipientId) {
+  db.prepare('UPDATE messages SET delivered_at=CURRENT_TIMESTAMP WHERE recipient_id=? AND group_id IS NULL AND delivered_at IS NULL').run(recipientId);
+}
 function tickFor(m, recipientId) {
   if (isRead(m.id, recipientId)) return 'read';
+  if (m.delivered_at) return 'delivered';
   const other = db.prepare('SELECT last_seen FROM users WHERE id=?').get(recipientId);
-  return other && isOnline(other) ? 'delivered' : 'sent';
+  if (other && isOnline(other)) { markDelivered(recipientId); return 'delivered'; }
+  return 'sent';
 }
+const tickSpan = st => ({ read: '<span class="tick tick-read">&#10003;&#10003;</span>', delivered: '<span class="tick tick-un">&#10003;&#10003;</span>', sent: '<span class="tick tick-un">&#10003;</span>' })[st] || '';
 function reactionsFor(mid) {
   const rows = db.prepare('SELECT emoji, COUNT(*) n FROM message_reactions WHERE message_id=? GROUP BY emoji').all(mid);
   const out = {}; for (const r of rows) out[r.emoji] = r.n; return out;
@@ -1436,11 +1446,11 @@ function bubbleHtml(m, meId, isGroup) {
   const tick = side === 'me' && !isGroup ? `<span class="tickwrap" data-tick="1">${(() => { const html = { read: ' <span class="tick tick-read">&#10003;&#10003;</span>', delivered: ' <span class="tick tick-un">&#10003;&#10003;</span>', sent: ' <span class="tick tick-un">&#10003;</span>' }; return html[tickFor(m, m.recipient_id)] || ''; })()}</span>` : '';
   const actions = `<div class="msg-actions"><button type="button" class="link" data-act="reply">Reply</button><button type="button" class="link" data-act="react">React</button>${side === 'me' ? `${m.kind === 'text' ? `<button type="button" class="link" data-act="edit">Edit</button>` : ''}<button type="button" class="link" data-act="delete-me">Delete for me</button><button type="button" class="link" data-act="delete-everyone">Delete for everyone</button>` : `<button type="button" class="link" data-act="delete-me">Delete for me</button>`}</div>`;
   if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}" data-kind="${m.kind}">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
-  if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="voice">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio><time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}" data-kind="sticker">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}" data-kind="image">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a><time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  if (m.kind === 'file') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="file"><a class="file-chip" href="/api/messages/media/${m.id}" download="${esc(m.media_name || 'file')}">📄 <span class="file-name">${esc(m.media_name || 'File')}</span></a><time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
-  return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time>${actions}${reactHtml}</div>`;
+  if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="voice">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio>${actions}${reactHtml}<time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${tick}</time></div>`;
+  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}" data-kind="sticker">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
+  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}" data-kind="image">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a>${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
+  if (m.kind === 'file') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="file"><a class="file-chip" href="/api/messages/media/${m.id}" download="${esc(m.media_name || 'file')}">📄 <span class="file-name">${esc(m.media_name || 'File')}</span></a>${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
+  return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
 }
 
 app.get('/chat', (req, res) => {
@@ -1471,7 +1481,8 @@ app.get('/chat', (req, res) => {
   const friendRows = friends.map(u => {
     const m = lastMessageWith(me, u.id);
     const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?)").get(u.id, me, me).n;
-    return row(avatarOr(u), u.name, isOnline(u) ? 'Online now' : (m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'Offline'), `/chat/${u.id}`, unread, isOnline(u) ? '#22c55e' : '#ef4444');
+    const mine = m && m.sender_id === me && !m.deleted_at ? tickSpan(tickFor(m, u.id)) + ' ' : '';
+    return row(avatarOr(u), u.name, m ? `${mine}${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : (isOnline(u) ? 'Online now' : 'Offline'), `/chat/${u.id}`, unread, isOnline(u) ? '#22c55e' : '#ef4444');
   }).join('') || '<p class="mut">No friends yet -- find people in the other tab.</p>';
   const groups = db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me);
   const groupRows = groups.map(g => {
@@ -1479,7 +1490,17 @@ app.get('/chat', (req, res) => {
     const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id=? AND sender_id != ? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?)").get(g.id, me, me).n;
     return row(groupAvatarOr(g), g.name, m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet', `/chat/group/${g.id}`, unread, null);
   }).join('');
-  res.send(layout('Chat', `<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a></p>${groups.length ? `<p class="chat-label">Groups</p>${groupRows}` : ''}<p class="chat-label">Friends</p>${friendRows}`, req.user));
+  const listScript = `(function(){
+var list=document.getElementById('chatList');if(!list)return;
+function pending(){return new Promise(function(res){try{var rq=indexedDB.open('shq-pending',2);
+rq.onupgradeneeded=function(){var d=rq.result;if(!d.objectStoreNames.contains('msgs'))d.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!d.objectStoreNames.contains('uploads'))d.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};
+rq.onsuccess=function(){try{var g=rq.result.transaction('msgs','readonly').objectStore('msgs').getAll();g.onsuccess=function(){res(g.result||[])};g.onerror=function(){res([])}}catch(e){res([])}};rq.onerror=function(){res([])}}catch(e){res([])}})}
+function mark(){pending().then(function(items){var latest={};items.forEach(function(it){var p=it.payload||{};if(!p.body)return;latest[p.group?'/chat/group/'+p.group:'/chat/'+p.to]=p.body});
+Array.prototype.forEach.call(list.querySelectorAll('a.chat-item'),function(a){var b=latest[a.getAttribute('href')];if(!b)return;var sub=a.querySelector('.meta span');if(!sub)return;sub.innerHTML='';var c=document.createElement('span');c.className='tick tick-queued';c.title='Waiting for a connection';c.textContent='\u231B';sub.appendChild(c);sub.appendChild(document.createTextNode(' '+b.slice(0,40)))})})}
+function refresh(){if(document.hidden)return;fetch('/chat',{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){var n=new DOMParser().parseFromString(h,'text/html').getElementById('chatList');if(n){list.innerHTML=n.innerHTML;mark()}}).catch(function(){})}
+mark();setInterval(refresh,4000);document.addEventListener('visibilitychange',refresh);window.addEventListener('online',refresh);
+})();`;
+  res.send(layout('Chat', `<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a></p><div id="chatList">${groups.length ? `<p class="chat-label">Groups</p>${groupRows}` : ''}<p class="chat-label">Friends</p>${friendRows}</div><script>${listScript}</script>`, req.user));
 });
 
 const CHAT_JS = `(function(){
@@ -1495,7 +1516,7 @@ var editingId=null,replyTarget=null,replyBar=document.getElementById('replyBar')
 Array.prototype.forEach.call(thread.querySelectorAll('[data-id]'),function(n){seen[n.getAttribute('data-id')]=1});
 function fmt(iso){return new Date(iso+'Z').toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
 function dur(ms){var t=Math.round((ms||0)/1000);return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2)}
-function stamp(t){var iso=t.getAttribute('data-t');if(iso)t.textContent=(t.getAttribute('data-pre')||'')+fmt(iso)}
+function stamp(t){var iso=t.getAttribute('data-t');if(!iso)return;var txt=(t.getAttribute('data-pre')||'')+fmt(iso),n=t.firstChild;if(n&&n.nodeType===3)n.nodeValue=txt;else t.insertBefore(document.createTextNode(txt),t.firstChild)}
 function el(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e}
 function linkifyInto(container,text){
   var re=/(https?:\\/\\/[^\\s<]+)/g,last=0,m;
@@ -1590,7 +1611,7 @@ form.addEventListener('submit',function(e){e.preventDefault();var text=input.val
 function queueAndShow(body,text,selectedReply){
   var tempId='q'+Date.now()+Math.random().toString(36).slice(2);
   bubble({id:tempId,from:myId,kind:'text',body:text,reply:selectedReply||null,created_at:new Date().toISOString(),tick:'queued'});
-  pendingAdd({tempId:tempId,payload:body}).then(registerBackgroundSync);
+  pendingAdd({tempId:tempId,at:new Date().toISOString(),payload:body}).then(registerBackgroundSync);
 }
 function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',2);rq.onupgradeneeded=function(){var db=rq.result;if(!db.objectStoreNames.contains('msgs'))db.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!db.objectStoreNames.contains('uploads'))db.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
 function pendingAdd(item){return pendingDB().then(function(db){return new Promise(function(res,rej){var tx=db.transaction('msgs','readwrite'),rq=tx.objectStore('msgs').add(item);rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})})}
@@ -1610,7 +1631,12 @@ function flushPendingHere(){ // fallback for browsers without Background Sync: o
   });
 }
 window.addEventListener('online',flushPendingHere);
-if(navigator.onLine)flushPendingHere();
+function showPending(){ // a message still waiting for a connection keeps its clock after a refresh, until it is really sent
+  return pendingList().then(function(items){items.forEach(function(it){var p=it.payload||{};
+    var here=convType==='group'?String(p.group)===String(convId):String(p.to)===String(convId);
+    if(here&&p.body&&!thread.querySelector('[data-id="'+it.tempId+'"]'))bubble({id:it.tempId,from:myId,kind:'text',body:p.body,created_at:it.at||new Date().toISOString(),tick:'queued'})})}).catch(function(){});
+}
+showPending().then(function(){if(navigator.onLine)flushPendingHere()});
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',function(e){
     if(!e.data||e.data.type!=='chat-synced')return;
@@ -1973,6 +1999,7 @@ app.get('/api/messages/media/:id', (req, res) => {
 
 app.get('/api/messages/poll', (req, res) => {
   if (!req.user) return res.sendStatus(401);
+  markDelivered(req.user.id);
   const after = Number(req.query.after) || 0;
   let rows, meta = {};
   if (req.query.group) {
@@ -2011,7 +2038,7 @@ app.get('/api/messages/poll', (req, res) => {
   let receipts = [];
   if (!req.query.group) {
     const withId = Number(req.query.with || req.query.to);
-    const mine = db.prepare("SELECT id,recipient_id FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 30").all(req.user.id, withId);
+    const mine = db.prepare("SELECT id,recipient_id,delivered_at FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 30").all(req.user.id, withId);
     receipts = mine.map(m => ({ id: m.id, status: tickFor(m, m.recipient_id) }));
   }
   res.json({ messages, receipts });
