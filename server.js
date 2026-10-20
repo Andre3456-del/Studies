@@ -1575,7 +1575,7 @@ form.addEventListener('submit',function(e){e.preventDefault();var text=input.val
   fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){
     if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:text,reply:selectedReply,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;clearReply()}
     else alert((j&&j.error)||'Could not send.')
-  }).catch(function(){queueAndShow(body,text)})});
+  }).catch(function(){queueAndShow(body,text,selectedReply);clearReply()})});
 
 /* ---- send while offline: queue in IndexedDB, auto-send once a connection is back ---- */
 function queueAndShow(body,text,selectedReply){
