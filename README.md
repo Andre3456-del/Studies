@@ -147,7 +147,7 @@ Anyone with real posting power from a verified position gets a small blue ✓ ne
 
 ## Ads and sponsor posts
 
-The News section (not the home page) loads your Google AdSense script, so Auto ads can run there once you turn them on in your AdSense dashboard. If you'd rather a specific, manually-placed ad unit instead of relying on Auto ads, create one in AdSense and send me its ad-slot code.
+The public **home page** carries your Google AdSense snippet (and Google's `google-adsense-account` meta tag) in its `<head>`, so AdSense's site check finds it; `/ads.txt` is served too. The News section loads the same script, so Auto ads can run in both once turned on in your AdSense dashboard. To show ad cards **inside the home news feed** (after the first story, then after every 4th, styled like a news card and labelled "Advertisement"), create an **In-feed** ad unit in AdSense and set `ADSENSE_FEED_SLOT` (and `ADSENSE_FEED_LAYOUT_KEY`, if AdSense gives one) in your Railway variables.
 
 Separately, anyone logged in can pay **₦2000 (`SPONSOR_PRICE_NGN` to change it) to advertise a business or service** for 30 days at `/sponsor` — title, description, contact info, optional photo. It works exactly like the CBT payment flow: pay by bank transfer, tap "I've paid," a full admin confirms it in `/admin`, and it goes live in News (clearly marked "Sponsored") until it quietly expires 30 days later. The person who submitted it can edit it any time from their own post's page — while waiting on payment or even after it's already live (a live edit shows right away, no re-approval or re-payment needed).
 

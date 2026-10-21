@@ -832,6 +832,7 @@ body.has-footer main{flex:1 0 auto;width:100%;box-sizing:border-box}
 .drawer-bottom{margin-top:auto;border-top:1px solid var(--line);padding:6px 0}
 .news-card{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin:14px 0}
 a.news-card{color:inherit;text-decoration:none;display:flex}
+.ad-card{padding:10px 12px 12px;min-height:130px}.ad-label{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--mut);margin-bottom:6px}.ad-card ins{width:100%}
 .news-img{width:100%;aspect-ratio:16/9;object-fit:cover;background:linear-gradient(135deg,rgba(56,176,248,.25),rgba(240,0,232,.18))}
 .news-body{padding:14px 16px}
 .news-body h3{margin:2px 0 6px;font-size:17px;line-height:1.3}
@@ -988,7 +989,7 @@ const layout = (title, body, user, opts = {}) => {
     : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${opts.footer ? ' class="has-footer"' : ''}>
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${opts.footer ? ' class="has-footer"' : ''}>
 <div id="scrim" class="scrim"></div>
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
@@ -1037,7 +1038,7 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 // or not, "/" and "/news" show the same thing -- the news feed. Everything else (dashboard,
 // browse pages, admin, chat, settings) lives one tap away in the navigation drawer instead.
 // Visitors who just open the link land on the news; anyone logged in lands on their dashboard.
-app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', newsFeedBody(req, true), req.user, { footer: true })));
+app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD })));
 
 app.get('/browse', (req, res) => {
   const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
@@ -1128,13 +1129,22 @@ const timeAgo = iso => {
 // home = true: just the news cards, nothing else -- no heading, no share form -- so the front page is only news.
 // home = false (the /news section): heading, the "Share something" form for logged-in members, then the cards.
 const ADSENSE_CLIENT = 'ca-pub-4280454885902185';
+// The home page <head> carries the AdSense snippet (what AdSense's site check looks for) plus Google's matching account meta tag.
+const ADSENSE_HEAD = `<meta name="google-adsense-account" content="${ADSENSE_CLIENT}"><script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}"
+     crossorigin="anonymous"></script>`;
+// Optional: an In-feed ad unit made in your AdSense dashboard. Set these in Railway to show ad cards inside the home news feed.
+const ADSENSE_FEED_SLOT = String(process.env.ADSENSE_FEED_SLOT || '').replace(/[^0-9]/g, '');
+const ADSENSE_FEED_LAYOUT_KEY = String(process.env.ADSENSE_FEED_LAYOUT_KEY || '').replace(/[^A-Za-z0-9_+=-]/g, '');
+const feedAdCard = () => `<div class="news-card ad-card"><div class="ad-label">Advertisement</div><ins class="adsbygoogle" style="display:block" data-ad-client="${ADSENSE_CLIENT}" data-ad-slot="${ADSENSE_FEED_SLOT}"${ADSENSE_FEED_LAYOUT_KEY ? ` data-ad-format="fluid" data-ad-layout-key="${ADSENSE_FEED_LAYOUT_KEY}"` : ' data-ad-format="auto" data-full-width-responsive="true"'}></ins><script>(adsbygoogle = window.adsbygoogle || []).push({});</script></div>`;
+app.get('/ads.txt', (req, res) => res.type('text/plain').send(`google.com, pub-${ADSENSE_CLIENT.replace('ca-pub-', '')}, DIRECT, f08c47fec0942fa0\n`));
 function newsFeedBody(req, home = false) {
   const all = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
   const items = all.filter(n => canSeeNewsItem(n, req.user));
   const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
-  const cards = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`).join('');
+  const cardList = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`);
+  const cards = cardList.join('');
   const empty = '<p class="mut">No news yet. Check back soon.</p>';
-  if (home) return cards || empty;
+  if (home) return ADSENSE_FEED_SLOT && cardList.length ? cardList.flatMap((c, i) => i === 0 || i % 4 === 3 ? [c, feedAdCard()] : [c]).join('') : (cards || empty);
   // News section only (not the home page): the sponsor-ad script, any active paid promotional posts, and the
   // link to buy one.
   const adScript = `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}" crossorigin="anonymous"></script>`;
