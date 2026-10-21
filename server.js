@@ -794,6 +794,11 @@ h1{font-size:clamp(28px,6vw,44px);line-height:1.15;margin:.2em 0}h2,h3{margin:.8
 .auth{max-width:420px;margin:28px auto}.auth h1{font-size:30px;text-align:center}.auth>p{text-align:center}.auth .card button{width:100%}
 table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}th{color:var(--mut);font-weight:500}
 footer{text-align:center;color:var(--mut);font-size:13px;padding:20px}
+body.has-footer{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh}
+body.has-footer main{flex:1 0 auto;width:100%;box-sizing:border-box}
+.site-foot{margin-top:auto;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding:16px 20px calc(16px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);background:linear-gradient(to top,rgba(56,176,248,.08),transparent);color:var(--mut);font-size:13px}
+.site-foot a{color:var(--blue);font-weight:600;text-decoration:none;padding:5px 14px;border:1px solid var(--line);border-radius:99px;transition:background .15s,border-color .15s}
+.site-foot a:hover{background:rgba(56,176,248,.12);border-color:var(--blue)}
 .gbtn{display:block;text-align:center;width:100%}
 .stat{display:block;font-size:30px;font-weight:700;line-height:1.2}
 .dash-hero{position:relative;overflow:hidden;border-radius:20px;padding:28px 24px;margin:16px 0 8px;border:1px solid var(--line);background:linear-gradient(160deg,rgba(56,176,248,.16),rgba(240,0,232,.08) 60%,rgba(18,18,28,.4));isolation:isolate}
@@ -983,7 +988,7 @@ const layout = (title, body, user, opts = {}) => {
     : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body>
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${opts.footer ? ' class="has-footer"' : ''}>
 <div id="scrim" class="scrim"></div>
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
@@ -993,7 +998,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
-<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to receive new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer>&copy; ${new Date().getFullYear()} Studies Hub &middot; <a href="/privacy">Privacy</a></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to receive new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><a href="/privacy">Privacy</a></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
 </body></html>`;
@@ -1010,7 +1015,7 @@ ${login ? '' : '<input name="name" placeholder="Your name" required maxlength="8
 <button>${login ? 'Log in' : 'Create account'}</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google">Continue with Google</a>' : ''}
 ${login ? '<p class="mut"><a href="/forgot">Forgot password?</a></p>' : ''}
-<p class="mut">${login ? 'New here? <a href="/signup">Create an account</a>' : 'Already registered? <a href="/login">Log in</a>'}</p></div>`, null);
+<p class="mut">${login ? 'New here? <a href="/signup">Create an account</a>' : 'Already registered? <a href="/login">Log in</a>'}</p></div>`, null, { footer: true });
 };
 
 const forgotForm = (err = '') => layout('Forgot password', `<div class="auth"><h1>Reset your password</h1><p class="mut">Enter your email and we will send a 6-digit code.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
@@ -2365,8 +2370,8 @@ app.get('/lecturer', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/lecturer');
   if (!req.user.is_lecturer) return res.redirect('/dashboard');
   if (!profileComplete(req.user)) return res.redirect('/lecturer/welcome');
-  if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user, { footer: true }));
-  if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user, { footer: true }));
+  if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user));
+  if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
   const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
   const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
   const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
@@ -2386,7 +2391,7 @@ app.get('/lecturer', (req, res) => {
   res.send(layout('My courses', `<h1>My courses</h1><p class="mut" style="margin-top:0">${esc(req.user.university)}${req.user.lecturer_reg_no ? ' &middot; ' + esc(req.user.lecturer_reg_no) : ''}</p>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <div>${courseLinks}</div>
-${uploadForm}<h3>Your uploads (${myPages.length})</h3>${pagesList}`, req.user, { footer: true }));
+${uploadForm}<h3>Your uploads (${myPages.length})</h3>${pagesList}`, req.user));
 });
 app.post('/lecturer/upload', upload.single('file'), (req, res) => {
   if (!req.user || !req.user.is_lecturer) return res.sendStatus(403);
@@ -2857,13 +2862,13 @@ app.get('/lecturer/signup', (req, res) => res.send(layout('Lecturer sign up', `<
 <input name="password" type="password" placeholder="Password (8+ characters)" required>
 <button>Create lecturer account</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
-<p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`, null)));
+<p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`, null, { footer: true })));
 app.post('/lecturer/signup', async (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 80);
   const email = String(req.body.email || '').trim().toLowerCase();
   const pw = String(req.body.password || '');
   const bad = m => res.status(400).send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1><p class="err">${esc(m)}</p>
-<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required><button>Create lecturer account</button></form></div>`, null));
+<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required><button>Create lecturer account</button></form></div>`, null, { footer: true }));
   if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
   if (pw.length < 8) return bad('Password must be at least 8 characters.');
   let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
@@ -3070,7 +3075,7 @@ app.post('/account/name', (req, res) => {
 
 app.get('/dashboard', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/dashboard');
-  res.send(layout('Dashboard', dashboardBody(req), req.user, { footer: true }));
+  res.send(layout('Dashboard', dashboardBody(req), req.user));
 });
 
 app.get('/admin', adminish, (req, res) => {
