@@ -174,9 +174,22 @@ A completely separate side of the site, for teaching staff -- not students.
 - **PDFs** embed directly using the browser's own built-in PDF viewer.
 - **Word documents (.docx)** are converted to readable HTML right in the browser (via Mammoth.js, loaded from a CDN) by fetching the file through the same authenticated route everything else uses -- so department/level access control still applies, nothing is exposed to an outside service. Older `.doc` files, or anything Mammoth can't parse, fall back to a plain download link instead of a broken preview.
 
-## Paid content: CBT only (direct bank transfer)
+## Paid content: CBT only (Flutterwave, with bank transfer as the fallback)
 
-Only CBT (quiz) uploads can be marked "Payment to view" — everything else is always free. Payments go straight to your own account, with no gateway or fees. In Variables you can optionally override the defaults already baked in:
+Only CBT (quiz) uploads can be marked "Payment to view" — everything else is always free, and **sponsor posts** are paid the same way. Add your Flutterwave keys in Variables and a **"Pay now"** button opens Flutterwave's checkout (card, bank transfer, USSD):
+
+```
+FLUTTERWAVE_PUBLIC_KEY=FLWPUBK-...
+FLUTTERWAVE_SECRET_KEY=FLWSECK-...
+```
+
+The browser's "payment successful" message is never trusted on its own: the server asks Flutterwave directly (`/pay/verify` for CBT, `/sponsor/:id/verify` for sponsor posts), and only unlocks/publishes when Flutterwave confirms the payment was successful, in Naira, for at least the price, and made for that exact person and item. A payment reference can only ever be used once.
+
+**If the keys are not set**, the site falls back to the manual bank-transfer flow below, so nothing breaks.
+
+### Manual bank transfer (used when Flutterwave keys are not set)
+
+Payments go straight to your own account, with no gateway or fees. In Variables you can optionally override the defaults already baked in:
 
 ```
 BANK_NAME=OPay

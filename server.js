@@ -153,6 +153,23 @@ const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'Esseabasi Usen Inyan
 const PRICE_KOBO = Math.round(PRICE_NGN * 100);
 const SPONSOR_PRICE_NGN = Number(process.env.SPONSOR_PRICE_NGN || 2500);
 const SPONSOR_PRICE_KOBO = Math.round(SPONSOR_PRICE_NGN * 100);
+const FLW_PUBLIC_KEY = process.env.FLUTTERWAVE_PUBLIC_KEY || '';
+const FLW_SECRET_KEY = process.env.FLUTTERWAVE_SECRET_KEY || '';
+const FLW_ON = !!(FLW_PUBLIC_KEY && FLW_SECRET_KEY);
+// Always re-verify against Flutterwave's own record of the transaction -- the browser's "payment successful"
+// callback is never trusted by itself, since that could be spoofed by anyone who can run JavaScript.
+// JSON for use inside an inline <script>: also escapes < > & so a title or name containing "</script>" can't break out of it.
+const jsForScript = v => JSON.stringify(v).replace(/[<>&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+async function verifyFlutterwave(transactionId) {
+  try {
+    const r = await fetch(`https://api.flutterwave.com/v3/transactions/${encodeURIComponent(transactionId)}/verify`, {
+      headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` },
+    });
+    const j = await r.json();
+    if (j && j.status === 'success' && j.data && j.data.status === 'successful') return j.data;
+  } catch {}
+  return null;
+}
 
 // Messages are encrypted at rest with AES-256-GCM, so a stolen copy of the database file is unreadable.
 // The key auto-generates once and lives in this database from then on -- MESSAGE_KEY can override it.
@@ -2607,18 +2624,42 @@ function preparePage(html, home) {
 }
 
 function paywallBody(p, req) {
-  const price = ((p.price_kobo || PRICE_KOBO) / 100).toFixed(0);
+  const priceNgn = (p.price_kobo || PRICE_KOBO) / 100;
   const claim = req.user ? purchaseFor(req.user.id, p.id) : null;
-  const action = !req.user
-    ? `<a class="btn" href="/login?next=${encodeURIComponent('/p/' + p.slug)}">Log in to pay</a>`
-    : claim && claim.status === 'pending'
-    ? '<p class="pill pending">Payment claimed &mdash; waiting for confirmation</p><p class="mut">This is usually checked and unlocked by hand, so it can take a little while.</p>'
-    : `<div class="card" style="text-align:left;max-width:340px;margin:14px auto"><p class="mut" style="margin:0 0 6px">Pay by bank transfer to:</p>
+  let action;
+  if (!req.user) {
+    action = `<a class="btn" href="/login?next=${encodeURIComponent('/p/' + p.slug)}">Log in to pay</a>`;
+  } else if (!FLW_ON) {
+    // Graceful fallback if the Flutterwave keys have not been added to the environment yet -- the old manual
+    // route still works underneath, so the site keeps functioning instead of showing a dead end.
+    action = claim && claim.status === 'pending'
+      ? '<p class="pill pending">Payment claimed &mdash; waiting for confirmation</p><p class="mut">This is usually checked and unlocked by hand, so it can take a little while.</p>'
+      : `<p class="err" style="margin:0 0 10px">Card/transfer payment isn't set up yet.</p><div class="card" style="text-align:left;max-width:340px;margin:0 auto"><p class="mut" style="margin:0 0 6px">For now, pay by bank transfer to:</p>
 <p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p>
 <p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p>
 <form method="post" action="/pay/claim"><input type="hidden" name="slug" value="${esc(p.slug)}"><button style="width:100%">I have made this payment</button></form></div>`;
+  } else {
+    const txRef = `cbt_${req.user.id}_${p.id}_${Date.now()}`;
+    action = `<button id="flwPayBtn" class="btn" style="width:100%">Pay ₦${priceNgn.toFixed(0)} now</button>
+<script src="https://checkout.flutterwave.com/v3.js"></script>
+<script>document.getElementById('flwPayBtn').addEventListener('click',function(){
+  FlutterwaveCheckout({
+    public_key: ${jsForScript(FLW_PUBLIC_KEY)},
+    tx_ref: ${jsForScript(txRef)},
+    amount: ${priceNgn},
+    currency: 'NGN',
+    customer: { email: ${jsForScript(req.user.email)}, name: ${jsForScript(req.user.name)} },
+    customizations: { title: 'Studies Hub', description: ${jsForScript(p.title)} },
+    callback: function(data){
+      fetch('/pay/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction_id:data.transaction_id,slug:${jsForScript(p.slug)}})})
+        .then(function(r){return r.json()}).then(function(j){ if(j&&j.ok)location.reload(); else alert((j&&j.error)||'Could not confirm payment.') });
+    },
+    onclose: function(){}
+  });
+});</script>`;
+  }
   return `<div class="dash-hero"><p class="eyebrow" style="margin:0">Locked</p><h1 style="margin:.2em 0">${esc(p.title)}</h1><p class="mut" style="margin:0">This content needs a one-time payment to unlock.</p></div>
-<div class="card" style="text-align:center"><p style="font-size:32px;font-weight:700;margin:8px 0">₦${price}</p>${action}</div>`;
+<div class="card" style="text-align:center"><p style="font-size:32px;font-weight:700;margin:8px 0">₦${priceNgn.toFixed(0)}</p>${action}</div>`;
 }
 
 app.get('/p/:slug', (req, res) => {
@@ -2676,6 +2717,27 @@ app.get('/p/:slug/raw', (req, res) => {
   res.send(Buffer.from(p.file_data));
 });
 
+app.post('/pay/verify', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Log in first.' });
+  const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.body.slug);
+  if (!page || !page.paid) return res.status(400).json({ error: 'Invalid item.' });
+  const transactionId = req.body.transaction_id;
+  if (!transactionId) return res.status(400).json({ error: 'Missing transaction.' });
+  const priorUse = db.prepare('SELECT user_id, page_id FROM purchases WHERE reference=?').get(String(transactionId));
+  if (priorUse) {
+    if (priorUse.user_id === req.user.id && priorUse.page_id === page.id) return res.json({ ok: true }); // a duplicate callback for the SAME purchase -- not an error
+    return res.status(400).json({ error: 'That transaction has already been used.' }); // a replay attempt against a different user/page -- rejected
+  }
+  const data = await verifyFlutterwave(transactionId);
+  if (!data) return res.status(400).json({ error: 'Payment could not be verified.' });
+  if (data.tx_ref && !String(data.tx_ref).startsWith(`cbt_${req.user.id}_${page.id}_`)) return res.status(400).json({ error: 'That payment was made for something else.' }); // a real payment for another item/user can't be reused here
+  const expectedNgn = (page.price_kobo || PRICE_KOBO) / 100;
+  if (data.currency !== 'NGN' || Number(data.amount) < expectedNgn) return res.status(400).json({ error: 'The amount paid does not match the price.' });
+  const existing = db.prepare('SELECT id FROM purchases WHERE user_id=? AND page_id=?').get(req.user.id, page.id);
+  if (existing) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(String(transactionId), Math.round(data.amount * 100), existing.id);
+  else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,'approved')").run(req.user.id, page.id, String(transactionId), Math.round(data.amount * 100));
+  res.json({ ok: true });
+});
 app.post('/pay/claim', (req, res) => {
   if (!req.user) return res.redirect('/login');
   const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.body.slug);
@@ -2758,7 +2820,23 @@ app.get('/sponsor/:id', (req, res) => {
   res.send(layout('Your sponsor post', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>${esc(s.title)}</h1>${statusLine}
 <p class="mut">${s.duration_days} day${s.duration_days === 1 ? '' : 's'} &middot; ₦${(s.amount_kobo / 100).toLocaleString()}</p>
 <p class="mut"><a href="/sponsor/${s.id}/edit">Edit this post &rarr;</a></p>
-${s.status === 'pending_payment' ? `<div class="card"><p>Pay <b>₦${(s.amount_kobo / 100).toLocaleString()}</b> by bank transfer to:</p><p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p><p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p><form method="post" action="/sponsor/${s.id}/claim"><button>I've paid</button></form></div>` : ''}
+${s.status === 'pending_payment' ? (FLW_ON ? `<div class="card" style="text-align:center"><button id="flwSponsorBtn" class="btn" style="width:100%">Pay ₦${(s.amount_kobo / 100).toLocaleString()} now</button>
+<script src="https://checkout.flutterwave.com/v3.js"></script>
+<script>document.getElementById('flwSponsorBtn').addEventListener('click',function(){
+  FlutterwaveCheckout({
+    public_key: ${jsForScript(FLW_PUBLIC_KEY)},
+    tx_ref: ${jsForScript(`sponsor_${s.id}_${Date.now()}`)},
+    amount: ${s.amount_kobo / 100},
+    currency: 'NGN',
+    customer: { email: ${jsForScript(req.user.email)}, name: ${jsForScript(req.user.name)} },
+    customizations: { title: 'Studies Hub Sponsor Post', description: ${jsForScript(s.title)} },
+    callback: function(data){
+      fetch('/sponsor/${s.id}/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction_id:data.transaction_id})})
+        .then(function(r){return r.json()}).then(function(j){ if(j&&j.ok)location.reload(); else alert((j&&j.error)||'Could not confirm payment.') });
+    },
+    onclose: function(){}
+  });
+});</script></div>` : `<div class="card"><p class="err" style="margin:0 0 10px">Card/transfer payment isn't set up yet.</p><p>For now, pay <b>₦${(s.amount_kobo / 100).toLocaleString()}</b> by bank transfer to:</p><p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p><p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p><form method="post" action="/sponsor/${s.id}/claim"><button>I've paid</button></form></div>`) : ''}
 <form method="post" action="/sponsor/${s.id}/delete" onsubmit="return confirm('Delete this sponsor post? This cannot be undone.')" style="margin-top:14px"><button class="link">Delete this post</button></form>`, req.user));
 });
 app.get('/sponsor/:id/edit', (req, res) => {
@@ -2796,6 +2874,23 @@ app.post('/sponsor/:id/delete', (req, res) => {
   if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
   db.prepare('DELETE FROM sponsor_posts WHERE id=?').run(s.id);
   res.redirect('/news');
+});
+app.post('/sponsor/:id/verify', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Log in first.' });
+  const s = db.prepare('SELECT * FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!s) return res.status(404).json({ error: 'Not found.' });
+  if (s.status === 'approved') return res.json({ ok: true }); // already live -- a duplicate callback is not an error
+  const transactionId = req.body.transaction_id;
+  if (!transactionId) return res.status(400).json({ error: 'Missing transaction.' });
+  const data = await verifyFlutterwave(transactionId);
+  if (!data) return res.status(400).json({ error: 'Payment could not be verified.' });
+  if (data.tx_ref && !String(data.tx_ref).startsWith(`sponsor_${s.id}_`)) return res.status(400).json({ error: 'That payment was made for something else.' });
+  if (data.currency !== 'NGN' || Number(data.amount) < s.amount_kobo / 100) return res.status(400).json({ error: 'The amount paid does not match the bill.' });
+  try {
+    db.prepare("UPDATE sponsor_posts SET status='approved', reference=?, expires_at=datetime('now','+' || ? || ' days') WHERE id=?").run(String(transactionId), s.duration_days, s.id);
+  } catch { return res.status(400).json({ error: 'That transaction has already been used.' }); }
+  notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for ${s.duration_days} days.`, url: '/sponsor/' + s.id, tag: 'sponsor' });
+  res.json({ ok: true });
 });
 app.post('/sponsor/:id/claim', (req, res) => {
   if (!req.user) return res.redirect('/login');
