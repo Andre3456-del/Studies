@@ -211,6 +211,8 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 
 - WhatsApp-style call screens: ringing then a timer, bottom control pill (more, camera, microphone, end), your own small camera window with flip-camera, add people, "X is muted" / "You're muted" notices, "Couldn't make call" with Cancel and Call again, and a full-screen incoming call with Decline and Accept.
 - **Share your screen** (More menu) on computers; phone browsers cannot share a screen, so the button is hidden there. A shared screen shows as its own tile for the other person.
+- **Minimise:** the chevron at the top left of a call keeps the call running while you browse the rest of the site (pages open inside the call page). A green "Tap to return to call" bar, with mute and end buttons, stays on top, and video calls keep a small floating video window. Closing the browser tab ends the call.
+- **Echo guard:** if two devices are close together a howl can build up (one phone's speaker feeds the other's microphone). The microphone processing spots a steady loud tone, cuts just that frequency for a few seconds and shows "Echo detected". Earphones remove the cause.
 - A call that nobody answers within 45 seconds counts as missed and stops ringing.
 - Sound: echo cancellation, noise suppression and automatic volume from the browser, plus our own voice cleaner on the microphone (cuts rumble and hiss, a gate that closes when nobody is speaking and learns how noisy the room is, and a leveller), all at 48 kHz so the pitch never shifts. Your own voice is never played back to you. Two phones in the same room will still squeal at each other; use earphones or separate rooms when testing.
 
