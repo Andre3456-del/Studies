@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL, cr
 CREATE TABLE IF NOT EXISTS group_members(group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'member', added_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(group_id, user_id));
 CREATE TABLE IF NOT EXISTS message_reads(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, read_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(message_id, user_id));
 CREATE TABLE IF NOT EXISTS message_hidden(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY(message_id, user_id));
+CREATE TABLE IF NOT EXISTS chat_prefs(user_id INTEGER NOT NULL, kind TEXT NOT NULL, target_id INTEGER NOT NULL, pinned_at INTEGER, archived_upto INTEGER, muted INTEGER NOT NULL DEFAULT 0, favorite INTEGER NOT NULL DEFAULT 0, unread_mark INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, kind, target_id));
 CREATE TABLE IF NOT EXISTS message_reactions(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, emoji TEXT NOT NULL, PRIMARY KEY(message_id, user_id));
 CREATE TABLE IF NOT EXISTS push_subscriptions(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, endpoint TEXT UNIQUE NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS friendships_addr ON friendships(addressee_id, status);
@@ -922,6 +923,26 @@ body.panel-open .thread{padding-bottom:310px}
 .menu-btn{position:relative}
 .mbadge{position:absolute;top:-4px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:#ef4444;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center}
 .nbadge{margin-left:auto;min-width:22px;height:22px;padding:0 7px;border-radius:99px;background:#ef4444;color:#fff;font-size:12px;font-weight:700;line-height:22px;text-align:center}
+.chat-search{width:100%;margin:0 0 10px;padding:10px 14px;border-radius:99px;box-sizing:border-box}
+.chip-row{display:flex;gap:8px;overflow-x:auto;margin:0 0 8px;padding-bottom:2px}
+.chip{flex:none;padding:6px 14px;border-radius:99px;border:1px solid var(--line);background:transparent;color:var(--mut);font-size:14px;font-weight:600;cursor:pointer}
+.chip.on{background:var(--blue);border-color:var(--blue);color:#fff}
+.chat-item{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+.chat-item.sel{background:var(--panel);box-shadow:inset 3px 0 0 var(--blue)}
+.ci-end{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
+.ci-end .nbadge{margin-left:0}
+.ci-ic{font-size:13px;color:var(--mut)}
+.nb-muted{background:#6b7280}
+.nb-dot{min-width:12px;height:12px;padding:0;line-height:12px;background:#22c55e}
+.arch-row .arch-ic{width:46px;text-align:center;font-size:22px}
+.arch-head{margin:0 0 8px}
+.sel-bar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:4px;padding:8px 10px;margin:0 -10px 8px;background:var(--bg);border-bottom:1px solid var(--line)}
+.sel-bar button{background:none;border:0;color:var(--fg);padding:8px;border-radius:50%;cursor:pointer;display:flex}
+.sel-bar button:hover{background:var(--panel)}
+.sel-bar b{font-size:18px;margin-left:4px}
+.sel-sp{flex:1}
+.sel-menu{position:absolute;right:10px;top:48px;min-width:190px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.sel-menu button{display:block;width:100%;text-align:left;border-radius:8px;padding:10px 12px;font-size:15px}
 .pushbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px;padding:10px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(56,176,248,.10)}
 .pushbar[hidden]{display:none}.pushbar span{flex:1;min-width:180px;font-size:14px}.pushbar button{margin:0}
 select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px;outline:0}
@@ -1499,6 +1520,49 @@ function bubbleHtml(m, meId, isGroup) {
   return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
 }
 
+// ---------- chat list preferences: pin (max 3), archive, mute, favourites, mark as unread, clear chat ----------
+const prefsOf = uid => { const m = {}; for (const p of db.prepare('SELECT * FROM chat_prefs WHERE user_id=?').all(uid)) m[p.kind + ':' + p.target_id] = p; return m; };
+const isMutedChat = (uid, kind, target) => !!db.prepare('SELECT 1 FROM chat_prefs WHERE user_id=? AND kind=? AND target_id=? AND muted=1').get(uid, kind, target);
+const setChatPref = (uid, kind, target, col, val) => {
+  if (!['pinned_at', 'archived_upto', 'muted', 'favorite', 'unread_mark'].includes(col)) return;
+  db.prepare('INSERT OR IGNORE INTO chat_prefs(user_id,kind,target_id) VALUES(?,?,?)').run(uid, kind, target);
+  db.prepare(`UPDATE chat_prefs SET ${col}=? WHERE user_id=? AND kind=? AND target_id=?`).run(val, uid, kind, target);
+};
+const clearUnreadMark = (uid, kind, target) => db.prepare('UPDATE chat_prefs SET unread_mark=0 WHERE user_id=? AND kind=? AND target_id=? AND unread_mark=1').run(uid, kind, target);
+const convMessages = (uid, kind, target) => kind === 'group'
+  ? db.prepare('SELECT * FROM messages WHERE group_id=?').all(target)
+  : db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))').all(uid, target, target, uid);
+app.post('/api/chats/prefs', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const me = req.user.id, action = String((req.body && req.body.action) || '');
+  const items = (Array.isArray(req.body && req.body.items) ? req.body.items : []).slice(0, 50).map(i => ({ kind: i && i.kind === 'group' ? 'group' : (i && i.kind === 'dm' ? 'dm' : ''), id: Number(i && i.id) })).filter(i => i.kind && Number.isSafeInteger(i.id) && i.id > 0)
+    .filter(i => i.kind === 'group' ? isGroupMember(i.id, me) : (i.id !== me && friendStatus(me, i.id) === 'friends'));
+  if (!items.length) return res.status(400).json({ error: 'Choose a chat first.' });
+  if (action === 'pin') {
+    const already = db.prepare('SELECT kind,target_id FROM chat_prefs WHERE user_id=? AND pinned_at IS NOT NULL').all(me).filter(p => !items.some(i => i.kind === p.kind && i.id === p.target_id)).length;
+    if (already + items.length > 3) return res.status(400).json({ error: 'You can pin up to 3 chats.' });
+  }
+  const now = Date.now();
+  for (const it of items) {
+    if (action === 'pin') setChatPref(me, it.kind, it.id, 'pinned_at', now);
+    else if (action === 'unpin') setChatPref(me, it.kind, it.id, 'pinned_at', null);
+    else if (action === 'archive') { const last = convMessages(me, it.kind, it.id).reduce((n, m) => Math.max(n, m.id), 0); setChatPref(me, it.kind, it.id, 'archived_upto', last); setChatPref(me, it.kind, it.id, 'pinned_at', null); }
+    else if (action === 'unarchive') setChatPref(me, it.kind, it.id, 'archived_upto', null);
+    else if (action === 'mute') setChatPref(me, it.kind, it.id, 'muted', 1);
+    else if (action === 'unmute') setChatPref(me, it.kind, it.id, 'muted', 0);
+    else if (action === 'favorite') setChatPref(me, it.kind, it.id, 'favorite', 1);
+    else if (action === 'unfavorite') setChatPref(me, it.kind, it.id, 'favorite', 0);
+    else if (action === 'mark_unread') setChatPref(me, it.kind, it.id, 'unread_mark', 1);
+    else if (action === 'mark_read') { setChatPref(me, it.kind, it.id, 'unread_mark', 0); markRead(convMessages(me, it.kind, it.id), me); }
+    else if (action === 'clear') { // clear chat = hide every message for this person only (the other side keeps theirs)
+      const msgs = convMessages(me, it.kind, it.id), hide = db.prepare('INSERT OR IGNORE INTO message_hidden(message_id,user_id) VALUES(?,?)');
+      for (const m of msgs) hide.run(m.id, me);
+      markRead(msgs, me); setChatPref(me, it.kind, it.id, 'unread_mark', 0);
+    } else return res.status(400).json({ error: 'Unknown action.' });
+  }
+  res.json({ ok: true });
+});
+
 app.get('/chat', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/chat');
   const me = req.user.id, tab = req.query.tab === 'find' ? 'find' : 'friends';
@@ -1522,31 +1586,115 @@ app.get('/chat', (req, res) => {
 <form method="post" action="/api/friends/${u.id}/decline" style="display:inline"><button class="link">Decline</button></form></div>`).join('')}` : '';
     return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search students and admins by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
   }
+  const prefs = prefsOf(me);
   const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ')').all();
-  const row = (avatarHtml, name, sub, href, unread, dot) => `<a class="chat-item" href="${href}"><span class="av-wrap" style="position:relative">${avatarHtml}${dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${dot}"></span>` : ''}</span><span class="meta"><b>${esc(name)}</b><span>${sub}</span></span>${unread ? `<b class="nbadge">${badgeText(unread)}</b>` : ''}</a>`;
-  const friendRows = friends.map(u => {
-    const m = lastMessageWith(me, u.id);
-    const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?)").get(u.id, me, me).n;
+  const lastVisible = (kind, id) => kind === 'group'
+    ? db.prepare('SELECT * FROM messages WHERE group_id=? AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?) ORDER BY id DESC LIMIT 1').get(id, me)
+    : db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?) ORDER BY id DESC LIMIT 1').get(me, id, id, me, me);
+  const items = [];
+  for (const u of friends) {
+    const m = lastVisible('dm', u.id), p = prefs['dm:' + u.id] || {};
+    const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(u.id, me, me, me).n;
     const mine = m && m.sender_id === me && !m.deleted_at ? tickSpan(tickFor(m, u.id)) + ' ' : '';
-    return row(avatarOr(u), u.name, m ? `${mine}${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : (isOnline(u) ? 'Online now' : 'Offline'), `/chat/${u.id}`, unread, isOnline(u) ? '#22c55e' : '#ef4444');
-  }).join('') || '<p class="mut">No friends yet -- find people in the other tab.</p>';
-  const groups = db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me);
-  const groupRows = groups.map(g => {
-    const m = lastGroupMessage(g.id);
-    const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id=? AND sender_id != ? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?)").get(g.id, me, me).n;
-    return row(groupAvatarOr(g), g.name, m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet', `/chat/group/${g.id}`, unread, null);
-  }).join('');
+    items.push({ kind: 'dm', id: u.id, name: u.name, av: avatarOr(u), m, p, unread, dot: isOnline(u) ? '#22c55e' : '#ef4444',
+      sub: m ? `${mine}${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : (isOnline(u) ? 'Online now' : 'Offline') });
+  }
+  for (const g of db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me)) {
+    const m = lastVisible('group', g.id), p = prefs['group:' + g.id] || {};
+    const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id=? AND sender_id != ? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(g.id, me, me, me).n;
+    items.push({ kind: 'group', id: g.id, name: g.name, av: groupAvatarOr(g), m, p, unread, dot: null, sub: m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet' });
+  }
+  for (const it of items) it.archived = it.p.archived_upto != null && (!it.m || it.m.id <= it.p.archived_upto); // a new message brings an archived chat back
+  items.sort((a, b) => ((b.p.pinned_at ? 1 : 0) - (a.p.pinned_at ? 1 : 0)) || ((b.p.pinned_at || 0) - (a.p.pinned_at || 0)) || ((b.m ? b.m.id : 0) - (a.m ? a.m.id : 0)) || a.name.localeCompare(b.name));
+  const itemHtml = it => {
+    const href = it.kind === 'group' ? `/chat/group/${it.id}` : `/chat/${it.id}`, p = it.p;
+    const badge = it.unread ? `<b class="nbadge${p.muted ? ' nb-muted' : ''}">${badgeText(it.unread)}</b>` : (p.unread_mark ? '<b class="nbadge nb-dot"></b>' : '');
+    const icons = (p.muted ? '<span class="ci-ic" title="Muted">&#128277;</span>' : '') + (p.pinned_at ? '<span class="ci-ic" title="Pinned">&#128204;</span>' : '');
+    return `<a class="chat-item" href="${href}" data-key="${it.kind}:${it.id}" data-kind="${it.kind}" data-id="${it.id}" data-name="${esc(it.name.toLowerCase())}" data-unread="${it.unread}" data-mark="${p.unread_mark ? 1 : 0}" data-fav="${p.favorite ? 1 : 0}" data-pinned="${p.pinned_at ? 1 : 0}" data-muted="${p.muted ? 1 : 0}" data-archived="${it.archived ? 1 : 0}"><span class="av-wrap" style="position:relative">${it.av}${it.dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${it.dot}"></span>` : ''}</span><span class="meta"><b>${esc(it.name)}</b><span>${it.sub}</span></span><span class="ci-end">${icons}${badge}</span></a>`;
+  };
+  const archivedCount = items.filter(i => i.archived).length;
+  const listHtml = `<a class="chat-item arch-row" href="#" id="archRow" data-count="${archivedCount}"><span class="arch-ic">&#128229;</span><span class="meta"><b>Archived</b></span><span class="ci-end"><span class="ci-ic" id="archCount">${archivedCount}</span></span></a>`
+    + items.map(itemHtml).join('');
+  const svg = d => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
   const listScript = `(function(){
 var list=document.getElementById('chatList');if(!list)return;
+var bar=document.getElementById('selBar'),cnt=document.getElementById('selCount'),menu=document.getElementById('selMenu'),search=document.getElementById('chatSearch'),empty=document.getElementById('chatEmpty'),archHead=document.getElementById('archHead'),chips=document.getElementById('chipRow');
+var sel={},filter='all',query='',arch=false,pressed=false,timer=null,sx=0,sy=0;
 function pending(){return new Promise(function(res){try{var rq=indexedDB.open('shq-pending',2);
 rq.onupgradeneeded=function(){var d=rq.result;if(!d.objectStoreNames.contains('msgs'))d.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!d.objectStoreNames.contains('uploads'))d.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};
 rq.onsuccess=function(){try{var g=rq.result.transaction('msgs','readonly').objectStore('msgs').getAll();g.onsuccess=function(){res(g.result||[])};g.onerror=function(){res([])}}catch(e){res([])}};rq.onerror=function(){res([])}}catch(e){res([])}})}
 function mark(){pending().then(function(items){var latest={};items.forEach(function(it){var p=it.payload||{};if(!p.body)return;latest[p.group?'/chat/group/'+p.group:'/chat/'+p.to]=p.body});
-Array.prototype.forEach.call(list.querySelectorAll('a.chat-item'),function(a){var b=latest[a.getAttribute('href')];if(!b)return;var sub=a.querySelector('.meta span');if(!sub)return;sub.innerHTML='';var c=document.createElement('span');c.className='tick tick-queued';c.title='Waiting for a connection';c.textContent='\u231B';sub.appendChild(c);sub.appendChild(document.createTextNode(' '+b.slice(0,40)))})})}
-function refresh(){if(document.hidden)return;fetch('/chat',{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){var n=new DOMParser().parseFromString(h,'text/html').getElementById('chatList');if(n){list.innerHTML=n.innerHTML;mark()}}).catch(function(){})}
-mark();setInterval(refresh,4000);document.addEventListener('visibilitychange',refresh);window.addEventListener('online',refresh);
+Array.prototype.forEach.call(list.querySelectorAll('a.chat-item'),function(a){var b=latest[a.getAttribute('href')];if(!b)return;var sub=a.querySelector('.meta span');if(!sub)return;sub.innerHTML='';var c=document.createElement('span');c.className='tick tick-queued';c.title='Waiting for a connection';c.textContent='\\u231B';sub.appendChild(c);sub.appendChild(document.createTextNode(' '+b.slice(0,40)))})})}
+function rows(){return Array.prototype.slice.call(list.querySelectorAll('a.chat-item[data-key]'))}
+function keys(){return Object.keys(sel)}
+function rowOf(k){return list.querySelector('a.chat-item[data-key="'+k+'"]')}
+function applyView(){
+var shown=0,ar=document.getElementById('archRow'),ac=ar?parseInt(ar.getAttribute('data-count'),10)||0:0;
+rows().forEach(function(a){var ok=arch?a.getAttribute('data-archived')==='1':a.getAttribute('data-archived')==='0';
+if(ok&&filter==='unread')ok=(parseInt(a.getAttribute('data-unread'),10)>0||a.getAttribute('data-mark')==='1');
+if(ok&&filter==='fav')ok=a.getAttribute('data-fav')==='1';
+if(ok&&filter==='groups')ok=a.getAttribute('data-kind')==='group';
+if(ok&&query)ok=a.getAttribute('data-name').indexOf(query)>-1;
+a.style.display=ok?'':'none';if(ok)shown++;a.classList.toggle('sel',!!sel[a.getAttribute('data-key')])});
+if(ar){ar.style.display=(!arch&&ac>0&&filter==='all'&&!query)?'':'none'}
+if(archHead)archHead.style.display=arch?'':'none';
+if(chips)chips.style.display=arch?'none':'';
+if(empty){empty.style.display=shown?'none':'';empty.textContent=arch?'No archived chats.':(query?'No chats match your search.':(filter==='unread'?'No unread chats.':(filter==='fav'?'No favorites yet. Select a chat and use the menu to add one.':(filter==='groups'?'No groups yet.':'No chats yet. Find friends in the other tab.'))))}
+renderBar()}
+function renderBar(){var n=keys().length;bar.style.display=n?'flex':'none';if(!n){menu.style.display='none';return}
+cnt.textContent=n;var rs=keys().map(rowOf).filter(Boolean);
+function all(attr){return rs.length&&rs.every(function(a){return a.getAttribute(attr)==='1'})}
+var pin=document.getElementById('selPin'),mute=document.getElementById('selMute'),ar=document.getElementById('selArch');
+pin.title=all('data-pinned')?'Unpin chat':'Pin chat';mute.title=all('data-muted')?'Unmute notifications':'Mute notifications';ar.title=arch?'Unarchive':'Archive';
+var m=menu.querySelectorAll('button');Array.prototype.forEach.call(m,function(b){var a=b.getAttribute('data-act');
+if(a==='view')b.style.display=(rs.length===1&&rs[0].getAttribute('data-kind')==='dm')?'':'none';
+if(a==='unread')b.textContent=rs.some(function(a){return a.getAttribute('data-unread')!=='0'||a.getAttribute('data-mark')==='1'})?'Mark as read':'Mark as unread';
+if(a==='fav')b.textContent=all('data-fav')?'Remove from favorites':'Add to favorites'})}
+function toggle(k){if(sel[k])delete sel[k];else sel[k]=1;applyView()}
+function act(action,ks){var items=(ks||keys()).map(function(k){var p=k.split(':');return{kind:p[0],id:parseInt(p[1],10)}});
+fetch('/api/chats/prefs',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items,action:action})}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(x){if(!x.ok){alert(x.j.error||'Something went wrong.');return}sel={};refresh(true)}).catch(function(){alert('Could not reach the server. Try again.')})}
+function allSel(attr){var rs=keys().map(rowOf).filter(Boolean);return rs.length&&rs.every(function(a){return a.getAttribute(attr)==='1'})}
+document.getElementById('selClose').onclick=function(){sel={};applyView()};
+document.getElementById('selPin').onclick=function(){act(allSel('data-pinned')?'unpin':'pin')};
+document.getElementById('selMute').onclick=function(){act(allSel('data-muted')?'unmute':'mute')};
+document.getElementById('selArch').onclick=function(){act(arch?'unarchive':'archive')};
+document.getElementById('selDel').onclick=function(){if(confirm('Clear the selected chat'+(keys().length>1?'s':'')+'? This only removes the messages for you.'))act('clear')};
+document.getElementById('selMore').onclick=function(e){e.stopPropagation();menu.style.display=menu.style.display==='block'?'none':'block'};
+document.addEventListener('click',function(e){if(menu&&!menu.contains(e.target))menu.style.display='none'});
+menu.onclick=function(e){var b=e.target.closest('button');if(!b)return;var a=b.getAttribute('data-act');menu.style.display='none';
+if(a==='view'){var k=keys()[0].split(':');location.href='/u/'+k[1]}
+else if(a==='unread'){var rs=keys().map(rowOf).filter(Boolean);act(rs.some(function(r){return r.getAttribute('data-unread')!=='0'||r.getAttribute('data-mark')==='1'})?'mark_read':'mark_unread')}
+else if(a==='all'){rows().forEach(function(r){if(r.style.display!=='none')sel[r.getAttribute('data-key')]=1});applyView()}
+else if(a==='fav')act(allSel('data-fav')?'unfavorite':'favorite');
+else if(a==='clear'){if(confirm('Clear the selected chat'+(keys().length>1?'s':'')+'? This only removes the messages for you.'))act('clear')}};
+function cancelPress(){if(timer){clearTimeout(timer);timer=null}}
+list.addEventListener('pointerdown',function(e){var a=e.target.closest('a.chat-item[data-key]');if(!a||(e.pointerType==='mouse'&&e.button!==0))return;sx=e.clientX;sy=e.clientY;cancelPress();pressed=false;
+timer=setTimeout(function(){timer=null;pressed=true;var k=a.getAttribute('data-key');if(!sel[k])sel[k]=1;if(navigator.vibrate)try{navigator.vibrate(15)}catch(x){}applyView()},450)});
+list.addEventListener('pointermove',function(e){if(timer&&(Math.abs(e.clientX-sx)>10||Math.abs(e.clientY-sy)>10))cancelPress()});
+['pointerup','pointercancel','pointerleave'].forEach(function(t){list.addEventListener(t,function(){cancelPress();if(pressed&&t!=='pointerleave')setTimeout(function(){pressed=false},80)})});
+list.addEventListener('contextmenu',function(e){var a=e.target.closest('a.chat-item[data-key]');if(!a)return;e.preventDefault();pressed=true;sel[a.getAttribute('data-key')]=1;applyView()});
+list.addEventListener('click',function(e){var ar=e.target.closest('#archRow');if(ar){e.preventDefault();arch=true;sel={};applyView();return}
+var a=e.target.closest('a.chat-item[data-key]');if(!a)return;
+if(pressed){e.preventDefault();pressed=false;return}
+if(keys().length){e.preventDefault();toggle(a.getAttribute('data-key'))}});
+document.getElementById('archBack').onclick=function(){arch=false;sel={};applyView()};
+search.addEventListener('input',function(){query=search.value.trim().toLowerCase();applyView()});
+chips.addEventListener('click',function(e){var c=e.target.closest('[data-f]');if(!c)return;filter=c.getAttribute('data-f');Array.prototype.forEach.call(chips.querySelectorAll('[data-f]'),function(x){x.classList.toggle('on',x===c)});applyView()});
+function refresh(force){if(document.hidden&&force!==true)return;if(!force&&(keys().length||timer))return;fetch('/chat',{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){var n=new DOMParser().parseFromString(h,'text/html').getElementById('chatList');if(n){list.innerHTML=n.innerHTML;Object.keys(sel).forEach(function(k){if(!rowOf(k))delete sel[k]});applyView();mark()}}).catch(function(){})}
+applyView();mark();setInterval(refresh,4000);document.addEventListener('visibilitychange',refresh);window.addEventListener('online',refresh);
 })();`;
-  res.send(layout('Chat', `<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a></p><div id="chatList">${groups.length ? `<p class="chat-label">Groups</p>${groupRows}` : ''}<p class="chat-label">Friends</p>${friendRows}</div><script>${listScript}</script>`, req.user));
+  const selBar = `<div id="selBar" class="sel-bar" style="display:none"><button type="button" id="selClose" title="Cancel">${svg('<path d="M6 6l12 12M18 6L6 18"/>')}</button><b id="selCount">0</b><span class="sel-sp"></span>
+<button type="button" id="selPin" title="Pin chat">${svg('<path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6zM12 14v7"/>')}</button>
+<button type="button" id="selMute" title="Mute notifications">${svg('<path d="M6 8a6 6 0 0 1 9-5M18 11c0 4 2 5 2 6H5M10 21h4M3 3l18 18"/>')}</button>
+<button type="button" id="selArch" title="Archive">${svg('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8M10 12h4"/>')}</button>
+<button type="button" id="selDel" title="Clear chat">${svg('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>')}</button>
+<button type="button" id="selMore" title="More">${svg('<circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/>')}</button>
+<div id="selMenu" class="sel-menu" style="display:none"><button type="button" data-act="view">View contact</button><button type="button" data-act="unread">Mark as unread</button><button type="button" data-act="all">Select all</button><button type="button" data-act="fav">Add to favorites</button><button type="button" data-act="clear">Clear chat</button></div></div>`;
+  res.send(layout('Chat', `${selBar}<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a></p>
+<input id="chatSearch" class="chat-search" type="search" placeholder="Search chats" autocomplete="off">
+<div id="chipRow" class="chip-row"><button type="button" class="chip on" data-f="all">All</button><button type="button" class="chip" data-f="unread">Unread</button><button type="button" class="chip" data-f="fav">Favorites</button><button type="button" class="chip" data-f="groups">Groups</button></div>
+<div id="archHead" class="arch-head" style="display:none"><button type="button" id="archBack" class="link">&larr; Archived chats</button></div>
+<div id="chatList">${listHtml}</div><p id="chatEmpty" class="mut" style="display:none"></p><script>${listScript}</script>`, req.user));
 });
 
 const CHAT_JS = `(function(){
@@ -1868,7 +2016,7 @@ app.get('/chat/:id', (req, res) => {
   if (friendStatus(req.user.id, otherId) !== 'friends') return res.status(403).send(layout('Not friends yet', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h2>You are not friends with ${esc(other.name)} yet</h2><p>${friendActionHtml(req.user.id, otherId)}</p>`, req.user));
   const rows = db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id ASC').all(req.user.id, otherId, otherId, req.user.id)
     .filter(m => !isHiddenFor(m.id, req.user.id));
-  markRead(rows, req.user.id);
+  markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'dm', otherId);
   const lastId = rows.length ? rows[rows.length - 1].id : 0;
   const bubbles = rows.map(m => bubbleHtml(m, req.user.id, false)).join('');
   const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/u/${other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" style="font-size:12px">${isOnline(other) ? 'Online' : 'Offline'} &middot; tap to view profile</span></div></a></div>`;
@@ -1884,7 +2032,7 @@ app.get('/chat/group/:id', (req, res) => {
   const members = groupMembers(gid);
   const byId = Object.fromEntries(members.map(m => [m.id, m.name]));
   const rows = db.prepare('SELECT * FROM messages WHERE group_id=? ORDER BY id ASC').all(gid).filter(m => !isHiddenFor(m.id, req.user.id)).map(m => ({ ...m, sender_name: byId[m.sender_id] || 'Former member' }));
-  markRead(rows, req.user.id);
+  markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'group', gid);
   const lastId = rows.length ? rows[rows.length - 1].id : 0;
   const bubbles = rows.map(m => bubbleHtml(m, req.user.id, true)).join('');
   const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/chat/group/${gid}/info" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${groupAvatarOr(g)}<div><b>${esc(g.name)}</b><br><span class="mut" style="font-size:12px">${members.length} members &middot; tap for group info</span></div></a></div>`;
@@ -1968,10 +2116,10 @@ function resolveTarget(req) {
 }
 function notifyNewMessage(sender, target, preview, messageId) {
   if (target.group_id) {
-    const others = db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id != ?').all(target.group_id, sender.id).map(r => r.user_id);
+    const others = db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id != ?').all(target.group_id, sender.id).map(r => r.user_id).filter(id => !isMutedChat(id, 'group', target.group_id));
     const g = db.prepare('SELECT name FROM groups WHERE id=?').get(target.group_id);
-    notify(others, { title: g.name, body: `${sender.name}: ${preview}`, url: '/chat/group/' + target.group_id + (messageId ? '?reply_to=' + messageId : ''), tag: 'group-' + target.group_id, quickReply: { group: target.group_id, reply_to_id: messageId || null } });
-  } else {
+    if (others.length) notify(others, { title: g.name, body: `${sender.name}: ${preview}`, url: '/chat/group/' + target.group_id + (messageId ? '?reply_to=' + messageId : ''), tag: 'group-' + target.group_id, quickReply: { group: target.group_id, reply_to_id: messageId || null } });
+  } else if (!isMutedChat(target.recipient_id, 'dm', sender.id)) {
     notify([target.recipient_id], { title: sender.name, body: preview, url: '/chat/' + sender.id + (messageId ? '?reply_to=' + messageId : ''), tag: 'dm-' + sender.id, quickReply: { to: sender.id, reply_to_id: messageId || null } });
   }
 }
