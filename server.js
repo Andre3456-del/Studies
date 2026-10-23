@@ -412,7 +412,13 @@ app.use((req, res, next) => {
 
 // LiveKit calling module; credentials stay in server-side environment variables.
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
-registerCalling(app, { db, crypto });
+registerCalling(app, { db, crypto, logCall: (callerId, calleeId, kind, state, secs) => {
+  // A line in the 1-to-1 chat: "Video call - 47 sec", "Missed video call", "Declined".
+  const enc = encryptMsg(JSON.stringify({ k: kind, s: state, d: secs || 0 }));
+  const id = Number(db.prepare("INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind) VALUES(?,?,NULL,?,?,'call')").run(callerId, calleeId, enc.body_enc, enc.iv).lastInsertRowid);
+  if (state !== 'missed') db.prepare('INSERT OR IGNORE INTO message_reads(message_id,user_id) VALUES(?,?)').run(id, calleeId);
+  else { const caller = db.prepare('SELECT id,name FROM users WHERE id=?').get(callerId); if (caller) notifyNewMessage(caller, { recipient_id: calleeId, group_id: null }, '📞 Missed ' + (kind === 'video' ? 'video' : 'voice') + ' call', id); }
+} });
 
 // ---------- usernames, levels and "who can see what" ----------
 const fullAdminIds = () => db.prepare("SELECT id FROM users WHERE role='admin'").all().map(r => r.id);
@@ -874,6 +880,9 @@ body.msg-selecting .chat-head{display:none}
 .to-btm{position:fixed;right:16px;bottom:84px;z-index:30;width:42px;height:42px;border-radius:50%;padding:0;margin:0;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.4)}
 .to-btm .nbadge{position:absolute;top:-9px;right:-3px;margin:0}
 .unread-div{align-self:center;background:var(--panel);border:1px solid var(--line);color:var(--mut);font-size:12px;padding:3px 12px;border-radius:99px;margin:6px 0}
+.call-entry{align-self:center;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:6px 14px;font-size:13px}
+.call-entry.missed{color:#f87171}
+.call-entry time{display:inline;margin:0;font-size:11px;opacity:.65}
 .fwd{font-size:12px;font-style:italic;opacity:.7;margin-bottom:3px}
 .vspeed{display:block;margin:4px 0 0 auto;padding:2px 10px;border-radius:99px;font-size:12px;line-height:1.5;cursor:pointer}
 .sheet{position:fixed;left:0;right:0;top:0;bottom:0;z-index:60;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center}
@@ -1480,6 +1489,18 @@ function tickFor(m, recipientId) {
   if (other && isOnline(other)) { markDelivered(recipientId); return 'delivered'; }
   return 'sent';
 }
+const fmtCallSecs = n => n >= 60 ? `${Math.floor(n / 60)} min${n % 60 ? ` ${n % 60} sec` : ''}` : `${n} sec`;
+function callInfo(m, meId) {
+  let d = {}; try { d = JSON.parse(decryptMsg(m.body_enc, m.iv)); } catch (e) { /* unreadable log line */ }
+  const video = d.k === 'video', name = video ? 'Video call' : 'Voice call', mine = m.sender_id === meId;
+  const out = { icon: video ? '📹' : '📞', bad: false };
+  if (d.s === 'ended') out.text = `${name} · ${fmtCallSecs(d.d || 1)}`;
+  else if (d.s === 'declined') out.text = `${name} · Declined`;
+  else if (mine) out.text = `${name} · No answer`;
+  else { out.text = `Missed ${video ? 'video' : 'voice'} call`; out.bad = true; }
+  return out;
+}
+const snipFor = (m, me) => m.kind === 'call' ? (c => c.icon + ' ' + c.text)(callInfo(m, me)) : snippetOf(m);
 const isStarred = (mid, uid) => !!db.prepare('SELECT 1 FROM message_stars WHERE message_id=? AND user_id=?').get(mid, uid);
 const tickSpan = st => ({ read: '<span class="tick tick-read">&#10003;&#10003;</span>', delivered: '<span class="tick tick-un">&#10003;&#10003;</span>', sent: '<span class="tick tick-un">&#10003;</span>' })[st] || '';
 function reactionsFor(mid) {
@@ -1493,7 +1514,7 @@ function markRead(rows, viewerId) {
 const clock = iso => new Date(iso + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const fmtDur = ms => { const t = Math.round((ms || 0) / 1000); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
 const fmtSize = b => b == null ? '' : b < 1024 * 1024 ? Math.round(b / 1024) + ' KB' : (b / (1024 * 1024)).toFixed(1) + ' MB';
-const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'file' ? `📄 ${m.media_name || 'File'}` : decryptMsg(m.body_enc, m.iv).slice(0, 40);
+const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'call' ? '📞 Call' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'file' ? `📄 ${m.media_name || 'File'}` : decryptMsg(m.body_enc, m.iv).slice(0, 40);
 function messageReplyInfo(m, viewerId, isGroup) {
   if (!m.reply_to_id || m.deleted_at) return null;
   const parent = db.prepare('SELECT * FROM messages WHERE id=?').get(m.reply_to_id);
@@ -1521,6 +1542,7 @@ function replyPreviewHtml(m, viewerId, isGroup) {
 }
 function bubbleHtml(m, meId, isGroup) {
   const side = m.sender_id === meId ? 'me' : 'them';
+  if (m.kind === 'call') { const c = callInfo(m, meId); return `<div class="call-entry${c.bad ? ' missed' : ''}" data-id="${m.id}" data-kind="call"><span>${c.icon}</span><span>${esc(c.text)}</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`; }
   const reactions = reactionsFor(m.id);
   const reactHtml = Object.keys(reactions).length ? `<div class="reactions">${Object.entries(reactions).map(([e, n]) => `<span class="rchip">${e} ${n}</span>`).join('')}</div>` : '';
   const senderTag = isGroup && side === 'them' ? `<div class="sender-name">${esc(m.sender_name || '')}</div>` : '';
@@ -1587,7 +1609,7 @@ app.post('/api/messages/star', (req, res) => {
   let n = 0;
   for (const id of cleanIds(req.body && req.body.ids, 50)) {
     const m = db.prepare('SELECT * FROM messages WHERE id=?').get(id);
-    if (!canSeeMsg(me, m) || m.deleted_at) continue;
+    if (!canSeeMsg(me, m) || m.deleted_at || m.kind === 'call') continue;
     if (on) db.prepare('INSERT OR IGNORE INTO message_stars(user_id,message_id) VALUES(?,?)').run(me, id);
     else db.prepare('DELETE FROM message_stars WHERE user_id=? AND message_id=?').run(me, id);
     n++;
@@ -1690,14 +1712,14 @@ app.get('/chat', (req, res) => {
   for (const u of friends) {
     const m = lastVisible('dm', u.id), p = prefs['dm:' + u.id] || {};
     const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(u.id, me, me, me).n;
-    const mine = m && m.sender_id === me && !m.deleted_at ? tickSpan(tickFor(m, u.id)) + ' ' : '';
+    const mine = m && m.sender_id === me && !m.deleted_at && m.kind !== 'call' ? tickSpan(tickFor(m, u.id)) + ' ' : '';
     items.push({ kind: 'dm', id: u.id, name: u.name, av: avatarOr(u), m, p, unread, dot: isOnline(u) ? '#22c55e' : '#ef4444',
-      sub: m ? `${mine}${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : (isOnline(u) ? 'Online now' : 'Offline') });
+      sub: m ? `${mine}${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : (isOnline(u) ? 'Online now' : 'Offline') });
   }
   for (const g of db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me)) {
     const m = lastVisible('group', g.id), p = prefs['group:' + g.id] || {};
     const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id=? AND sender_id != ? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(g.id, me, me, me).n;
-    items.push({ kind: 'group', id: g.id, name: g.name, av: groupAvatarOr(g), m, p, unread, dot: null, sub: m ? `${snippetOf(m)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet' });
+    items.push({ kind: 'group', id: g.id, name: g.name, av: groupAvatarOr(g), m, p, unread, dot: null, sub: m ? `${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet' });
   }
   for (const it of items) it.archived = it.p.archived_upto != null && (!it.m || it.m.id <= it.p.archived_upto); // a new message brings an archived chat back
   items.sort((a, b) => ((b.p.pinned_at ? 1 : 0) - (a.p.pinned_at ? 1 : 0)) || ((b.p.pinned_at || 0) - (a.p.pinned_at || 0)) || ((b.m ? b.m.id : 0) - (a.m ? a.m.id : 0)) || a.name.localeCompare(b.name));
@@ -1857,7 +1879,8 @@ function bubble(m){
   seen[m.id]=1;
   var hello=thread.querySelector('.hello');if(hello)hello.parentNode.removeChild(hello);
   var mine=m.from===myId,side=mine?'me':'them',d,t=el('time');t.setAttribute('data-t',m.created_at);
-  if(m.deleted){d=el('div','bubble '+side+' deleted');d.appendChild(el('span','mut','This message was deleted'))}
+  if(m.kind==='call'&&m.call){d=el('div','call-entry'+(m.call.bad?' missed':''));d.appendChild(el('span',null,m.call.icon));d.appendChild(el('span',null,m.call.text))}
+  else if(m.deleted){d=el('div','bubble '+side+' deleted');d.appendChild(el('span','mut','This message was deleted'))}
   else if(m.kind==='voice'){d=el('div','bubble '+side);var st=senderTag(m);if(st)d.appendChild(st);var a=document.createElement('audio');a.controls=true;a.preload='none';a.src='/api/messages/media/'+m.id;d.appendChild(a);t.setAttribute('data-pre','🎤 '+dur(m.ms)+' · ')}
   else if(m.kind==='sticker'){d=el('div','sticker-msg '+side);var st2=senderTag(m);if(st2)d.appendChild(st2);var im=document.createElement('img');im.src='/api/messages/media/'+m.id;im.alt='sticker';d.appendChild(im);if(!mine){var sb=el('button','link save-st','+ Save sticker');sb.type='button';sb.setAttribute('data-save',m.id);d.appendChild(sb)}}
   else if(m.kind==='image'){d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);var ia=document.createElement('a');ia.href='/api/messages/media/'+m.id;ia.target='_blank';ia.rel='noopener noreferrer';var iim=document.createElement('img');iim.src='/api/messages/media/'+m.id;iim.alt='photo';iim.loading='lazy';ia.appendChild(iim);d.appendChild(ia)}
@@ -1869,7 +1892,7 @@ function bubble(m){
   d.setAttribute('data-id',m.id);d.setAttribute('data-kind',m.kind);
   if(m.reactions&&Object.keys(m.reactions).length){var row=el('div','reactions');Object.keys(m.reactions).forEach(function(em){row.appendChild(el('span','rchip',em+' '+m.reactions[em]))});d.appendChild(row)}
   d.appendChild(t);stamp(t);
-  if(mine){var tk=document.createElement('span');tk.className='tickwrap';tk.setAttribute('data-tick','1');t.appendChild(tk);updateTick(m.id,m.tick||'sent')}
+  if(mine&&m.kind!=='call'){var tk=document.createElement('span');tk.className='tickwrap';tk.setAttribute('data-tick','1');t.appendChild(tk);updateTick(m.id,m.tick||'sent')}
   var stick=mine||nearBottom();thread.appendChild(d);decorateVoice(d);if(m.starred&&!m.deleted)setStar(d,true);if(stick)toBottom();else bumpNew();
 }
 function updateTick(id,status){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var tk=b.querySelector('[data-tick]');if(!tk)return;tk.innerHTML=tickHtml(status)}
@@ -2073,7 +2096,7 @@ function renderSel(){
   selBar.style.display=ids.length?'flex':'none';rbar.style.display='none';msgMenu.style.display='none';
   if(!ids.length)return;
   selCnt.textContent=ids.length;
-  var bs=ids.map(bubOf).filter(Boolean),one=bs.length===1,deleted=bs.some(function(b){return b.classList.contains('deleted')});
+  var bs=ids.map(bubOf).filter(Boolean),one=bs.length===1,deleted=bs.some(function(b){return b.classList.contains('deleted')||b.getAttribute('data-kind')==='call'});
   show('mReply',one&&!deleted);show('mFwd',!deleted);show('mStar',!deleted);
   show('mCopy',bs.some(function(b){return b.getAttribute('data-kind')==='text'&&!!b.querySelector('.msg-text')}));
   show('mInfo',one&&isMine(bs[0])&&!deleted);
@@ -2434,7 +2457,7 @@ app.get('/api/messages/poll', (req, res) => {
     body: m.deleted_at ? '' : (m.kind === 'text' || !m.kind ? decryptMsg(m.body_enc, m.iv) : ''),
     ms: m.media_ms || 0, name: m.media_name || '', created_at: m.created_at,
     reactions: reactionsFor(m.id),
-    reply: messageReplyInfo(m, req.user.id, !!m.group_id), fwd: !!m.forwarded, starred: isStarred(m.id, req.user.id),
+    reply: messageReplyInfo(m, req.user.id, !!m.group_id), fwd: !!m.forwarded, starred: isStarred(m.id, req.user.id), call: m.kind === 'call' ? callInfo(m, req.user.id) : undefined,
     tick: m.sender_id === req.user.id && !m.group_id ? tickFor(m, m.recipient_id) : undefined,
   }));
   // Tick refresh for messages I sent earlier in this conversation, so the sender's ticks update live even with no new messages.

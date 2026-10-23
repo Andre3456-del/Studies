@@ -200,6 +200,20 @@ PRICE_NGN=100
 
 When someone claims a payment, it shows up under "Payment claims waiting for you" in `/admin`. Check your bank/OPay app, then click Approve (unlocks it — it moves from Locked to Available on their dashboard) or Reject.
 
+## Chat features (WhatsApp-style)
+
+- **Chat list:** search, filters (All, Unread, Favorites, Groups), pin up to 3 chats, archive (an archived chat comes back when a new message arrives), mute (no push notifications), favorites, mark as unread, clear chat (only for you). Press and hold a chat to select it; the top bar has pin, mute, archive, clear and a menu.
+- **Chat screen:** press and hold a message to select it. The top bar has reply, copy, forward (up to 10 messages to up to 5 chats), star, message info (delivered/read times; per-person in groups), delete (for me / for everyone) and edit. A reaction bar floats above the message. A divider shows "N unread messages", a button scrolls back to the latest message, voice notes play at 1x / 1.5x / 2x, forwarded messages are labelled, and starred messages are listed at `/chat/starred`.
+- Call lines appear in 1-to-1 chats: "Video call - 47 sec", "Missed video call", "Declined", "No answer".
+- New tables: `chat_prefs`, `message_stars` (created automatically); new `messages.forwarded` column.
+
+## Calls
+
+- WhatsApp-style call screens: ringing then a timer, bottom control pill (more, camera, microphone, end), your own small camera window with flip-camera, add people, "X is muted" / "You're muted" notices, "Couldn't make call" with Cancel and Call again, and a full-screen incoming call with Decline and Accept.
+- **Share your screen** (More menu) on computers; phone browsers cannot share a screen, so the button is hidden there. A shared screen shows as its own tile for the other person.
+- A call that nobody answers within 45 seconds counts as missed and stops ringing.
+- Sound: echo cancellation, noise suppression, automatic volume, 48 kHz mono voice with silence suppression, and your own voice is never played back to you.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.
