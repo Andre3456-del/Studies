@@ -132,7 +132,7 @@ function registerCalling(app, { db, crypto, logCall }) {
 // ---------- the call screen (runs in the browser; kept as a real function so node can syntax-check it) ----------
 function callScreen() {
   const C = window.__CALL, $ = x => document.getElementById(x);
-  let room, lp, sharing = false, micOn = true, camOn = C.kind === 'video', startedAt = 0, everConnected = false, facing = 'user', ended = false, status = {}, toastT;
+  let room, lp, voiceOn = false, sharing = false, micOn = true, camOn = C.kind === 'video', startedAt = 0, everConnected = false, facing = 'user', ended = false, status = {}, toastT;
   const api = (url, body) => fetch(url, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined })
     .then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Error(j.error || 'Request failed'); return j; });
   const toast = t => { const e = $('toast'); e.textContent = t; e.style.opacity = '1'; clearTimeout(toastT); toastT = setTimeout(() => { e.style.opacity = '0'; }, 2200); };
@@ -199,6 +199,18 @@ function callScreen() {
     $('selfMute').hidden = micOn;
     $('shareBar').hidden = !sharing; $('shareBtn').textContent = sharing ? 'Stop sharing your screen' : 'Share your screen';
   }
+  async function applyVoice() {
+    if (voiceOn || !lp || !window.makeCleanVoice) return;
+    let proc = null;
+    try {
+      const pub = lp.getTrackPublication(window.LivekitClient.Track.Source.Microphone), t = pub && pub.audioTrack;
+      if (!t || !t.setProcessor || !window.AudioWorkletNode) return;
+      proc = window.makeCleanVoice(); await proc.prepare();
+      if (proc.state() !== 'running') { proc.close(); return; } // the browser wants a tap first; we try again on the first tap, and meanwhile the plain microphone is used
+      await t.setProcessor(proc); voiceOn = true;
+      proc.onLost(() => { voiceOn = false; t.stopProcessor().catch(() => {}); });
+    } catch (e) { voiceOn = false; if (proc) proc.close(); }
+  }
   async function start() {
     try {
       if (!window.LivekitClient) throw Error('Calling client did not load. Check your connection.');
@@ -225,9 +237,10 @@ function callScreen() {
       room.on(L.RoomEvent.AudioPlaybackStatusChanged, () => { if (!room.canPlaybackAudio) toast('Tap the screen to turn on sound'); });
       room.on(L.RoomEvent.Disconnected, () => { if (!ended) finish('Disconnected from the call'); });
       await room.connect(c.serverUrl, c.token);
-      const unlock = () => { if (room) room.startAudio().catch(() => {}); };
+      const unlock = () => { if (room) room.startAudio().catch(() => {}); applyVoice(); };
       unlock(); document.addEventListener('click', unlock); document.addEventListener('touchend', unlock);
       await lp.setMicrophoneEnabled(true);
+      applyVoice();
       if (C.kind === 'video') {
         await lp.setCameraEnabled(true);
         const pub = lp.getTrackPublication(L.Track.Source.Camera);
@@ -298,6 +311,57 @@ function callScreen() {
   $('peerName').textContent = C.title; $('sub').textContent = 'Connecting…'; updateButtons();
   start();
 }
+// ---------- clean voice: only the speaker's voice goes out, not the room ----------
+// Runs on the microphone before it is sent: cuts rumble and hiss, closes a gate when nobody is speaking (it learns how noisy the room is),
+// and evens out loudness. It works at 48 kHz, the same rate the call uses, so the voice is never resampled (that is what makes pitch wobble).
+function voiceGateWorklet() {
+  class VoiceGate extends AudioWorkletProcessor {
+    constructor() { super(); this.floor = 0.004; this.gain = 0; this.open = false; this.hold = 0; }
+    process(inputs, outputs) {
+      const i = inputs[0] && inputs[0][0], o = outputs[0] && outputs[0][0];
+      if (!i || !o) return true;
+      let sum = 0; for (let k = 0; k < i.length; k++) sum += i[k] * i[k];
+      const rms = Math.sqrt(sum / i.length);
+      this.floor = Math.min(0.03, Math.max(0.0005, rms < this.floor ? this.floor * 0.9 + rms * 0.1 : this.floor * (this.open ? 1.0002 : 1.0006) + 1e-7)); // learns the room's noise level; speech barely moves it
+      const openAt = Math.max(0.01, this.floor * 4), closeAt = Math.max(0.006, this.floor * 2.5);
+      if (rms > (this.open ? closeAt : openAt)) { this.open = true; this.hold = 130; }
+      else if (this.open && --this.hold <= 0) this.open = false;
+      const target = this.open ? 1 : 0.02, next = target > this.gain ? this.gain + (target - this.gain) * 0.6 : this.gain + (target - this.gain) * 0.04;
+      for (let k = 0; k < o.length; k++) o[k] = i[k] * (this.gain + (next - this.gain) * (k / o.length));
+      this.gain = next; return true;
+    }
+  }
+  registerProcessor('voice-gate', VoiceGate);
+}
+function makeCleanVoice() {
+  let ctx = null, nodes = [], lost = () => {};
+  const api = {
+    name: 'clean-voice', processedTrack: undefined,
+    async prepare() {
+      ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000, latencyHint: 'interactive' });
+      await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob(['(' + voiceGateWorklet.toString() + ')()'], { type: 'application/javascript' })));
+      try { await ctx.resume(); } catch (e) { /* needs a tap first */ }
+      ctx.onstatechange = () => { if (ctx && ctx.state !== 'running') lost(); };
+    },
+    state() { return ctx ? ctx.state : 'closed'; },
+    onLost(f) { lost = f; },
+    async init(opts) {
+      const src = ctx.createMediaStreamSource(new MediaStream([opts.track]));
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90; hp.Q.value = 0.7;
+      const lo = ctx.createBiquadFilter(); lo.type = 'lowpass'; lo.frequency.value = 7600; lo.Q.value = 0.7;
+      const gate = new AudioWorkletNode(ctx, 'voice-gate');
+      const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -26; comp.knee.value = 18; comp.ratio.value = 3; comp.attack.value = 0.005; comp.release.value = 0.2;
+      const makeup = ctx.createGain(); makeup.gain.value = 1.5;
+      const dst = ctx.createMediaStreamDestination();
+      src.connect(hp); hp.connect(lo); lo.connect(gate); gate.connect(comp); comp.connect(makeup); makeup.connect(dst);
+      nodes = [src, hp, lo, gate, comp, makeup, dst]; api.processedTrack = dst.stream.getAudioTracks()[0];
+    },
+    async restart(opts) { nodes.forEach(n => { try { n.disconnect(); } catch (e) { /* already gone */ } }); await api.init(opts); },
+    async destroy() { lost = () => {}; nodes.forEach(n => { try { n.disconnect(); } catch (e) { /* already gone */ } }); nodes = []; if (ctx) { try { await ctx.close(); } catch (e) { /* already closed */ } ctx = null; } },
+    close() { api.destroy(); }
+  };
+  return api;
+}
 const callCss = '*{box-sizing:border-box}html,body{margin:0;height:100%;background:#0b141a;color:#e9edef;font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}'
   + '#stage{position:fixed;left:0;top:0;right:0;bottom:0;display:flex;flex-direction:column}'
   + '.top{position:absolute;left:0;right:0;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top,0px)) 14px 28px;background:linear-gradient(#000a,#0000)}'
@@ -340,7 +404,7 @@ function callPage(data) {
     + '<button type="button" class="ibtn" id="micBtn" title="Mute">' + ICON.mic + '</button><button type="button" class="ibtn red" id="endBtn" title="End call">' + ICON.end + '</button></div>'
     + '<div id="failed" hidden><h2>Couldn’t make call</h2><p id="whyText"></p><div class="btnrow"><button type="button" class="tbtn" id="cancelBtn">Cancel</button><button type="button" class="tbtn go" id="againBtn">Call again</button></div></div>'
     + '<div id="inviteBox" hidden><div class="card"><b>Add people</b><div id="choices"></div><div class="btnrow"><button type="button" class="tbtn" id="cancelInvites">Cancel</button><button type="button" class="tbtn go" id="sendInvites">Add</button></div></div></div>'
-    + '</div><script>window.__CALL=' + JSON.stringify(data).replace(/</g, '\\u003c') + ';</script><script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script><script>(' + callScreen.toString() + ')();</script></body></html>';
+    + '</div><script>window.__CALL=' + JSON.stringify(data).replace(/</g, '\\u003c') + ';</script><script>' + voiceGateWorklet.toString() + makeCleanVoice.toString() + ';window.makeCleanVoice=makeCleanVoice;</script><script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script><script>(' + callScreen.toString() + ')();</script></body></html>';
 }
 
 const clientScript = '(' + function() {

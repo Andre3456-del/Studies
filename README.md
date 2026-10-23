@@ -212,7 +212,7 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - WhatsApp-style call screens: ringing then a timer, bottom control pill (more, camera, microphone, end), your own small camera window with flip-camera, add people, "X is muted" / "You're muted" notices, "Couldn't make call" with Cancel and Call again, and a full-screen incoming call with Decline and Accept.
 - **Share your screen** (More menu) on computers; phone browsers cannot share a screen, so the button is hidden there. A shared screen shows as its own tile for the other person.
 - A call that nobody answers within 45 seconds counts as missed and stops ringing.
-- Sound: echo cancellation, noise suppression, automatic volume, 48 kHz mono voice with silence suppression, and your own voice is never played back to you.
+- Sound: echo cancellation, noise suppression and automatic volume from the browser, plus our own voice cleaner on the microphone (cuts rumble and hiss, a gate that closes when nobody is speaking and learns how noisy the room is, and a leveller), all at 48 kHz so the pitch never shifts. Your own voice is never played back to you. Two phones in the same room will still squeal at each other; use earphones or separate rooms when testing.
 
 ## Other email options
 
