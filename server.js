@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL, cr
 CREATE TABLE IF NOT EXISTS group_members(group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'member', added_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(group_id, user_id));
 CREATE TABLE IF NOT EXISTS message_reads(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, read_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(message_id, user_id));
 CREATE TABLE IF NOT EXISTS message_hidden(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY(message_id, user_id));
+CREATE TABLE IF NOT EXISTS message_stars(user_id INTEGER NOT NULL, message_id INTEGER NOT NULL, PRIMARY KEY(user_id, message_id));
 CREATE TABLE IF NOT EXISTS chat_prefs(user_id INTEGER NOT NULL, kind TEXT NOT NULL, target_id INTEGER NOT NULL, pinned_at INTEGER, archived_upto INTEGER, muted INTEGER NOT NULL DEFAULT 0, favorite INTEGER NOT NULL DEFAULT 0, unread_mark INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, kind, target_id));
 CREATE TABLE IF NOT EXISTS message_reactions(message_id INTEGER NOT NULL, user_id INTEGER NOT NULL, emoji TEXT NOT NULL, PRIMARY KEY(message_id, user_id));
 CREATE TABLE IF NOT EXISTS push_subscriptions(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, endpoint TEXT UNIQUE NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -87,7 +88,7 @@ CREATE INDEX IF NOT EXISTS gm_user ON group_members(user_id);
 CREATE INDEX IF NOT EXISTS push_user ON push_subscriptions(user_id);
 `);
 const msgCols2 = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
-for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER'], ['reply_to_id', 'INTEGER'], ['delivered_at', 'TEXT']])
+for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER'], ['reply_to_id', 'INTEGER'], ['delivered_at', 'TEXT'], ['forwarded', 'INTEGER NOT NULL DEFAULT 0']])
   if (!msgCols2.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
 db.exec('CREATE INDEX IF NOT EXISTS messages_undelivered ON messages(recipient_id, delivered_at)');
 const groupCols = db.prepare('PRAGMA table_info(groups)').all().map(c => c.name);
@@ -865,6 +866,22 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .chat-item .meta span{display:block;font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chat-label{color:var(--mut);letter-spacing:2px;font-size:11px;text-transform:uppercase;margin:18px 0 6px}
 .thread{display:flex;flex-direction:column;gap:8px;padding:6px 2px 90px}
+body.msg-selecting .chat-head{display:none}
+.thread [data-id]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.thread .msg-sel{outline:2px solid var(--blue);outline-offset:3px}
+.react-bar{position:fixed;z-index:40;display:flex;gap:2px;padding:6px 8px;background:var(--bg);border:1px solid var(--line);border-radius:99px;box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.react-bar button{background:none;border:0;box-shadow:none;font-size:24px;padding:2px 5px;margin:0;cursor:pointer;border-radius:50%;line-height:1.2}
+.to-btm{position:fixed;right:16px;bottom:84px;z-index:30;width:42px;height:42px;border-radius:50%;padding:0;margin:0;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.to-btm .nbadge{position:absolute;top:-9px;right:-3px;margin:0}
+.unread-div{align-self:center;background:var(--panel);border:1px solid var(--line);color:var(--mut);font-size:12px;padding:3px 12px;border-radius:99px;margin:6px 0}
+.fwd{font-size:12px;font-style:italic;opacity:.7;margin-bottom:3px}
+.vspeed{display:block;margin:4px 0 0 auto;padding:2px 10px;border-radius:99px;font-size:12px;line-height:1.5;cursor:pointer}
+.sheet{position:fixed;left:0;right:0;top:0;bottom:0;z-index:60;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center}
+.sheet-box{background:var(--bg);width:100%;max-width:520px;max-height:80vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px;border:1px solid var(--line);box-sizing:border-box}
+.sheet-box>div>button{display:block;width:100%;margin:8px 0 0}
+.fw-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+.fw-row input{width:auto;margin:0}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:70;background:rgba(17,24,39,.92);color:#fff;padding:8px 16px;border-radius:99px;font-size:14px}
 .bubble{max-width:78%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;word-wrap:break-word}
 .bubble.me{align-self:flex-end;background:linear-gradient(135deg,#5bc8ff,var(--blue) 60%);color:#04101f;border-bottom-right-radius:4px}
 .bubble.them{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:4px}
@@ -953,17 +970,13 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .tab-link{padding:10px 16px;color:var(--mut);font-weight:600;border-bottom:2px solid transparent}
 .tab-link.active{color:var(--blue);border-color:var(--blue)}
 .tick{opacity:.95;font-weight:700}.tick-un{color:#dc2626}.tick-read{color:#22c55e}.tick-queued{color:#93a0bd}
-.msg-actions{display:flex;gap:10px;margin-top:4px;opacity:0}
-.bubble:hover .msg-actions,.sticker-msg:hover .msg-actions,.bubble:focus-within .msg-actions{opacity:1}
-.msg-actions button{font-size:11px;color:var(--mut);background:none;box-shadow:none;padding:0;margin:0}
-.msg-actions button:hover{color:var(--blue)}
 .bubble.deleted{font-style:italic;opacity:.75}
 .reactions{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .rchip{background:rgba(255,255,255,.08);border-radius:99px;padding:1px 7px;font-size:12px}
 .react-pick{display:flex;gap:4px;margin-top:6px;background:rgba(0,0,0,.25);border-radius:99px;padding:4px 6px;width:fit-content}
 .react-pick button{background:none;box-shadow:none;padding:2px;margin:0;font-size:18px}
 .sender-name{font-size:12px;font-weight:700;color:var(--blue);margin-bottom:2px}
-.sticker-msg .msg-actions{justify-content:flex-end}`;
+`;
 
 const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
   { href: '/lecturer', icon: '🎓', label: 'My courses' },
@@ -1467,6 +1480,7 @@ function tickFor(m, recipientId) {
   if (other && isOnline(other)) { markDelivered(recipientId); return 'delivered'; }
   return 'sent';
 }
+const isStarred = (mid, uid) => !!db.prepare('SELECT 1 FROM message_stars WHERE message_id=? AND user_id=?').get(mid, uid);
 const tickSpan = st => ({ read: '<span class="tick tick-read">&#10003;&#10003;</span>', delivered: '<span class="tick tick-un">&#10003;&#10003;</span>', sent: '<span class="tick tick-un">&#10003;</span>' })[st] || '';
 function reactionsFor(mid) {
   const rows = db.prepare('SELECT emoji, COUNT(*) n FROM message_reactions WHERE message_id=? GROUP BY emoji').all(mid);
@@ -1511,13 +1525,14 @@ function bubbleHtml(m, meId, isGroup) {
   const reactHtml = Object.keys(reactions).length ? `<div class="reactions">${Object.entries(reactions).map(([e, n]) => `<span class="rchip">${e} ${n}</span>`).join('')}</div>` : '';
   const senderTag = isGroup && side === 'them' ? `<div class="sender-name">${esc(m.sender_name || '')}</div>` : '';
   const tick = side === 'me' && !isGroup ? `<span class="tickwrap" data-tick="1">${(() => { const html = { read: ' <span class="tick tick-read">&#10003;&#10003;</span>', delivered: ' <span class="tick tick-un">&#10003;&#10003;</span>', sent: ' <span class="tick tick-un">&#10003;</span>' }; return html[tickFor(m, m.recipient_id)] || ''; })()}</span>` : '';
-  const actions = `<div class="msg-actions"><button type="button" class="link" data-act="reply">Reply</button><button type="button" class="link" data-act="react">React</button>${side === 'me' ? `${m.kind === 'text' ? `<button type="button" class="link" data-act="edit">Edit</button>` : ''}<button type="button" class="link" data-act="delete-me">Delete for me</button><button type="button" class="link" data-act="delete-everyone">Delete for everyone</button>` : `<button type="button" class="link" data-act="delete-me">Delete for me</button>`}</div>`;
-  if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}" data-kind="${m.kind}">${senderTag}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
-  if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="voice">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio>${actions}${reactHtml}<time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${tick}</time></div>`;
-  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}" data-kind="sticker">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
-  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}" data-kind="image">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a>${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
-  if (m.kind === 'file') return `<div class="bubble ${side}" data-id="${m.id}" data-kind="file"><a class="file-chip" href="/api/messages/media/${m.id}" download="${esc(m.media_name || 'file')}">📄 <span class="file-name">${esc(m.media_name || 'File')}</span></a>${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
-  return `<div class="bubble ${side}" data-id="${m.id}" data-kind="text">${senderTag}${replyPreviewHtml(m, meId, isGroup)}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}${actions}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${tick}</time></div>`;
+  const fwd = m.forwarded ? '<div class="fwd">&#8618; Forwarded</div>' : '';
+  const starred = isStarred(m.id, meId), starAttr = starred ? ' data-starred="1"' : '', starMark = starred ? '<span class="starmark"> &#9733;</span>' : '';
+  if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}"${starAttr} data-kind="${m.kind}">${senderTag}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
+  if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}"${starAttr} data-kind="voice">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio>${reactHtml}<time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${starMark}${tick}</time></div>`;
+  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}"${starAttr} data-kind="sticker">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
+  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}"${starAttr} data-kind="image">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a>${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
+  if (m.kind === 'file') return `<div class="bubble ${side}" data-id="${m.id}"${starAttr} data-kind="file">${fwd}<a class="file-chip" href="/api/messages/media/${m.id}" download="${esc(m.media_name || 'file')}">📄 <span class="file-name">${esc(m.media_name || 'File')}</span></a>${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
+  return `<div class="bubble ${side}" data-id="${m.id}"${starAttr} data-kind="text">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
 }
 
 // ---------- chat list preferences: pin (max 3), archive, mute, favourites, mark as unread, clear chat ----------
@@ -1561,6 +1576,86 @@ app.post('/api/chats/prefs', (req, res) => {
     } else return res.status(400).json({ error: 'Unknown action.' });
   }
   res.json({ ok: true });
+});
+
+// ---------- star, forward and message info ----------
+const canSeeMsg = (uid, m) => !!m && !isHiddenFor(m.id, uid) && (m.group_id ? isGroupMember(m.group_id, uid) : (m.sender_id === uid || m.recipient_id === uid));
+const cleanIds = (v, max) => [...new Set((Array.isArray(v) ? v : []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))].slice(0, max);
+app.post('/api/messages/star', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const on = !!(req.body && req.body.on), me = req.user.id;
+  let n = 0;
+  for (const id of cleanIds(req.body && req.body.ids, 50)) {
+    const m = db.prepare('SELECT * FROM messages WHERE id=?').get(id);
+    if (!canSeeMsg(me, m) || m.deleted_at) continue;
+    if (on) db.prepare('INSERT OR IGNORE INTO message_stars(user_id,message_id) VALUES(?,?)').run(me, id);
+    else db.prepare('DELETE FROM message_stars WHERE user_id=? AND message_id=?').run(me, id);
+    n++;
+  }
+  res.json({ ok: true, count: n });
+});
+app.get('/api/chats/targets', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const me = req.user.id;
+  const dms = db.prepare('SELECT id,name FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ') ORDER BY name').all().map(u => ({ kind: 'dm', id: u.id, name: u.name }));
+  const groups = db.prepare('SELECT g.id,g.name FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=? ORDER BY g.name').all(me).map(g => ({ kind: 'group', id: g.id, name: g.name }));
+  res.json({ targets: groups.concat(dms) });
+});
+app.post('/api/messages/forward', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const me = req.user.id;
+  if (limited('fwd:' + me, 10, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
+  const targets = (Array.isArray(req.body && req.body.targets) ? req.body.targets : []).slice(0, 5).map(t => t && t.kind === 'group'
+    ? (isGroupMember(Number(t.id), me) ? { recipient_id: 0, group_id: Number(t.id) } : null)
+    : (t && Number(t.id) !== me && friendStatus(me, Number(t.id)) === 'friends' ? { recipient_id: Number(t.id), group_id: null } : null)).filter(Boolean);
+  const msgs = cleanIds(req.body && req.body.ids, 10).map(id => db.prepare('SELECT * FROM messages WHERE id=?').get(id)).filter(m => canSeeMsg(me, m) && !m.deleted_at).sort((a, b) => a.id - b.id);
+  if (!targets.length || !msgs.length) return res.status(400).json({ error: 'Choose who to forward to.' });
+  let count = 0;
+  for (const t of targets) for (const m of msgs) {
+    let newId = 0, preview = '';
+    if (m.kind === 'text' || !m.kind) {
+      const text = decryptMsg(m.body_enc, m.iv), enc = encryptMsg(text);
+      newId = Number(db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,forwarded) VALUES(?,?,?,?,?,1)').run(me, t.recipient_id, t.group_id, enc.body_enc, enc.iv).lastInsertRowid);
+      preview = text.slice(0, 120);
+    } else if (m.media_enc) {
+      const buf = decryptBytes(m.media_enc, m.media_iv);
+      if (!buf) continue;
+      newId = insertMedia(me, t, m.kind, buf, m.media_mime, m.media_ms, m.media_name, null).id;
+      db.prepare('UPDATE messages SET forwarded=1 WHERE id=?').run(newId);
+      preview = m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : `📄 ${(m.media_name || 'File').slice(0, 60)}`;
+    } else continue;
+    count++;
+    notifyNewMessage(req.user, t, '↪ ' + preview, newId);
+  }
+  res.json({ ok: true, count });
+});
+// Message info: who has received / read a message you sent.
+app.get('/api/messages/:id/info', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const me = req.user.id, m = db.prepare('SELECT * FROM messages WHERE id=?').get(Number(req.params.id));
+  if (!canSeeMsg(me, m) || m.sender_id !== me || m.deleted_at) return res.sendStatus(404);
+  if (m.group_id) {
+    const reads = Object.fromEntries(db.prepare('SELECT user_id,read_at FROM message_reads WHERE message_id=?').all(m.id).map(r => [r.user_id, r.read_at]));
+    const others = groupMembers(m.group_id).filter(u => u.id !== me);
+    return res.json({ group: true, sent: m.created_at, read: others.filter(u => reads[u.id]).map(u => ({ name: u.name, at: reads[u.id] })), waiting: others.filter(u => !reads[u.id]).map(u => u.name) });
+  }
+  const r = db.prepare('SELECT read_at FROM message_reads WHERE message_id=? AND user_id=?').get(m.id, m.recipient_id);
+  res.json({ group: false, sent: m.created_at, delivered: m.delivered_at || (r ? r.read_at : null), read: r ? r.read_at : null });
+});
+// Starred messages: everything you have starred, with a link back to the chat.
+app.get('/chat/starred', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/chat/starred');
+  const me = req.user.id;
+  const rows = db.prepare('SELECT m.* FROM message_stars s JOIN messages m ON m.id=s.message_id WHERE s.user_id=? ORDER BY m.id DESC LIMIT 200').all(me).filter(m => canSeeMsg(me, m) && !m.deleted_at);
+  const nameOf = id => (db.prepare('SELECT name FROM users WHERE id=?').get(id) || {}).name || 'Someone';
+  const items = rows.map(m => {
+    const other = m.group_id ? null : (m.sender_id === me ? m.recipient_id : m.sender_id);
+    const where = m.group_id ? (db.prepare('SELECT name FROM groups WHERE id=?').get(m.group_id) || {}).name || 'Group' : nameOf(other);
+    const href = m.group_id ? `/chat/group/${m.group_id}` : `/chat/${other}`;
+    const body = m.kind === 'text' || !m.kind ? esc(decryptMsg(m.body_enc, m.iv).slice(0, 300)) : snippetOf(m);
+    return `<div class="card star-item" data-id="${m.id}"><a href="${href}" style="color:inherit;display:block"><b>${m.sender_id === me ? 'You' : esc(nameOf(m.sender_id))}</b> <span class="mut">&rsaquo; ${esc(where)} &middot; ${timeAgo(m.created_at)}</span><div style="margin-top:4px;white-space:pre-wrap;word-break:break-word">${body}</div></a><button type="button" class="link unstar" data-id="${m.id}">Remove star</button></div>`;
+  }).join('') || '<p class="mut">No starred messages yet. Press and hold a message in a chat, then tap the star.</p>';
+  res.send(layout('Starred messages', `<p class="mut" style="margin:0 0 4px"><a href="/chat">&larr; Chat</a></p><h1>Starred messages</h1>${items}<script>document.addEventListener('click',function(e){var b=e.target.closest('.unstar');if(!b)return;fetch('/api/messages/star',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[Number(b.getAttribute('data-id'))],on:false})}).then(function(){var c=b.closest('.star-item');if(c)c.remove()})})</script>`, req.user));
 });
 
 app.get('/chat', (req, res) => {
@@ -1690,7 +1785,7 @@ applyView();mark();setInterval(refresh,4000);document.addEventListener('visibili
 <button type="button" id="selDel" title="Clear chat">${svg('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>')}</button>
 <button type="button" id="selMore" title="More">${svg('<circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/>')}</button>
 <div id="selMenu" class="sel-menu" style="display:none"><button type="button" data-act="view">View contact</button><button type="button" data-act="unread">Mark as unread</button><button type="button" data-act="all">Select all</button><button type="button" data-act="fav">Add to favorites</button><button type="button" data-act="clear">Clear chat</button></div></div>`;
-  res.send(layout('Chat', `${selBar}<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a></p>
+  res.send(layout('Chat', `${selBar}<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a> <a class="btn ghost" href="/chat/starred">&#9733; Starred</a></p>
 <input id="chatSearch" class="chat-search" type="search" placeholder="Search chats" autocomplete="off">
 <div id="chipRow" class="chip-row"><button type="button" class="chip on" data-f="all">All</button><button type="button" class="chip" data-f="unread">Unread</button><button type="button" class="chip" data-f="fav">Favorites</button><button type="button" class="chip" data-f="groups">Groups</button></div>
 <div id="archHead" class="arch-head" style="display:none"><button type="button" id="archBack" class="link">&larr; Archived chats</button></div>
@@ -1727,15 +1822,6 @@ function linkifyInto(container,text){
 }
 function toBottom(){window.scrollTo(0,document.body.scrollHeight)}
 function tickHtml(t){if(!t)return'';if(t==='queued')return' <span class="tick tick-queued" title="Waiting for a connection">&#8987;</span>';if(convType==='group')return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
-function actionsRow(id,mine,kind){
-  var r=el('div','msg-actions'),reply=el('button','link','Reply');reply.type='button';reply.setAttribute('data-act','reply');r.appendChild(reply);var react=el('button','link','React');react.type='button';react.setAttribute('data-act','react');r.appendChild(react);
-  if(mine){
-    if(kind==='text'){var ed=el('button','link','Edit');ed.type='button';ed.setAttribute('data-act','edit');r.appendChild(ed)}
-    var d1=el('button','link','Delete for me');d1.type='button';d1.setAttribute('data-act','delete-me');r.appendChild(d1);
-    var d2=el('button','link','Delete for everyone');d2.type='button';d2.setAttribute('data-act','delete-everyone');r.appendChild(d2);
-  } else {var d1b=el('button','link','Delete for me');d1b.type='button';d1b.setAttribute('data-act','delete-me');r.appendChild(d1b)}
-  return r;
-}
 function clearReply(){replyTarget=null;replyBar.hidden=true;var t=document.getElementById('replyThumb');if(t)t.hidden=true}
 var replyThumb=document.getElementById('replyThumb');
 function startReply(id){
@@ -1750,14 +1836,12 @@ function startReply(id){
 }
 replyCancel.addEventListener('click',clearReply);
 var REACT_SET=['👍','❤️','😂','😮','😢','🙏'];
-function openReact(id){var b=thread.querySelector('[data-id="'+id+'"]');var old=b.querySelector('.react-pick');if(old){old.remove();return}
-  var row=el('div','react-pick');REACT_SET.forEach(function(em){var btn=el('button',null,em);btn.type='button';btn.addEventListener('click',function(){react(id,em);row.remove()});row.appendChild(btn)});b.appendChild(row)}
 function react(id,emoji){fetch('/api/messages/'+id+'/react',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({emoji:emoji})}).then(function(r){return r.json()}).then(function(j){if(j&&j.reactions)renderReactions(id,j.reactions)}).catch(function(){})}
 function renderReactions(id,reactions){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var old=b.querySelector('.reactions');if(old)old.remove();
   var keys=Object.keys(reactions||{});if(!keys.length)return;var row=el('div','reactions');keys.forEach(function(em){row.appendChild(el('span','rchip',em+' '+reactions[em]))});
   var t=b.querySelector('time');b.insertBefore(row,t)}
 function startEdit(id){var b=thread.querySelector('[data-id="'+id+'"]'),span=b.querySelector('.msg-text');if(!span)return;editingId=id;input.value=span.textContent;resizeInput();input.focus()}
-function doDelete(id,scope){if(!confirm(scope==='everyone'?'Delete this message for everyone?':'Delete this message for you?'))return;
+function doDelete(id,scope,skip){if(!skip&&!confirm(scope==='everyone'?'Delete this message for everyone?':'Delete this message for you?'))return;
   fetch('/api/messages/'+id+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:scope})}).then(function(r){return r.json()}).then(function(j){
     var previews=thread.querySelectorAll('.reply-preview[data-reply-to="'+id+'"]');
     Array.prototype.forEach.call(previews,function(p){p.parentNode.removeChild(p)});
@@ -1779,13 +1863,14 @@ function bubble(m){
   else if(m.kind==='image'){d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);var ia=document.createElement('a');ia.href='/api/messages/media/'+m.id;ia.target='_blank';ia.rel='noopener noreferrer';var iim=document.createElement('img');iim.src='/api/messages/media/'+m.id;iim.alt='photo';iim.loading='lazy';ia.appendChild(iim);d.appendChild(ia)}
   else if(m.kind==='file'){d=el('div','bubble '+side);var fa=document.createElement('a');fa.className='file-chip';fa.href='/api/messages/media/'+m.id;fa.setAttribute('download',m.name||'file');fa.appendChild(document.createTextNode('📄 '));var fn=el('span','file-name',m.name||'File');fa.appendChild(fn);d.appendChild(fa)}
   else{d=el('div','bubble '+side);var st3=senderTag(m);if(st3)d.appendChild(st3);var sp=el('span','msg-text');linkifyInto(sp,m.body);d.appendChild(sp);if(m.edited)d.appendChild(el('span','mut',' (edited)'))}
-  if(m.reply&&!m.deleted)d.insertBefore(replyBox(m.reply),d.firstChild);
+  function topRef(){var r=d.firstChild;while(r&&(r.className==='sender-name'||r.className==='fwd'))r=r.nextSibling;return r}
+  if(m.fwd&&!m.deleted)d.insertBefore(el('div','fwd','\u21AA Forwarded'),topRef());
+  if(m.reply&&!m.deleted)d.insertBefore(replyBox(m.reply),topRef());
   d.setAttribute('data-id',m.id);d.setAttribute('data-kind',m.kind);
-  if(!m.deleted)d.appendChild(actionsRow(m.id,mine,m.kind));
   if(m.reactions&&Object.keys(m.reactions).length){var row=el('div','reactions');Object.keys(m.reactions).forEach(function(em){row.appendChild(el('span','rchip',em+' '+m.reactions[em]))});d.appendChild(row)}
   d.appendChild(t);stamp(t);
   if(mine){var tk=document.createElement('span');tk.className='tickwrap';tk.setAttribute('data-tick','1');t.appendChild(tk);updateTick(m.id,m.tick||'sent')}
-  thread.appendChild(d);toBottom();
+  var stick=mine||nearBottom();thread.appendChild(d);decorateVoice(d);if(m.starred&&!m.deleted)setStar(d,true);if(stick)toBottom();else bumpNew();
 }
 function updateTick(id,status){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var tk=b.querySelector('[data-tick]');if(!tk)return;tk.innerHTML=tickHtml(status)}
 Array.prototype.forEach.call(thread.querySelectorAll('time[data-t]'),stamp);
@@ -1799,7 +1884,7 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden)poll
 window.addEventListener('focus',poll);
 window.addEventListener('online',poll);
 function post(url,obj,cb){fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id)cb(j);else alert((j&&j.error)||'Could not send.')}).catch(function(){alert('Could not send. Check your connection.')})}
-toBottom();var initialReplyId=Number(new URLSearchParams(location.search).get('reply_to'));if(initialReplyId)setTimeout(function(){startReply(initialReplyId)},180);setInterval(poll,1500);
+toBottom();setTimeout(initialScroll,0);var initialReplyId=Number(new URLSearchParams(location.search).get('reply_to'));if(initialReplyId)setTimeout(function(){startReply(initialReplyId)},180);setInterval(poll,1500);
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
   if(editingId){var id=editingId;editingId=null;input.value='';resizeInput();fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
   var selectedReply=replyTarget;input.value='';resizeInput();var body=Object.assign({body:text,reply_to_id:selectedReply?selectedReply.id:null},convType==='group'?{group:convId}:{to:convId});
@@ -1945,19 +2030,16 @@ attachInput.addEventListener('change',function(){var f=attachInput.files&&attach
 thread.addEventListener('click',function(e){
   var save=e.target.closest?e.target.closest('[data-save]'):null;
   if(save){fetch('/api/stickers/from-message/'+save.getAttribute('data-save'),{method:'POST'}).then(function(r){return r.json()}).then(function(j){save.textContent=(j&&j.ok)?'✓ Saved to your stickers':((j&&j.error)||'Could not save');save.disabled=true}).catch(function(){save.textContent='Could not save'});return}
-  var act=e.target.closest?e.target.closest('[data-act]'):null;if(!act)return;
-  var bub=act.closest('[data-id]');if(!bub)return;var id=bub.getAttribute('data-id'),kind=act.getAttribute('data-act');
-  if(kind==='reply')startReply(id);else if(kind==='react')openReact(id);else if(kind==='edit')startEdit(id);else if(kind==='delete-me')doDelete(id,'me');else if(kind==='delete-everyone')doDelete(id,'everyone');
 });
 
 /* ---- mobile reply gestures: swipe a message horizontally or long-press it ---- */
 var touchStart=null,pressTimer=null;
 thread.addEventListener('touchstart',function(e){
   var b=e.target.closest?e.target.closest('[data-id]'):null;
-  if(!b||e.target.closest('button,a,input'))return;
+  if(!b||e.target.closest('button,input,audio,textarea'))return;
   var t=e.touches[0];touchStart={id:b.getAttribute('data-id'),x:t.clientX,y:t.clientY};
   clearTimeout(pressTimer);
-  pressTimer=setTimeout(function(){if(touchStart){startReply(touchStart.id);touchStart=null}},550);
+  pressTimer=setTimeout(function(){if(touchStart){selectAdd(touchStart.id);touchStart=null}},450);
 },{passive:true});
 thread.addEventListener('touchmove',function(e){
   if(!touchStart)return;
@@ -1969,6 +2051,90 @@ thread.addEventListener('touchmove',function(e){
 },{passive:true});
 thread.addEventListener('touchend',function(){clearTimeout(pressTimer);touchStart=null},{passive:true});
 thread.addEventListener('touchcancel',function(){clearTimeout(pressTimer);touchStart=null},{passive:true});
+
+/* ---- press-and-hold a message to select it: top bar (reply, copy, forward, star, info, delete) + floating reactions ---- */
+var sel={},pressed=false,selBar=document.getElementById('msgSelBar'),selCnt=document.getElementById('msgSelCount'),rbar=document.getElementById('reactBar'),toastEl=document.getElementById('toast'),sheet=document.getElementById('sheet'),sheetBox=document.getElementById('sheetBox'),msgMenu=document.getElementById('msgMenu'),btm=document.getElementById('toBtm'),btmN=document.getElementById('toBtmN'),newCount=0;
+function selIds(){return Object.keys(sel)}
+function bubOf(id){return thread.querySelector('[data-id="'+id+'"]')}
+function isMine(b){return b.classList.contains('me')}
+function show(id,on){document.getElementById(id).style.display=on?'':'none'}
+function toast(t){toastEl.textContent=t;toastEl.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(function(){toastEl.style.display='none'},1800)}
+function copyText(t){function fb(){var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(e){}document.body.removeChild(ta)}
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).catch(fb);else fb()}
+function fullTime(iso){return iso?new Date(iso+'Z').toLocaleString([],{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):''}
+function setStar(b,on){if(on)b.setAttribute('data-starred','1');else b.removeAttribute('data-starred');var tm=b.querySelector('time');if(!tm)return;var ex=tm.querySelector('.starmark');
+  if(on&&!ex){tm.insertBefore(el('span','starmark',' ★'),tm.querySelector('.tickwrap'))}else if(!on&&ex)ex.remove()}
+function placeReact(b){rbar.style.display='flex';var r=b.getBoundingClientRect(),w=rbar.offsetWidth||280,top=Math.max(70,r.top-54);rbar.style.top=top+'px';
+  var left=isMine(b)?Math.min(window.innerWidth-w-8,Math.max(8,r.right-w)):Math.max(8,Math.min(window.innerWidth-w-8,r.left));rbar.style.left=left+'px'}
+function renderSel(){
+  var ids=selIds();
+  Array.prototype.forEach.call(thread.querySelectorAll('[data-id]'),function(b){b.classList.toggle('msg-sel',!!sel[b.getAttribute('data-id')])});
+  document.body.classList.toggle('msg-selecting',ids.length>0);
+  selBar.style.display=ids.length?'flex':'none';rbar.style.display='none';msgMenu.style.display='none';
+  if(!ids.length)return;
+  selCnt.textContent=ids.length;
+  var bs=ids.map(bubOf).filter(Boolean),one=bs.length===1,deleted=bs.some(function(b){return b.classList.contains('deleted')});
+  show('mReply',one&&!deleted);show('mFwd',!deleted);show('mStar',!deleted);
+  show('mCopy',bs.some(function(b){return b.getAttribute('data-kind')==='text'&&!!b.querySelector('.msg-text')}));
+  show('mInfo',one&&isMine(bs[0])&&!deleted);
+  var canEdit=one&&isMine(bs[0])&&!deleted&&bs[0].getAttribute('data-kind')==='text';show('mMore',canEdit);
+  document.getElementById('mStar').title=bs.every(function(b){return b.getAttribute('data-starred')==='1'})?'Remove star':'Star';
+  if(one&&!deleted)placeReact(bs[0]);
+}
+function selectAdd(id){if(!bubOf(id))return;pressed=true;if(navigator.vibrate)try{navigator.vibrate(15)}catch(x){}sel[id]=1;renderSel()}
+function selToggle(id){if(sel[id])delete sel[id];else sel[id]=1;renderSel()}
+function selClear(){sel={};renderSel()}
+thread.addEventListener('pointerdown',function(){pressed=false},true);
+thread.addEventListener('click',function(e){var b=e.target.closest?e.target.closest('[data-id]'):null;
+  if(pressed){e.preventDefault();e.stopPropagation();pressed=false;return}
+  if(selIds().length&&b){e.preventDefault();e.stopPropagation();selToggle(b.getAttribute('data-id'))}},true);
+thread.addEventListener('contextmenu',function(e){var b=e.target.closest?e.target.closest('[data-id]'):null;if(!b)return;e.preventDefault();selectAdd(b.getAttribute('data-id'))});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){if(sheet.style.display!=='none')closeSheet();else selClear()}});
+window.addEventListener('scroll',function(){var ids=selIds();if(ids.length===1){var b=bubOf(ids[0]);if(b)placeReact(b)}},{passive:true});
+REACT_SET.forEach(function(em){var bt=el('button',null,em);bt.type='button';bt.addEventListener('click',function(){var ids=selIds();if(ids.length===1)react(ids[0],em);selClear()});rbar.appendChild(bt)});
+function openSheet(node){sheetBox.innerHTML='';sheetBox.appendChild(node);sheet.style.display='flex'}
+function closeSheet(){sheet.style.display='none'}
+sheet.addEventListener('click',function(e){if(e.target===sheet)closeSheet()});
+function sbtn(text,fn,cls){var b=el('button',cls||'ghost',text);b.type='button';b.addEventListener('click',fn);return b}
+document.getElementById('mClose').onclick=selClear;
+document.getElementById('mReply').onclick=function(){var ids=selIds();if(ids.length===1)startReply(ids[0]);selClear()};
+document.getElementById('mCopy').onclick=function(){var t=selIds().map(bubOf).filter(Boolean).map(function(b){var m=b.querySelector('.msg-text');return b.getAttribute('data-kind')==='text'&&m?m.textContent:''}).filter(Boolean).join('\\n');if(t){copyText(t);toast('Copied')}selClear()};
+document.getElementById('mMore').onclick=function(e){e.stopPropagation();msgMenu.style.display=msgMenu.style.display==='block'?'none':'block'};
+document.getElementById('mEdit').onclick=function(){var ids=selIds();selClear();if(ids.length===1)startEdit(ids[0])};
+document.addEventListener('click',function(e){if(!msgMenu.contains(e.target))msgMenu.style.display='none'});
+document.getElementById('mStar').onclick=function(){var ids=selIds(),bs=ids.map(bubOf).filter(Boolean),on=!bs.every(function(b){return b.getAttribute('data-starred')==='1'});
+  fetch('/api/messages/star',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids.map(Number),on:on})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){bs.forEach(function(b){setStar(b,on)});toast(on?'Starred':'Star removed')}}).catch(function(){toast('Could not reach the server')});selClear()};
+document.getElementById('mInfo').onclick=function(){var ids=selIds();if(ids.length!==1)return;var id=ids[0];selClear();
+  var box=el('div');box.appendChild(el('b',null,'Message info'));box.appendChild(el('p','mut','Loading…'));openSheet(box);
+  fetch('/api/messages/'+id+'/info',{credentials:'same-origin',cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json()}).then(function(j){
+    var o=el('div');o.appendChild(el('b',null,'Message info'));
+    function line(k,v){var p=el('p');p.style.margin='10px 0 0';p.appendChild(el('b',null,k+': '));p.appendChild(document.createTextNode(v));o.appendChild(p)}
+    if(j.group){line('Sent',fullTime(j.sent));line('Read by',j.read.length?'':'nobody yet');j.read.forEach(function(r){line('✓✓ '+r.name,fullTime(r.at))});if(j.waiting.length)line('Not read yet',j.waiting.join(', '))}
+    else{line('Read',j.read?fullTime(j.read):'not yet');line('Delivered',j.delivered?fullTime(j.delivered):'not yet');line('Sent',fullTime(j.sent))}
+    o.appendChild(sbtn('Close',closeSheet));openSheet(o)}).catch(function(){var o=el('div');o.appendChild(el('p','mut','Could not load the info.'));o.appendChild(sbtn('Close',closeSheet));openSheet(o)})};
+function delMany(ids,scope){ids.forEach(function(id){doDelete(id,scope,true)});closeSheet();selClear()}
+document.getElementById('mDel').onclick=function(){var ids=selIds(),bs=ids.map(bubOf).filter(Boolean),allMine=bs.length&&bs.every(function(b){return isMine(b)&&!b.classList.contains('deleted')});
+  var o=el('div');o.appendChild(el('b',null,'Delete '+(ids.length>1?ids.length+' messages':'message')+'?'));
+  if(allMine)o.appendChild(sbtn('Delete for everyone',function(){delMany(ids,'everyone')},'danger'));
+  o.appendChild(sbtn('Delete for me',function(){delMany(ids,'me')}));o.appendChild(sbtn('Cancel',closeSheet));openSheet(o)};
+document.getElementById('mFwd').onclick=function(){var ids=selIds().map(Number);
+  var o=el('div');o.appendChild(el('b',null,'Forward to…'));var list=el('div');o.appendChild(list);list.appendChild(el('p','mut','Loading…'));
+  var chosen={},go=sbtn('Forward',function(){var t=Object.keys(chosen).map(function(k){var p=k.split(':');return{kind:p[0],id:Number(p[1])}});if(!t.length)return;go.disabled=true;
+    fetch('/api/messages/forward',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,targets:t})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){toast('Forwarded');closeSheet();selClear();poll()}else{go.disabled=false;alert((j&&j.error)||'Could not forward.')}}).catch(function(){go.disabled=false;alert('Could not forward. Check your connection.')})},'');
+  o.appendChild(go);o.appendChild(sbtn('Cancel',closeSheet));openSheet(o);
+  fetch('/api/chats/targets',{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(j){list.innerHTML='';var ts=j.targets||[];if(!ts.length)list.appendChild(el('p','mut','No chats to forward to yet.'));
+    ts.forEach(function(t){var l=el('label','fw-row'),c=document.createElement('input');c.type='checkbox';c.addEventListener('change',function(){var k=t.kind+':'+t.id;if(c.checked){if(Object.keys(chosen).length>=5){c.checked=false;toast('You can pick up to 5 chats');return}chosen[k]=1}else delete chosen[k]});l.appendChild(c);l.appendChild(el('span',null,(t.kind==='group'?'👥 ':'')+t.name));list.appendChild(l)})}).catch(function(){list.innerHTML='';list.appendChild(el('p','mut','Could not load your chats.'))})};
+/* ---- scroll-to-latest button with a count of new messages ---- */
+function nearBottom(){return document.documentElement.scrollHeight-(window.scrollY+window.innerHeight)<220}
+function updBtm(){var far=!nearBottom();btm.style.display=far?'flex':'none';if(!far)newCount=0;btmN.style.display=newCount?'':'none';btmN.textContent=newCount}
+function bumpNew(){newCount++;updBtm()}
+window.addEventListener('scroll',updBtm,{passive:true});
+btm.onclick=function(){newCount=0;toBottom();updBtm()};
+function initialScroll(){var d=document.getElementById('unreadDiv');if(d){window.scrollTo(0,Math.max(0,d.getBoundingClientRect().top+window.scrollY-90))}else toBottom();updBtm()}
+/* ---- voice notes: playback speed 1x / 1.5x / 2x ---- */
+function decorateVoice(d){if(!d||d.getAttribute('data-kind')!=='voice'||d.querySelector('.vspeed'))return;var a=d.querySelector('audio');if(!a)return;var b=el('button','vspeed','1x'),rates=[1,1.5,2],i=0;b.type='button';
+  b.addEventListener('click',function(e){e.stopPropagation();i=(i+1)%3;a.playbackRate=rates[i];b.textContent=rates[i]+'x'});a.addEventListener('play',function(){a.playbackRate=rates[i]});a.parentNode.insertBefore(b,a.nextSibling)}
+Array.prototype.forEach.call(thread.querySelectorAll('[data-kind="voice"]'),decorateVoice);
 
 /* ---- voice notes: tap the mic to record, tap Send to deliver ---- */
 var rec=null,chunks=[],stream=null,t0=0,tick=null,cancelled=false;
@@ -1992,9 +2158,28 @@ recSend.addEventListener('click',function(){finish(false)});
 recCancel.addEventListener('click',function(){finish(true)});
 })();`;
 
+// A divider like "3 unread messages" goes just above the first message this person has not seen yet (worked out before they are marked read).
+function withUnreadDivider(rows, me, mk) {
+  const unread = rows.filter(m => m.sender_id !== me && !m.deleted_at && !isRead(m.id, me)), first = unread[0];
+  return rows.map(m => (first && m.id === first.id ? `<div class="unread-div" id="unreadDiv">${unread.length} unread message${unread.length === 1 ? '' : 's'}</div>` : '') + mk(m)).join('');
+}
+const ic = d => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const MSG_SEL_BAR = `<div id="msgSelBar" class="sel-bar" style="display:none"><button type="button" id="mClose" title="Cancel">${ic('<path d="M6 6l12 12M18 6L6 18"/>')}</button><b id="msgSelCount">0</b><span class="sel-sp"></span>
+<button type="button" id="mReply" title="Reply">${ic('<path d="M9 14L4 9l5-5M4 9h9a7 7 0 0 1 7 7v2"/>')}</button>
+<button type="button" id="mCopy" title="Copy">${ic('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>')}</button>
+<button type="button" id="mFwd" title="Forward">${ic('<path d="M15 14l5-5-5-5M20 9h-9a7 7 0 0 0-7 7v2"/>')}</button>
+<button type="button" id="mStar" title="Star">${ic('<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>')}</button>
+<button type="button" id="mInfo" title="Message info">${ic('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>')}</button>
+<button type="button" id="mDel" title="Delete">${ic('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>')}</button>
+<button type="button" id="mMore" title="More">${ic('<circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/>')}</button>
+<div id="msgMenu" class="sel-menu" style="display:none"><button type="button" id="mEdit">Edit</button></div></div>
+<div id="reactBar" class="react-bar" style="display:none"></div>
+<button type="button" id="toBtm" class="to-btm" style="display:none" aria-label="Scroll to latest message">${ic('<path d="M6 9l6 6 6-6"/>')}<b id="toBtmN" class="nbadge" style="display:none"></b></button>
+<div id="sheet" class="sheet" style="display:none"><div id="sheetBox" class="sheet-box"></div></div>
+<div id="toast" class="toast" style="display:none"></div>`;
 function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastId }) {
   const script = CHAT_JS.replace('__CTYPE__', isGroup ? 'group' : 'dm').replace('__CID__', String(convId)).replace('__MY__', String(req.user.id));
-  res.send(layout(title, `${headHtml}
+  res.send(layout(title, `${MSG_SEL_BAR}${headHtml}
 <div id="thread" class="thread" data-last-id="${lastId}">${bubbles || '<p class="mut hello">Say hello 👋</p>'}</div>
 <div id="panel" class="chat-panel" hidden><div class="ptabs"><button type="button" class="ghost on" data-tab="emoji">😊 Emoji</button><button type="button" class="ghost" data-tab="stickers">Stickers</button></div>
 <div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
@@ -2016,9 +2201,9 @@ app.get('/chat/:id', (req, res) => {
   if (friendStatus(req.user.id, otherId) !== 'friends') return res.status(403).send(layout('Not friends yet', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h2>You are not friends with ${esc(other.name)} yet</h2><p>${friendActionHtml(req.user.id, otherId)}</p>`, req.user));
   const rows = db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id ASC').all(req.user.id, otherId, otherId, req.user.id)
     .filter(m => !isHiddenFor(m.id, req.user.id));
+  const bubbles = withUnreadDivider(rows, req.user.id, m => bubbleHtml(m, req.user.id, false));
   markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'dm', otherId);
   const lastId = rows.length ? rows[rows.length - 1].id : 0;
-  const bubbles = rows.map(m => bubbleHtml(m, req.user.id, false)).join('');
   const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/u/${other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" style="font-size:12px">${isOnline(other) ? 'Online' : 'Offline'} &middot; tap to view profile</span></div></a></div>`;
   threadPage(req, res, { isGroup: false, convId: otherId, title: other.name, headHtml, bubbles, lastId });
 });
@@ -2032,9 +2217,9 @@ app.get('/chat/group/:id', (req, res) => {
   const members = groupMembers(gid);
   const byId = Object.fromEntries(members.map(m => [m.id, m.name]));
   const rows = db.prepare('SELECT * FROM messages WHERE group_id=? ORDER BY id ASC').all(gid).filter(m => !isHiddenFor(m.id, req.user.id)).map(m => ({ ...m, sender_name: byId[m.sender_id] || 'Former member' }));
+  const bubbles = withUnreadDivider(rows, req.user.id, m => bubbleHtml(m, req.user.id, true));
   markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'group', gid);
   const lastId = rows.length ? rows[rows.length - 1].id : 0;
-  const bubbles = rows.map(m => bubbleHtml(m, req.user.id, true)).join('');
   const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/chat/group/${gid}/info" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${groupAvatarOr(g)}<div><b>${esc(g.name)}</b><br><span class="mut" style="font-size:12px">${members.length} members &middot; tap for group info</span></div></a></div>`;
   threadPage(req, res, { isGroup: true, convId: gid, title: g.name, headHtml, bubbles, lastId });
 });
@@ -2249,7 +2434,7 @@ app.get('/api/messages/poll', (req, res) => {
     body: m.deleted_at ? '' : (m.kind === 'text' || !m.kind ? decryptMsg(m.body_enc, m.iv) : ''),
     ms: m.media_ms || 0, name: m.media_name || '', created_at: m.created_at,
     reactions: reactionsFor(m.id),
-    reply: messageReplyInfo(m, req.user.id, !!m.group_id),
+    reply: messageReplyInfo(m, req.user.id, !!m.group_id), fwd: !!m.forwarded, starred: isStarred(m.id, req.user.id),
     tick: m.sender_id === req.user.id && !m.group_id ? tickFor(m, m.recipient_id) : undefined,
   }));
   // Tick refresh for messages I sent earlier in this conversation, so the sender's ticks update live even with no new messages.
