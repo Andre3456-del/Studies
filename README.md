@@ -216,6 +216,12 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - A call that nobody answers within 45 seconds counts as missed and stops ringing.
 - Sound: echo cancellation, noise suppression and automatic volume from the browser, plus our own voice cleaner on the microphone (cuts rumble and hiss, a gate that closes when nobody is speaking and learns how noisy the room is, and a leveller), all at 48 kHz so the pitch never shifts. Your own voice is never played back to you. Two phones in the same room will still squeal at each other; use earphones or separate rooms when testing.
 
+## Profile rules, level promotion and links
+- After sign-up only the **profile picture, name and position** can be changed. Username, university, department (and so faculty) and level are fixed and show as plain text.
+- Levels move up only when the central admin, or someone they appoint, promotes students: **Settings > Level promotion** (`/admin/levels`). Only the central admin can appoint or remove helpers. Every promotion is logged and students are notified.
+- Phone numbers, emails, links and @usernames are tappable everywhere (chat, news, sponsor posts). Tapping @name opens that person's profile (`/@name`).
+- Pages refresh themselves every few seconds (new posts, badges, counts) without a manual reload. A page is left alone while you are typing in a form.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.

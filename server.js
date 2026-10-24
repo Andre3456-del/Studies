@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS lecturer_courses(lecturer_id INTEGER NOT NULL, course
 `);
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const [c, def] of [['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0'], ['username', 'TEXT'], ['level', 'INTEGER'], ['position', 'TEXT'], ['position_status', 'TEXT'],
+for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0'], ['username', 'TEXT'], ['level', 'INTEGER'], ['position', 'TEXT'], ['position_status', 'TEXT'],
   // A verified position can carry real reach and capability: how far their news posts travel (their own
   // department+level, their whole faculty, or the whole school), what admin capability it grants automatically,
   // and -- for positions that need a specific person's sign-off rather than the general news queue -- who that is.
@@ -73,6 +73,7 @@ if (!sponsorCols.includes('duration_days')) db.exec("ALTER TABLE sponsor_posts A
 // ---- usernames, departments, friends, groups, receipts, reactions, push subscriptions ----
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(lower(username))');
 db.exec(`
+CREATE TABLE IF NOT EXISTS level_log(id INTEGER PRIMARY KEY, by_user INTEGER NOT NULL, department TEXT, from_level INTEGER, moved INTEGER NOT NULL, at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, faculty TEXT NOT NULL DEFAULT 'Other');
 CREATE TABLE IF NOT EXISTS friendships(id INTEGER PRIMARY KEY, requester_id INTEGER NOT NULL, addressee_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(requester_id, addressee_id));
 CREATE TABLE IF NOT EXISTS groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_by INTEGER NOT NULL, avatar_data BLOB, avatar_mime TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -279,13 +280,40 @@ const CHAT_HTML = `<button id="ai-open" class="ai-fab" aria-label="Ask the assis
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // Escapes text, then turns any http(s) link inside it into a real, tappable, underlined link that opens
 // in a new tab. Runs on already-escaped text, so it never introduces raw HTML from what someone typed.
-function linkify(text) {
-  return esc(text).replace(/(https?:\/\/[^\s<]+)/g, raw => {
-    const m = /^(.*?)([.,!?;:'")\]]+)$/.exec(raw); // keep trailing sentence punctuation outside the link
-    const url = m ? m[1] : raw, trail = m ? m[2] : '';
-    return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="autolink">${url}</a>${trail}`;
-  });
+// Finds everything tappable in a piece of text: web links, email addresses, phone numbers and @usernames.
+// One function used on the server (news, sponsor posts, chat history) and, copied into the page, for live chat messages.
+function linkTokens(text) {
+  const re = /(https?:\/\/[^\s<]+|www\.[^\s<]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})|(\+?\d(?:[ .()-]?\d){6,18})|@([A-Za-z0-9_.]{3,20})/g;
+  const out = []; let last = 0, m;
+  while ((m = re.exec(text))) {
+    const prev = m.index ? text.charAt(m.index - 1) : '', raw = m[0];
+    let tok = null, len = raw.length;
+    if (m[1]) {
+      const mm = /^(.*?)([.,!?;:'")\]]+)$/.exec(raw), url = mm ? mm[1] : raw;
+      len = url.length; tok = { t: 'url', v: url, href: /^www\./i.test(url) ? 'https://' + url : url };
+    } else if (m[2]) {
+      tok = { t: 'email', v: raw, href: 'mailto:' + raw };
+    } else if (m[3]) {
+      const digits = raw.replace(/\D/g, ''), plus = raw.charAt(0) === '+';
+      const isDate = /^\d{4}[-./]\d{1,2}[-./]\d{1,2}$/.test(raw) || /^\d{1,2}[-./]\d{1,2}[-./]\d{2,4}$/.test(raw);
+      if (!/[\w@\/]/.test(prev) && !isDate && ((digits.length >= 10 && digits.length <= 15) || (plus && digits.length >= 8 && digits.length <= 15))) tok = { t: 'phone', v: raw, href: 'tel:' + (plus ? '+' : '') + digits };
+    } else {
+      const name = m[4].replace(/\.+$/, '');
+      if (!/[\w@\/]/.test(prev) && name.length >= 3) { len = name.length + 1; tok = { t: 'user', v: '@' + name, href: '/@' + name.toLowerCase() }; }
+    }
+    if (!tok) { re.lastIndex = m.index + 1; continue; } // not a link after all: look again from the next character
+    if (m.index > last) out.push({ t: 'text', v: text.slice(last, m.index) });
+    out.push(tok); last = m.index + len; re.lastIndex = last;
+  }
+  if (last < text.length) out.push({ t: 'text', v: text.slice(last) });
+  return out;
 }
+function linkify(text) {
+  return linkTokens(String(text == null ? '' : text)).map(k => k.t === 'text' ? esc(k.v)
+    : `<a href="${esc(k.href)}"${k.t === 'url' ? ' target="_blank" rel="noopener noreferrer"' : ''} class="autolink${k.t === 'user' ? ' mention' : ''}">${esc(k.v)}</a>`).join('');
+}
+// A @username that opens that member's profile.
+const atLink = username => `<a href="/@${esc(String(username).toLowerCase())}" class="autolink mention">@${esc(username)}</a>`;
 const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page';
 const safeNext = n => (typeof n === 'string' && /^\/(?!\/)/.test(n) ? n : '');
 function uniqueSlug(base) {
@@ -398,7 +426,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
+    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -779,6 +807,9 @@ const newsAdmin = guard(can.news);
 const supportAdmin = guard(can.support);
 const isCentral = u => !!u && u.email === ADMIN_EMAIL;
 const central = (req, res, next) => isCentral(req.user) ? next() : res.sendStatus(403);
+// Only the central admin, and the people the central admin appoints, can move students up a level. Nobody can change their own level.
+const canPromote = u => !!u && (isCentral(u) || !!u.can_promote);
+const promoter = (req, res, next) => canPromote(req.user) ? next() : req.method === 'GET' ? res.redirect('/login?next=/admin/levels') : res.sendStatus(403);
 
 const CSS = `:root{--bg:#12121c;--panel:rgba(32,48,96,.30);--line:rgba(56,176,248,.24);--fg:#eaf2ff;--mut:#93a0bd;--blue:#38b0f8;--blue2:#1c7fe0;--pink:#f000e8;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 :root[data-theme="light"]{--bg:#f4f7fc;--panel:rgba(56,176,248,.08);--line:rgba(28,96,160,.22);--fg:#0e1a2b;--mut:#51607a;--blue:#1c7fe0;--blue2:#145fb0;--pink:#c400bc;color-scheme:light}
@@ -949,6 +980,8 @@ body.panel-open .thread{padding-bottom:310px}
 .menu-btn{position:relative}
 .mbadge{position:absolute;top:-4px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:#ef4444;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center}
 .nbadge{margin-left:auto;min-width:22px;height:22px;padding:0 7px;border-radius:99px;background:#ef4444;color:#fff;font-size:12px;font-weight:700;line-height:22px;text-align:center}
+.locked-field{padding:11px 13px;margin:6px 0;border-radius:12px;background:var(--panel);color:var(--fg);pointer-events:none;user-select:text;cursor:default}
+.autolink.mention{font-weight:600}
 .chat-search{width:100%;margin:0 0 10px;padding:10px 14px;border-radius:99px;box-sizing:border-box}
 .chip-row{display:flex;gap:8px;overflow-x:auto;margin:0 0 8px;padding-bottom:2px}
 .chip{flex:none;padding:6px 14px;border-radius:99px;border:1px solid var(--line);background:transparent;color:var(--mut);font-size:14px;font-weight:600;cursor:pointer}
@@ -1061,6 +1094,7 @@ ${drawerNav}
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to receive new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><a href="/privacy">Privacy</a></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
+<script>(function(){var P=location.pathname;if(/^\\/(login|signup|welcome|lecturer|call|chat\\/|forgot|reset|verify|pay)/.test(P))return;var main=document.querySelector('main');if(!main||main.querySelector('script'))return;var last=inner(main),busy=false;function inner(m){var c=m.cloneNode(true),pb=c.querySelector('#pushBar');if(pb)pb.remove();return c.innerHTML}function dirty(){var f=main.querySelectorAll('input,textarea,select');for(var i=0;i<f.length;i++){var e=f[i];if(e.type==='hidden'||e.type==='submit'||e.type==='button')continue;if(e.type==='checkbox'||e.type==='radio'){if(e.checked!==e.defaultChecked)return true}else if(e.tagName==='SELECT'){for(var j=0;j<e.options.length;j++)if(e.options[j].selected!==e.options[j].defaultSelected)return true}else if(e.value!==e.defaultValue)return true}var a=document.activeElement;return !!(a&&main.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))}function sync(sel,doc){var a=document.querySelectorAll(sel),b=doc.querySelectorAll(sel);if(a.length!==b.length)return;for(var i=0;i<a.length;i++)if(a[i].innerHTML!==b[i].innerHTML)a[i].innerHTML=b[i].innerHTML}function tick(){if(busy||document.hidden||document.getElementById('scrim')&&document.getElementById('scrim').classList.contains('show'))return;busy=true;fetch(location.href,{cache:'no-store',credentials:'same-origin',headers:{'X-Live':'1'}}).then(function(r){if(!r.ok||r.redirected||(r.headers.get('content-type')||'').indexOf('text/html')<0)return null;return r.text()}).then(function(h){if(!h)return;var d=new DOMParser().parseFromString(h,'text/html');sync('.menu-btn',d);sync('#drawer a.drawer-item',d);var m=d.querySelector('main');if(!m||m.querySelector('script'))return;var sel=window.getSelection&&String(window.getSelection());if(sel)return;var nw=inner(m);if(nw!==last&&nw!==inner(main)){if(dirty())return;var y=window.scrollY,pb=main.querySelector('#pushBar');main.innerHTML=nw;if(pb)main.insertBefore(pb,main.firstChild);window.scrollTo(0,y)}last=nw}).catch(function(){}).then(function(){busy=false})}setInterval(tick,4000);document.addEventListener('visibilitychange',function(){if(!document.hidden)tick()})})()</script>
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
 </body></html>`;
 };
@@ -1209,7 +1243,7 @@ function newsFeedBody(req, home = false) {
   // link to buy one.
   const adScript = `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}" crossorigin="anonymous"></script>`;
   const sponsors = db.prepare("SELECT * FROM sponsor_posts WHERE status='approved' AND expires_at > datetime('now') ORDER BY id DESC LIMIT 3").all();
-  const sponsorCards = sponsors.map(s => `<div class="card" style="border-color:#ffd166"><p class="pill" style="background:#ffd16622;border-color:#ffd16655;color:#ffd166">Sponsored</p>${s.image_data ? `<img class="news-img" src="/sponsor-image/${s.id}" alt="" style="margin-bottom:8px">` : ''}<h3 style="margin:4px 0">${esc(s.title)}</h3><p class="mut">${esc(s.body)}</p>${s.contact ? `<p class="mut" style="margin:4px 0 0">${esc(s.contact)}</p>` : ''}</div>`).join('');
+  const sponsorCards = sponsors.map(s => `<div class="card" style="border-color:#ffd166"><p class="pill" style="background:#ffd16622;border-color:#ffd16655;color:#ffd166">Sponsored</p>${s.image_data ? `<img class="news-img" src="/sponsor-image/${s.id}" alt="" style="margin-bottom:8px">` : ''}<h3 style="margin:4px 0">${esc(s.title)}</h3><p class="mut" style="white-space:pre-wrap">${linkify(s.body)}</p>${s.contact ? `<p class="mut" style="margin:4px 0 0">${linkify(s.contact)}</p>` : ''}</div>`).join('');
   const submitForm = req.user
     ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
     : '<p class="mut"><a href="/login?next=/news">Log in</a> to share something.</p>';
@@ -1289,6 +1323,13 @@ app.get('/open', (req, res) => {
 });
 
 // A member's profile: what they've chosen to share (university, department, level, their verified position) plus their approved news.
+// /@username opens that member's profile (this is where every tapped @username in chat, news and posts leads).
+app.get('/@:username', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+  const u = db.prepare('SELECT id FROM users WHERE lower(username)=?').get(cleanUsername(req.params.username));
+  if (!u) return res.status(404).send(layout('Not found', `<p class="mut"><a href="javascript:history.back()">&larr; Back</a></p><h2>No member with that username</h2><p class="mut">@${esc(cleanUsername(req.params.username))} does not exist (or has not finished signing up).</p>`, req.user));
+  res.redirect('/u/' + u.id);
+});
 app.get('/u/:id', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
   const u = db.prepare('SELECT id,name,title,position_auto_role,avatar_mime,username,department,university,level,last_seen,hide_active FROM users WHERE id=?').get(Number(req.params.id));
@@ -1694,11 +1735,11 @@ app.get('/chat', (req, res) => {
     if (q) {
       const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
         .all(me, '%' + cleanUsername(q) + '%', '%' + q.toLowerCase() + '%');
-      results = rows.length ? rows.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? '@' + esc(u.username) : ''}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')
+      results = rows.length ? rows.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? atLink(u.username) : ''}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')
         : '<p class="mut">No one found. Try their exact @username.</p>';
     }
     const pending = db.prepare("SELECT u.id,u.name,u.username,u.avatar_mime FROM friendships f JOIN users u ON u.id=f.requester_id WHERE f.addressee_id=? AND f.status='pending' ORDER BY f.id DESC").all(me);
-    const pendingHtml = pending.length ? `<p class="chat-label">Friend requests</p>${pending.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b>${esc(u.name)}</b><span>${u.username ? '@' + esc(u.username) : ''}</span></span>
+    const pendingHtml = pending.length ? `<p class="chat-label">Friend requests</p>${pending.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b>${esc(u.name)}</b><span>${u.username ? atLink(u.username) : ''}</span></span>
 <form method="post" action="/api/friends/${u.id}/accept" style="display:inline"><button>Accept</button></form>
 <form method="post" action="/api/friends/${u.id}/decline" style="display:inline"><button class="link">Decline</button></form></div>`).join('')}` : '';
     return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search students and admins by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
@@ -1829,18 +1870,14 @@ function fmt(iso){return new Date(iso+'Z').toLocaleTimeString([],{hour:'2-digit'
 function dur(ms){var t=Math.round((ms||0)/1000);return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2)}
 function stamp(t){var iso=t.getAttribute('data-t');if(!iso)return;var txt=(t.getAttribute('data-pre')||'')+fmt(iso),n=t.firstChild;if(n&&n.nodeType===3)n.nodeValue=txt;else t.insertBefore(document.createTextNode(txt),t.firstChild)}
 function el(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e}
+${linkTokens.toString()}
 function linkifyInto(container,text){
-  var re=/(https?:\\/\\/[^\\s<]+)/g,last=0,m;
-  while((m=re.exec(text))){
-    if(m.index>last)container.appendChild(document.createTextNode(text.slice(last,m.index)));
-    var url=m[0],mm=/^(.*?)([.,!?;:'")\\]]+)$/.exec(url),trail='';
-    if(mm){url=mm[1];trail=mm[2]}
-    var a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.className='autolink';a.textContent=url;
+  linkTokens(text).forEach(function(k){
+    if(k.t==='text'){container.appendChild(document.createTextNode(k.v));return}
+    var a=document.createElement('a');a.href=k.href;a.className='autolink'+(k.t==='user'?' mention':'');a.textContent=k.v;
+    if(k.t==='url'){a.target='_blank';a.rel='noopener noreferrer'}
     container.appendChild(a);
-    if(trail)container.appendChild(document.createTextNode(trail));
-    last=m.index+m[0].length;
-  }
-  if(last<text.length)container.appendChild(document.createTextNode(text.slice(last)));
+  });
 }
 function toBottom(){window.scrollTo(0,document.body.scrollHeight)}
 function tickHtml(t){if(!t)return'';if(t==='queued')return' <span class="tick tick-queued" title="Waiting for a connection">&#8987;</span>';if(convType==='group')return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
@@ -2628,14 +2665,19 @@ app.get('/avatar/:id', (req, res) => {
 });
 
 const levelOptions = (sel, blank) => `<option value="">${blank}</option>${LEVELS.map(l => `<option value="${l}"${Number(sel) === l ? ' selected' : ''}>${l} level</option>`).join('')}`;
-function profileFields(v, student) {
+// Once someone has signed up, their username, university, department and level are permanent -- only their name, picture and position can change.
+// (A level only moves when the central admin, or someone they appointed, promotes students.) A field is locked as soon as it has a value.
+const lockedOf = u => ({ username: !!(u && u.username), university: !!(u && u.university), department: !!(u && u.department), level: !!(u && u.level) });
+const lockedRow = (label, value) => `<label class="mut">${label}</label><div class="locked-field"><span>${esc(String(value))}</span></div>`;
+function profileFields(v, student, lk = {}) {
+  const lockedBlock = lk.username || lk.university || lk.department || lk.level;
   return `<label class="mut">Your name</label><input name="name" value="${esc(v.name || '')}" maxlength="80" required>
-<label class="mut">Username</label><input name="username" id="unameInput" value="${esc(v.username || '')}" maxlength="21" placeholder="@yourname" autocapitalize="none" autocomplete="off" required>
-<p class="hint" id="unameHint">3 to 20 characters: letters, numbers, dots or underscores. Nobody else can have the same one, and friends will find you with it.</p>
-<label class="mut">University</label><input name="university" value="${esc(v.university || 'University of Uyo')}" maxlength="120"${student ? ' required' : ''}>
-<label class="mut">Department / course of study</label><select name="department"${student ? ' required' : ''}><option value="">Choose your department...</option>${departmentOptions(v.department)}</select>
-<label class="mut">Level</label><select name="level"${student ? ' required' : ''}>${levelOptions(v.level, 'Choose your level...')}</select>
-<p class="hint">Your department and level decide which uploads you see.</p>
+${lk.username ? lockedRow('Username', '@' + v.username) : `<label class="mut">Username</label><input name="username" id="unameInput" value="${esc(v.username || '')}" maxlength="21" placeholder="@yourname" autocapitalize="none" autocomplete="off" required>
+<p class="hint" id="unameHint">3 to 20 characters: letters, numbers, dots or underscores. Nobody else can have the same one, and friends will find you with it. <b>You cannot change it later.</b></p>`}
+${lk.university ? lockedRow('University', v.university) : `<label class="mut">University</label><input name="university" value="${esc(v.university || 'University of Uyo')}" maxlength="120"${student ? ' required' : ''}>`}
+${lk.department ? lockedRow('Department / course of study', v.department) : `<label class="mut">Department / course of study</label><select name="department"${student ? ' required' : ''}><option value="">Choose your department...</option>${departmentOptions(v.department)}</select>`}
+${lk.level ? lockedRow('Level', v.level + ' level') : `<label class="mut">Level</label><select name="level"${student ? ' required' : ''}>${levelOptions(v.level, 'Choose your level...')}</select>`}
+<p class="hint">${lockedBlock ? 'These are fixed once you have signed up. Your level moves up only when the school admin promotes students; if something is wrong, ask an admin.' : 'Your department and level decide which uploads you see. <b>You cannot change them later</b>, so choose carefully.'}</p>
 <label class="mut">Position held in school (optional)</label><input name="position" value="${esc(v.position || '')}" maxlength="60" placeholder="e.g. Director of Socials">
 <p class="hint">If you add one, school authorities check it first. Once verified it shows beside your name.</p>`;
 }
@@ -2643,10 +2685,15 @@ const UNAME_JS = `(function(){var i=document.getElementById('unameInput'),h=docu
 i.addEventListener('input',function(){clearTimeout(t);var v=i.value;t=setTimeout(function(){if(!v.replace(/^@+/,'').length)return;fetch('/api/username/check?u='+encodeURIComponent(v)).then(function(r){return r.json()}).then(function(j){h.textContent=j.message;h.className='hint '+(j.ok?'ok':'err')}).catch(function(){})},350)})})();`;
 function readProfile(user, body) {
   const trim = (v, n) => String(v || '').trim().slice(0, n);
-  const student = user.role === 'user';
+  const student = user.role === 'user', lk = lockedOf(user);
   const d = { name: trim(body.name, 80) || user.name, username: cleanUsername(body.username), university: trim(body.university, 120) || null, department: trim(body.department, 120) || null, level: LEVELS.includes(Number(body.level)) ? Number(body.level) : null, position: trim(body.position, 60) || null };
-  let problem = usernameProblem(d.username, user.id);
-  if (!problem && d.department && !departmentNames().includes(d.department)) problem = 'Choose your department from the list.';
+  // Locked fields can never be changed by the person: whatever was sent is thrown away and the saved value is kept.
+  if (lk.username) d.username = user.username;
+  if (lk.university) d.university = user.university;
+  if (lk.department) d.department = user.department;
+  if (lk.level) d.level = user.level;
+  let problem = lk.username ? '' : usernameProblem(d.username, user.id);
+  if (!problem && !lk.department && d.department && !departmentNames().includes(d.department)) problem = 'Choose your department from the list.';
   if (!problem && student) {
     if (!d.university) problem = 'Enter your university.';
     else if (!d.department) problem = 'Choose your department from the list.';
@@ -2656,8 +2703,9 @@ function readProfile(user, body) {
 }
 // Saves the profile. A position needs school authorities' approval (a full admin approves their own); until then no title shows.
 function saveProfile(user, d) {
-  try {
-    db.prepare('UPDATE users SET name=?, username=?, university=?, department=?, level=? WHERE id=?').run(d.name, d.username, d.university, d.department, d.level, user.id);
+  const cur = db.prepare('SELECT username,university,department,level FROM users WHERE id=?').get(user.id) || {};
+  try { // a value that is already saved is never overwritten here, whatever the caller passed
+    db.prepare('UPDATE users SET name=?, username=?, university=?, department=?, level=? WHERE id=?').run(d.name, cur.username || d.username, cur.university || d.university, cur.department || d.department, cur.level || d.level, user.id);
   } catch { return 'That username is already taken.'; }
   if ((d.position || null) !== (user.position || null)) {
     if (!d.position) db.prepare('UPDATE users SET position=NULL, position_status=NULL, title=NULL WHERE id=?').run(user.id);
@@ -2676,7 +2724,7 @@ function saveProfile(user, d) {
 }
 const welcomePage = (user, err, v) => layout('Welcome', `<div class="auth" style="max-width:520px"><h1>Welcome to Studies Hub</h1>
 <p class="mut">Tell us a little about yourself so we can show you the courses that are meant for you.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
-<form method="post" action="/welcome" class="card" id="welcomeForm" enctype="multipart/form-data">${profileFields(v, user.role === 'user')}
+<form method="post" action="/welcome" class="card" id="welcomeForm" enctype="multipart/form-data">${profileFields(v, user.role === 'user', lockedOf(user))}
 <label class="mut">Profile picture</label><input type="file" name="avatar" accept="image/png,image/jpeg,image/webp" ${user.avatar_mime ? '' : 'required'}><button>Save and continue</button></form></div>
 <script>${UNAME_JS}(function(){var f=document.getElementById('welcomeForm'),go=false;f.addEventListener('submit',function(e){if(go||!window.enablePush||!window.Notification||Notification.permission!=='default')return;e.preventDefault();go=true;var done=function(){f.submit()};window.enablePush().then(done,done)})})();</script>`, user, { noPushBar: true });
 app.get('/welcome', (req, res) => {
@@ -2866,7 +2914,7 @@ const SETTINGS_PAGES = [
 ];
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = (canPromote(req.user) ? SETTINGS_PAGES.concat([['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']]) : SETTINGS_PAGES).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -2885,7 +2933,7 @@ app.get('/settings/profile', (req, res) => {
   }
   const posNote = u.position_status === 'pending' ? '<p class="pill pending">Position waiting for verification</p>' : u.position_status === 'approved' ? '<p class="pill">&#10003; Position verified</p>' : u.position_status === 'rejected' ? '<p class="err">Your position could not be verified.</p>' : '';
   res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
-<form method="post" action="/settings/profile" class="card">${profileFields(u, u.role === 'user')}${posNote}<button>Save</button></form>
+<form method="post" action="/settings/profile" class="card">${profileFields(u, u.role === 'user', lockedOf(u))}${posNote}<button>Save</button></form>
 <script>${UNAME_JS}</script>`, req.user));
 });
 app.post('/settings/profile', (req, res) => {
@@ -3556,13 +3604,7 @@ app.get('/admin', adminish, (req, res) => {
     return `<h3 id="sponsors">Sponsor post payment claims (${claims.length})</h3>${claims.map(c => `<div class="card"><b>${esc(c.un)}</b> wants to advertise: <b>${esc(c.title)}</b><p class="mut">${esc(c.body.slice(0, 150))}${c.body.length > 150 ? '…' : ''}</p><p class="mut">₦${(c.amount_kobo / 100).toLocaleString()} for ${c.duration_days} day${c.duration_days === 1 ? '' : 's'}</p>
 <div class="row" style="gap:6px"><form method="post" action="/admin/sponsors/${c.id}/approve"><button>Approve -- ${c.duration_days} days live</button></form><form method="post" action="/admin/sponsors/${c.id}/reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
   })() : '';
-  const levelSection = central_ ? (() => {
-    const counts = LEVELS.map(l => ({ l, n: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND level=?").get(l).n }));
-    return `<h3 id="levels">End of session: move everyone up a level</h3>
-<p class="mut" style="margin-top:0">${counts.map(c => `${c.l} level: ${c.n}`).join(' &middot; ')}</p>
-<form method="post" action="/admin/levels/advance" onsubmit="return confirm('Move every student up one level (100→200, 200→300, and so on)? This cannot be undone.')"><button>Advance everyone to the next level</button></form>
-<p class="hint">Students already at ${LEVELS[LEVELS.length - 1]} level are left as they are -- there is no "graduated" state yet.</p>`;
-  })() : '';
+  const levelSection = canPromote(me) ? `<h3 id="levels">Levels</h3><p class="mut" style="margin-top:0">Move students up to the next level (everyone, or one department or level) and choose who else may do it.</p><p><a class="btn" href="/admin/levels">Open level promotion</a></p>` : '';
   const positionsSection = cf ? (() => {
     const pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' ORDER BY id").all();
     const depts = db.prepare('SELECT id,name,faculty FROM departments ORDER BY faculty,name').all();
@@ -3639,7 +3681,7 @@ app.get('/admin', adminish, (req, res) => {
       const titleCell = cf ? (u.title ? `<span class="role-tag" style="margin:0">${esc(u.title)}</span>` : u.position_status === 'pending' ? '<span class="mut">awaiting verification</span>' : '') : '';
       const helpCell = protectedTarget ? '' : `${post(u, 'reset-code', 'Send reset code')}${post(u, 'signout', 'Sign out everywhere', '', 'Sign this person out of every device?')}`;
       const removeCell = cf && u.role !== 'admin' ? post(u, 'delete', 'Remove', '', 'Remove this user?') : '';
-      return `<tr><td>${presenceDot(u)}${esc(u.name)}${u.username ? ` <span class="mut">@${esc(u.username)}</span>` : ''}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${status}</td><td>${roleCell}</td>${cf ? `<td>${titleCell}</td>` : ''}<td>${helpCell}</td>${cf ? `<td>${removeCell}</td>` : ''}</tr>`;
+      return `<tr><td>${presenceDot(u)}${esc(u.name)}${u.username ? ` <span class="mut">${atLink(u.username)}</span>` : ''}</td><td>${esc(u.email)}</td><td>${esc(String(u.created_at).slice(0, 10))}</td><td>${status}</td><td>${roleCell}</td>${cf ? `<td>${titleCell}</td>` : ''}<td>${helpCell}</td>${cf ? `<td>${removeCell}</td>` : ''}</tr>`;
     }).join('');
     return `<h3 id="users">${cf ? 'Registered users' : 'Login help'} (${users.length})</h3><div style="overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Joined</th><th>Status</th><th>Role</th>${cf ? '<th>Title</th>' : ''}<th>Login help</th>${cf ? '<th></th>' : ''}</tr>${rows}</table></div>`;
   })() : '';
@@ -3819,10 +3861,54 @@ app.post('/admin/departments/:id/delete', admin, (req, res) => {
   db.prepare('DELETE FROM departments WHERE id=?').run(req.params.id);
   res.redirect(back('Department removed from the list.'));
 });
-// End of a session: move every student up one level. Central admin only -- this affects the whole school at once.
-app.post('/admin/levels/advance', central, (req, res) => {
-  const info = db.prepare(`UPDATE users SET level = level + 100 WHERE role='user' AND level IS NOT NULL AND level < ${LEVELS[LEVELS.length - 1]}`).run();
-  res.redirect(back(`${info.changes} student${info.changes === 1 ? '' : 's'} moved up a level.`));
+// ---------- Levels: only the central admin and the people they appoint can move students up ----------
+const TOP_LEVEL = LEVELS[LEVELS.length - 1];
+function promotionTargets(dept, fromLevel) {
+  const where = ["role='user'", 'level IS NOT NULL', `level < ${TOP_LEVEL}`], args = [];
+  if (dept) { where.push('department=?'); args.push(dept); }
+  if (fromLevel) { where.push('level=?'); args.push(fromLevel); }
+  return { where: where.join(' AND '), args };
+}
+app.get('/admin/levels', promoter, (req, res) => {
+  const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
+  const counts = LEVELS.map(l => `${l} level: <b>${db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND level=?").get(l).n}</b>`).join(' &middot; ');
+  const depts = db.prepare("SELECT DISTINCT department d FROM users WHERE role='user' AND department IS NOT NULL ORDER BY department").all().map(r => r.d);
+  const log = db.prepare("SELECT l.*, u.name FROM level_log l LEFT JOIN users u ON u.id=l.by_user ORDER BY l.id DESC LIMIT 8").all();
+  const helpers = isCentral(req.user) ? db.prepare("SELECT id,name,username,email FROM users WHERE can_promote=1 ORDER BY name").all() : [];
+  res.send(layout('Level promotion', `<p class="mut"><a href="${can.anyAdmin(req.user) ? '/admin' : '/settings'}">&larr; Back</a></p><h1>Level promotion</h1>${msg}
+<p class="mut">Students cannot change their own level, department or username. A level only moves when it is done here.</p>
+<div class="card"><p class="mut" style="margin:0 0 8px">${counts}</p>
+<form method="post" action="/admin/levels/advance" id="advForm">
+<label class="mut">Department</label><select name="department"><option value="">Every department</option>${depts.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select>
+<label class="mut">Which level moves up</label><select name="level"><option value="">Every level (100&rarr;200, 200&rarr;300 ...)</option>${LEVELS.slice(0, -1).map(l => `<option value="${l}">Only ${l} level &rarr; ${l + 100}</option>`).join('')}</select>
+<button style="margin-top:10px">Move students up one level</button></form>
+<p class="hint">Students already at ${TOP_LEVEL} level stay where they are. This cannot be undone, so check the choice above before you press the button.</p></div>
+${isCentral(req.user) ? `<h3>People allowed to promote students</h3><p class="mut" style="margin-top:0">Only you (the central admin) can add or remove them.</p>
+${helpers.length ? helpers.map(h => `<div class="card row" style="align-items:center"><span style="flex:1"><b>${esc(h.name)}</b> <span class="mut">${h.username ? '@' + esc(h.username) : esc(h.email)}</span></span><form method="post" action="/admin/levels/promoters/${h.id}/remove"><button class="link">Remove</button></form></div>`).join('') : '<p class="mut">Nobody else yet.</p>'}
+<form method="post" action="/admin/levels/promoters/add" class="card row" style="align-items:center"><input name="who" placeholder="@username or email of the person" required style="flex:1"><button>Allow</button></form>` : ''}
+<h3>Recent promotions</h3>${log.length ? log.map(l => `<p class="mut" style="margin:4px 0">${timeAgo(l.at)}: <b>${esc(l.name || 'Admin')}</b> moved ${l.moved} student${l.moved === 1 ? '' : 's'} up${l.department ? ' in ' + esc(l.department) : ''}${l.from_level ? ' from ' + l.from_level + ' level' : ''}.</p>`).join('') : '<p class="mut">Nothing yet.</p>'}
+<script>document.getElementById('advForm').addEventListener('submit',function(e){var f=e.target,d=f.department.value||'every department',l=f.level.value?f.level.value+' level':'every level';if(!confirm('Move '+l+' in '+d+' up one level? This cannot be undone.'))e.preventDefault()})</script>`, req.user));
+});
+app.post('/admin/levels/advance', promoter, (req, res) => {
+  const dept = String(req.body.department || '').trim() || null, from = LEVELS.includes(Number(req.body.level)) && Number(req.body.level) < TOP_LEVEL ? Number(req.body.level) : null;
+  const t = promotionTargets(dept, from);
+  const ids = db.prepare(`SELECT id FROM users WHERE ${t.where}`).all(...t.args).map(r => r.id);
+  const info = db.prepare(`UPDATE users SET level = level + 100 WHERE ${t.where}`).run(...t.args);
+  db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, dept, from, info.changes);
+  if (ids.length) notify(ids, { title: 'You moved up a level', body: 'Your level has been updated by the school admin.', url: '/dashboard', tag: 'level' });
+  res.redirect('/admin/levels?msg=' + encodeURIComponent(`${info.changes} student${info.changes === 1 ? '' : 's'} moved up a level.`));
+});
+app.post('/admin/levels/promoters/add', central, (req, res) => {
+  const who = String(req.body.who || '').trim();
+  const u = db.prepare('SELECT id,name FROM users WHERE lower(username)=? OR lower(email)=?').get(cleanUsername(who), who.toLowerCase());
+  if (!u) return res.redirect('/admin/levels?msg=' + encodeURIComponent('No member found with that username or email.'));
+  db.prepare('UPDATE users SET can_promote=1 WHERE id=?').run(u.id);
+  notify([u.id], { title: 'You can promote students', body: 'The central admin allowed you to move students up a level (Settings > Level promotion).', url: '/admin/levels', tag: 'level' });
+  res.redirect('/admin/levels?msg=' + encodeURIComponent(`${u.name} can now promote students.`));
+});
+app.post('/admin/levels/promoters/:id/remove', central, (req, res) => {
+  db.prepare('UPDATE users SET can_promote=0 WHERE id=?').run(Number(req.params.id));
+  res.redirect('/admin/levels?msg=' + encodeURIComponent('Removed.'));
 });
 
 app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, res) => {
