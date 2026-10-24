@@ -232,6 +232,13 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - The **share screen** button is in the call's bottom bar. Sharing a screen in a voice call turns it into a video call for everybody; everyone else sees the shared screen big, with people as small tiles. Phone browsers (Android and iPhone) do not allow screen capture at all, so on a phone the button explains this; sharing works from a laptop or desktop browser.
 - Calls keep going while you use other apps: the call shows lock-screen controls like a media player, video calls can pop out into a small floating window (More > Pop out video window), and the screen stays awake. Browsers on iPhone may still freeze a call in the background; installing the site to the home screen helps.
 
+## The Admin area
+- Admins see a single **Admin** button in the menu. It opens a hub of tiles (Uploads & pages, News, Positions, Lecturers, Payments, Users/Login help, Levels). Each person only sees the tiles their role allows, with a count of what is waiting.
+- What an admin posts belongs to them: other admins, including the central admin, cannot see, edit or delete another admin's news or uploads. Student news stays with the news admins, and uploads made before this rule existed stay with the full admins.
+- **Admin team** (central admin only): appoint someone by @username or email with exactly the role you want (partial, files, news, login help, observer, full admin), change it later, or set them back to a normal member.
+- **Site structure** (central admin only): rename faculties, rename departments or move them to another faculty (students, uploads and news reach follow the new name), add/rename institutions, and add/rename/merge/delete lecturer courses. Opening the lecturer dashboard as the central admin goes straight to the course editor.
+- The side menu scrolls. On laptops and desktops it also has up/down buttons and works with the mouse wheel and the arrow, Page Up/Down, Home and End keys; phones just swipe.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.

@@ -38,7 +38,7 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
-for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['video_id', 'TEXT'], ['dept', 'TEXT'], ['level', 'INTEGER'], ['author_id', 'INTEGER'], ['course_id', 'INTEGER']])
+for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['admin_id', 'INTEGER'], ['video_id', 'TEXT'], ['dept', 'TEXT'], ['level', 'INTEGER'], ['author_id', 'INTEGER'], ['course_id', 'INTEGER']])
   if (!pageCols.includes(c)) db.exec(`ALTER TABLE pages ADD COLUMN ${c} ${def}`);
 db.exec('CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL, body_enc BLOB NOT NULL, iv BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
@@ -489,6 +489,10 @@ const NIGERIAN_UNIVERSITIES = ['University of Uyo', 'University of Ibadan', 'Uni
   'Abia State University', 'Adamawa State University', 'Akwa Ibom State University', 'Bauchi State University', 'Benue State University', 'Borno State University', 'Cross River State University of Technology', 'Delta State University, Abraka', 'Ebonyi State University', 'Ekiti State University', 'Enugu State University of Science and Technology', 'Gombe State University', 'Imo State University', 'Kaduna State University', 'Kano State University', 'Kebbi State University of Science and Technology', 'Kogi State University', 'Kwara State University', 'Lagos State University', 'Nasarawa State University', 'Ondo State University of Science and Technology', 'Osun State University', 'Plateau State University', 'Rivers State University', 'Sokoto State University', 'Taraba State University', 'Zamfara State University',
   'Covenant University', 'Babcock University', 'Bowen University', 'Afe Babalola University', 'American University of Nigeria', 'Nile University of Nigeria', "Redeemer's University", 'Lead City University', 'Madonna University', 'Igbinedion University', 'Benson Idahosa University', 'Joseph Ayo Babalola University', 'Caleb University', 'Achievers University', 'Landmark University', 'Bingham University', 'Veritas University', 'Al-Hikmah University', 'Crescent University', 'Pan-Atlantic University', 'Crawford University', 'Novena University', 'Salem University', 'Tansian University', 'Gregory University', 'Augustine University',
   'Other (type it in below)'];
+db.exec('CREATE TABLE IF NOT EXISTS institutions(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL)');
+if (!db.prepare('SELECT 1 FROM institutions LIMIT 1').get()) { const insI = db.prepare('INSERT OR IGNORE INTO institutions(name) VALUES(?)'); NIGERIAN_UNIVERSITIES.filter(n => !/^Other/.test(n)).forEach(n => insI.run(n)); }
+const OTHER_UNI = 'Other (type it in below)';
+const institutionList = () => db.prepare('SELECT name FROM institutions ORDER BY name').all().map(r => r.name);
 // A course code's first digit is the level: GST 121 / ENT 121 = 100 level, PHY 2xx = 200 level ... up to 6xx.
 function levelFromText(text) {
   const m = /\b[A-Za-z]{2,5}[\s_-]?([1-6])\d{2}\b/.exec(String(text || ''));
@@ -553,6 +557,9 @@ function canSeeNewsItem(item, viewer) {
 const profileComplete = u => u.is_lecturer
   ? !!u.name && !!u.university && !!u.lecturer_status
   : !!u.username && !!u.name && (u.role !== 'user' || (!!u.department && !!u.level && !!u.university));
+let adminTab = '';
+const TAB_OF = p => /^\/admin\/(payments|sponsors)/.test(p) ? 'payments' : /^\/admin\/(upload|pages)/.test(p) ? 'pages' : /^\/admin\/lecturers/.test(p) ? 'lecturers' : /^\/(admin\/positions|positions|admin\/departments)/.test(p) ? 'positions' : /^\/admin\/news/.test(p) ? 'news' : /^\/admin\/users/.test(p) ? 'users' : '';
+app.use((req, res, next) => { adminTab = TAB_OF(req.path); next(); });
 const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
@@ -817,6 +824,12 @@ const can = {
   support: u => !!u && ['admin', 'support'].includes(u.role),
   anyAdmin: u => !!u && ((ROLES.includes(u.role) && u.role !== 'user') || !!u.position_can_verify),
 };
+// What an admin posts is theirs: other admins (the central admin included) do not get the management side of it. Posts by students stay with the news admins,
+// and anything uploaded before this rule existed (no recorded owner) stays with the full admins so nothing is left orphaned.
+const staffAuthor = id => { if (!id) return false; const u = db.prepare('SELECT role FROM users WHERE id=?').get(id); return !!u && u.role !== 'user'; };
+const mayManageNews = (me, n) => !n.author_id ? can.full(me) : staffAuthor(n.author_id) ? n.author_id === me.id : true;
+const ownsAdminPage = (me, p) => p.author_id ? false : p.admin_id ? p.admin_id === me.id : can.full(me);
+const NOT_YOURS = 'Only the admin who posted this can manage it.';
 const guard = ok => (req, res, next) =>
   ok(req.user) ? next() : req.method === 'GET' ? res.redirect('/login?next=/admin') : res.sendStatus(403);
 const admin = guard(can.full);
@@ -895,8 +908,9 @@ body.has-footer main{flex:1 0 auto;width:100%;box-sizing:border-box}
 .ai-form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}.ai-form input,.ai-form button{margin:0}
 .menu-btn{background:none;border:0;color:var(--fg);font-size:22px;line-height:1;cursor:pointer;padding:4px 6px;box-shadow:none;width:auto}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .2s;z-index:29}.scrim.show{opacity:1;pointer-events:auto}
-.drawer{position:fixed;top:0;bottom:0;left:0;width:min(280px,82vw);background:#0e0e18;border-right:1px solid var(--line);z-index:30;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .22s ease;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-.drawer.open{transform:translateX(0)}
+.drawer{overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;position:fixed;top:0;bottom:0;left:0;width:min(280px,82vw);background:#0e0e18;border-right:1px solid var(--line);z-index:30;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .22s ease;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.drawer.open{transform:translateX(0)}.drawer{align-items:stretch}.drawer>*{flex:none}.drawer-arrows{display:none}
+@media (hover:hover) and (pointer:fine){.drawer-arrows.show{display:flex;flex-direction:column;gap:8px;position:fixed;z-index:31;top:50%;transform:translateY(-50%);left:calc(min(280px,82vw) - 52px)}.drawer-arrows button{margin:0;width:38px;height:38px;padding:0;border-radius:50%;font-size:15px;line-height:1;background:rgba(56,176,248,.18);color:var(--fg);border:1px solid var(--line);box-shadow:none;cursor:pointer}.drawer-arrows button:hover{background:rgba(56,176,248,.35)}.drawer{padding-right:2px}}
 .drawer-top{display:flex;align-items:center;gap:10px;padding:16px 16px 10px}
 .drawer-user{display:flex;align-items:center;gap:10px;padding:6px 16px 14px}
 .drawer-av-img{width:40px;height:40px;border-radius:50%;object-fit:cover;flex:none}
@@ -1084,10 +1098,7 @@ const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
   { href: '/news', icon: '📰', label: 'News' },
   { href: '/browse', icon: '🌐', label: 'Browse pages' },
   { href: '/chat', icon: '💬', label: 'Chat', badge },
-  ...(can.pages(user) ? [{ href: '/admin#upload', icon: '⬆️', label: 'Upload' }, { href: '/admin#pages', icon: '🗂️', label: 'Manage pages' }] : []),
-  ...(can.news(user) ? [{ href: '/admin#news', icon: '📢', label: 'Manage news' }] : []),
-  ...(can.full(user) ? [{ href: '/admin#positions', icon: '🎖️', label: 'Positions & departments' }] : []),
-  ...(can.support(user) ? [{ href: '/admin#users', icon: '👥', label: can.full(user) ? 'Users' : 'Login help' }] : []),
+  ...(can.anyAdmin(user) || canPromote(user) ? [{ href: '/admin', icon: '🛠️', label: 'Admin' }] : []),
 ]) : [
   { href: '/', icon: '🏠', label: 'Home' },
   { href: '/browse', icon: '🌐', label: 'Browse pages' },
@@ -1147,9 +1158,18 @@ ${user ? `<div class="drawer-user">${avatarBit}<div><b>${esc(user.name)}</b><br>
 ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
+<div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/terms">Terms, Conditions, and Policies</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
+<script>(function(){var d=document.getElementById('drawer'),a=document.getElementById('drawerArrows'),u=document.getElementById('drawerUp'),dn=document.getElementById('drawerDown'),t=null;if(!d||!a)return;
+function check(){a.classList.toggle('show',d.classList.contains('open')&&d.scrollHeight>d.clientHeight+4)}
+function go(dy){d.scrollBy({top:dy,behavior:'smooth'})}
+function hold(b,dy){b.addEventListener('mousedown',function(e){e.preventDefault();go(dy);clearInterval(t);t=setInterval(function(){d.scrollBy({top:dy/2})},90)});['mouseup','mouseleave'].forEach(function(n){b.addEventListener(n,function(){clearInterval(t)})})}
+hold(u,-170);hold(dn,170);
+new MutationObserver(check).observe(d,{attributes:true,attributeFilter:['class']});window.addEventListener('resize',check);check();
+document.addEventListener('keydown',function(e){if(!d.classList.contains('open'))return;var tg=e.target&&e.target.tagName;if(tg==='INPUT'||tg==='TEXTAREA'||tg==='SELECT')return;var k=e.key,h=d.clientHeight;
+if(k==='ArrowDown'){e.preventDefault();d.scrollBy({top:70})}else if(k==='ArrowUp'){e.preventDefault();d.scrollBy({top:-70})}else if(k==='PageDown'||k===' '){e.preventDefault();d.scrollBy({top:h-60,behavior:'smooth'})}else if(k==='PageUp'){e.preventDefault();d.scrollBy({top:60-h,behavior:'smooth'})}else if(k==='Home'){e.preventDefault();d.scrollTo({top:0})}else if(k==='End'){e.preventDefault();d.scrollTo({top:d.scrollHeight})}else if(k==='Escape'){var c=document.getElementById('drawerClose');if(c)c.click()}})})()</script>
 <script>(function(){var P=location.pathname;if(/^\\/(login|signup|welcome|lecturer|call|chat\\/|forgot|reset|verify|pay)/.test(P))return;var main=document.querySelector('main');if(!main||main.querySelector('script'))return;var last=inner(main),busy=false;function inner(m){var c=m.cloneNode(true),pb=c.querySelector('#pushBar');if(pb)pb.remove();return c.innerHTML}function dirty(){var f=main.querySelectorAll('input,textarea,select');for(var i=0;i<f.length;i++){var e=f[i];if(e.type==='hidden'||e.type==='submit'||e.type==='button')continue;if(e.type==='checkbox'||e.type==='radio'){if(e.checked!==e.defaultChecked)return true}else if(e.tagName==='SELECT'){for(var j=0;j<e.options.length;j++)if(e.options[j].selected!==e.options[j].defaultSelected)return true}else if(e.value!==e.defaultValue)return true}var a=document.activeElement;return !!(a&&main.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))}function sync(sel,doc){var a=document.querySelectorAll(sel),b=doc.querySelectorAll(sel);if(a.length!==b.length)return;for(var i=0;i<a.length;i++)if(a[i].innerHTML!==b[i].innerHTML)a[i].innerHTML=b[i].innerHTML}function tick(){if(busy||document.hidden||document.getElementById('scrim')&&document.getElementById('scrim').classList.contains('show'))return;busy=true;fetch(location.href,{cache:'no-store',credentials:'same-origin',headers:{'X-Live':'1'}}).then(function(r){if(!r.ok||r.redirected||(r.headers.get('content-type')||'').indexOf('text/html')<0)return null;return r.text()}).then(function(h){if(!h)return;var d=new DOMParser().parseFromString(h,'text/html');sync('.menu-btn',d);sync('#drawer a.drawer-item',d);var m=d.querySelector('main');if(!m||m.querySelector('script'))return;var sel=window.getSelection&&String(window.getSelection());if(sel)return;var nw=inner(m);if(nw!==last&&nw!==inner(main)){if(dirty())return;var y=window.scrollY,pb=main.querySelector('#pushBar');main.innerHTML=nw;if(pb)main.insertBefore(pb,main.firstChild);window.scrollTo(0,y)}last=nw}).catch(function(){}).then(function(){busy=false})}setInterval(tick,4000);document.addEventListener('visibilitychange',function(){if(!document.hidden)tick()})})()</script>
 ${user ? `<script>(function(){var T=null,x0=0,y0=0,fired=false,sheet=null,ptype='';
 function pageLink(n){var a=n&&n.closest?n.closest('a[href^="/p/"]'):null;if(!a)return null;var h=a.getAttribute('href')||'';return h.split('/').length===3&&h.indexOf('?')<0&&h.indexOf('#')<0&&h.length>3?a:null}
@@ -3039,13 +3059,13 @@ app.get('/lecturer/welcome', (req, res) => {
 function lecturerWelcomePage(u, err = '') {
   const courses = db.prepare('SELECT id, name FROM courses ORDER BY name').all();
   const picked = db.prepare('SELECT course_id FROM lecturer_courses WHERE lecturer_id=?').all(u.id).map(r => r.course_id);
-  const uniKnown = u.university && NIGERIAN_UNIVERSITIES.includes(u.university);
+  const instList = institutionList(), uniKnown = u.university && instList.includes(u.university);
   return layout('Finish setting up', `<div class="auth"><h1>A few details</h1><p class="mut">This goes to a full admin to verify you're really on staff at the institution you name.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
 <form method="post" class="card">
 <input name="name" value="${esc(u.name || '')}" placeholder="Your name" required maxlength="80">
 <select name="university" id="uniSelect" required>
 <option value="">Institution you teach at&hellip;</option>
-${NIGERIAN_UNIVERSITIES.map(n => `<option value="${esc(n)}"${u.university === n ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university === n ? ' selected' : ''}>${esc(n)}</option>`).join('')}
 </select>
 <input name="university_other" id="uniOther" placeholder="Type your institution's name" maxlength="120" value="${!uniKnown ? esc(u.university || '') : ''}" style="${u.university && !uniKnown ? '' : 'display:none'}">
 <script>(function(){var s=document.getElementById('uniSelect'),o=document.getElementById('uniOther');function sync(){var other=s.value==='Other (type it in below)';o.style.display=other?'':'none';o.required=other}s.addEventListener('change',sync);sync()})()</script>
@@ -3083,7 +3103,7 @@ app.post('/lecturer/welcome', (req, res) => {
 });
 app.get('/lecturer', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/lecturer');
-  if (!req.user.is_lecturer) return res.redirect('/dashboard');
+  if (!req.user.is_lecturer) return res.redirect(isCentral(req.user) ? '/admin/structure#courses' : '/dashboard');
   if (!profileComplete(req.user)) return res.redirect('/lecturer/welcome');
   if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user));
   if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
@@ -3827,7 +3847,7 @@ app.post('/logout', (req, res) => {
 });
 
 // ---------- admin ----------
-const back = msg => '/admin?msg=' + encodeURIComponent(msg);
+const back = msg => '/admin?' + (adminTab ? 'tab=' + adminTab + '&' : '') + 'msg=' + encodeURIComponent(msg);
 
 // ---------- dashboard body: what a logged-in visitor sees at "/" ----------
 // Preview tile for one upload: a picture (the YouTube thumbnail for videos, a big icon for everything else).
@@ -3874,7 +3894,7 @@ app.get('/dashboard', (req, res) => {
 app.get('/admin', adminish, (req, res) => {
   const me = req.user, central_ = isCentral(me);
   const cp = can.pages(me), ck = can.allKinds(me), cn = can.news(me), cs = can.support(me), cf = can.full(me);
-  const pages = cp ? db.prepare('SELECT * FROM pages WHERE author_id IS NULL ORDER BY id DESC').all() : [];
+  const pages = cp ? db.prepare('SELECT * FROM pages WHERE author_id IS NULL AND (admin_id=? OR (admin_id IS NULL AND ?=1)) ORDER BY id DESC').all(me.id, cf ? 1 : 0) : [];
   const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${ROLES.map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
   const paymentsSection = cf ? (() => {
     const claims = db.prepare("SELECT p.*, u.name un, u.email ue, pg.title pt, pg.slug ps, pg.price_kobo FROM purchases p JOIN users u ON u.id=p.user_id JOIN pages pg ON pg.id=p.page_id WHERE p.status='pending' ORDER BY p.id DESC").all();
@@ -3973,7 +3993,7 @@ app.get('/admin', adminish, (req, res) => {
   const newsThumb = n => n.image_data ? `<img src="/news-image/${n.id}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;float:left;margin-right:10px">` : '';
   const pendingNewsSection = pendingNews.length ? `<h3 id="pending-news">News waiting for you (${pendingNews.length})</h3>${pendingNews.map(n => `<div class="card" style="overflow:hidden">${newsThumb(n)}<b>${esc(n.title)}</b> <span class="mut">by ${esc(n.un)} (${esc(n.ue)})</span><p class="mut" style="margin:6px 0;white-space:pre-wrap">${esc(n.body)}</p>
 <div class="row" style="gap:6px"><form method="post" action="/admin/news/${n.id}/approve"><button>Approve</button></form><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Reject this news item?')"><button class="link">Reject</button></form></div></div>`).join('')}` : '';
-  const newsItems = cn ? db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all() : [];
+  const newsItems = cn ? db.prepare("SELECT * FROM news WHERE status='approved' ORDER BY id DESC").all().filter(n => mayManageNews(me, n)) : [];
   const newsSection = cn ? `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
 <form class="card" method="post" action="/admin/news" enctype="multipart/form-data"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="Short summary" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
 ${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><a href="/admin/news/${n.id}/edit">Edit</a><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
@@ -4013,8 +4033,25 @@ ${replaceCtrl}
     const groups = [['All levels', pages.filter(p => !p.level)]].concat(LEVELS.map(l => [`${l} level`, pages.filter(p => p.level === l)]));
     return groups.filter(([, list]) => list.length).map(([label, list]) => `<details class="card"><summary style="cursor:pointer;font-weight:600">${esc(label)} (${list.length})</summary><div style="margin-top:10px">${list.map(pageCard).join('')}</div></details>`).join('');
   })()}` : '';
-  res.send(layout('Admin', `<p class="mut"><a href="/">&larr; Home</a></p><h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-${observerSection}${delegatedVerifySection}${lecturersSection}${pagesSection}${newsSection}${paymentsSection}${sponsorsSection}${levelSection}${positionsSection}${usersSection}`, req.user));
+  const tab = String(req.query.tab || ''), msgHtml = req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : '';
+  const count = sql => { try { return Number(db.prepare(sql).get().n) || 0; } catch (e) { return 0; } };
+  const TABS = {
+    pages: [cp, '⬆️', 'Uploads & pages', 'Upload files and manage what you posted', pagesSection, 0],
+    news: [cn, '📢', 'News', 'Post news and review what students share', newsSection, pendingNews.length],
+    positions: [cf || !!me.position_can_verify, '🎖️', 'Positions & departments', 'Verify positions and claims', `${delegatedVerifySection}${positionsSection}`, cf ? count("SELECT COUNT(*) n FROM users WHERE position_status='pending'") : 0],
+    lecturers: [cf, '🎓', 'Lecturers', 'Verify lecturer accounts', lecturersSection, cf ? count("SELECT COUNT(*) n FROM users WHERE is_lecturer=1 AND lecturer_status='pending'") : 0],
+    payments: [cf, '💳', 'Payments & sponsors', 'Payment claims and sponsor posts', `${paymentsSection}${sponsorsSection}`, cf ? count("SELECT COUNT(*) n FROM purchases WHERE status='pending'") + count("SELECT COUNT(*) n FROM sponsor_posts WHERE status='pending_payment'") : 0],
+    users: [cs, '👥', cf ? 'Users' : 'Login help', cf ? 'Everyone who registered' : 'Help people who cannot log in', usersSection, 0],
+    overview: [me.role === 'observer', '👁️', 'Overview', 'Read-only look at the site', observerSection, 0],
+  };
+  const tile = (href, icon, label, desc, n) => `<a class="tile" href="${href}"><span class="stat">${icon}</span>${n > 0 ? `<span class="chip pay">${n} waiting</span>` : ''}<h3>${esc(label)}</h3><span class="go">${esc(desc)} &rarr;</span></a>`;
+  const T = TABS[tab];
+  if (T && T[0]) return res.send(layout('Admin', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>${esc(T[2])}</h1>${msgHtml}${T[4] || '<p class="mut">Nothing is waiting here right now.</p>'}`, req.user));
+  const tiles = Object.entries(TABS).filter(([, t]) => t[0]).map(([k, t]) => tile('/admin?tab=' + k, t[1], t[2], t[3], t[5]))
+    .concat(canPromote(me) ? [tile('/admin/levels', '🪜', 'Levels', 'Move students up a level', 0)] : [])
+    .concat(central_ ? [tile('/admin/team', '🧑‍💼', 'Admin team', 'Appoint admins by @username', 0), tile('/admin/structure', '🏛️', 'Site structure', 'Faculties, departments, institutions, courses', 0)] : []);
+  res.send(layout('Admin', `<h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${msgHtml}<div class="grid">${tiles.join('')}</div>
+<script>(function(){var h=location.hash.slice(1),m={upload:'pages',pages:'pages',news:'news','pending-news':'news',positions:'positions','verify-queue':'positions',lecturers:'lecturers',payments:'payments',sponsors:'payments',users:'users'};if(h&&m[h]&&location.search.indexOf('tab=')<0)location.replace('/admin?tab='+m[h]+'#'+h);else if(h==='levels')location.replace('/admin/levels')})()</script>`, req.user));
 });
 
 // Reads the "who is this for?" choices: a department (or all) and a level (or all, or detected from the course code).
@@ -4037,8 +4074,8 @@ app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
     const vid = youtubeId(req.body.video_url);
     if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
     const slug = uniqueSlug(slugify(title || 'video')), aud = readAudience(req.body, title);
-    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level) VALUES(?,?,?,?,?,?,?,?,?,?)')
-      .run(slug, title || 'Video', '', membersOnly, 'video', paid, PRICE_KOBO, vid, aud.dept, aud.level);
+    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+      .run(slug, title || 'Video', '', membersOnly, 'video', paid, PRICE_KOBO, vid, aud.dept, aud.level, req.user.id);
     announceUpload({ title: title || 'Video', slug, paid, ...aud });
     return res.redirect(back(`Published at /p/${slug}`));
   }
@@ -4046,11 +4083,11 @@ app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
   const base = req.file.originalname.replace(/\.[a-z0-9]+$/i, '');
   const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base);
   if (kind === 'pdf' || kind === 'doc') {
-    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(slug, title || base, '', membersOnly, kind, paid, PRICE_KOBO, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level);
+    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(slug, title || base, '', membersOnly, kind, paid, PRICE_KOBO, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, req.user.id);
   } else {
-    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,dept,level) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(slug, title || base, req.file.buffer.toString('utf8'), membersOnly, kind, paid, PRICE_KOBO, aud.dept, aud.level);
+    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(slug, title || base, req.file.buffer.toString('utf8'), membersOnly, kind, paid, PRICE_KOBO, aud.dept, aud.level, req.user.id);
   }
   announceUpload({ title: title || base, slug, paid, ...aud });
   res.redirect(back(`Published at /p/${slug}`));
@@ -4059,14 +4096,16 @@ app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
 app.get('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
   const p = db.prepare('SELECT * FROM pages WHERE id=?').get(req.params.id);
   if (!p) return res.redirect(back('Page not found.'));
-  res.send(layout('Who is this for?', `<p class="mut"><a href="/admin#pages">&larr; Admin</a></p><h1 style="font-size:26px">${esc(p.title)}</h1>
+  if (!ownsAdminPage(req.user, p)) return res.redirect(back(NOT_YOURS));
+  res.send(layout('Who is this for?', `<p class="mut"><a href="/admin?tab=pages">&larr; Admin</a></p><h1 style="font-size:26px">${esc(p.title)}</h1>
 <form class="card" method="post" action="/admin/pages/${p.id}/sort"><label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select><button>Save</button></form>`, req.user));
 });
 app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
-  const p = db.prepare('SELECT id, author_id FROM pages WHERE id=?').get(req.params.id);
+  const p = db.prepare('SELECT id, author_id, admin_id FROM pages WHERE id=?').get(req.params.id);
   if (!p) return res.redirect(back('Page not found.'));
   if (p.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can change it.'));
+  if (!ownsAdminPage(req.user, p)) return res.redirect(back(NOT_YOURS));
   const aud = readAudience({ dept: req.body.dept, level: req.body.level === '' ? 'all' : req.body.level }, '');
   db.prepare('UPDATE pages SET dept=?, level=? WHERE id=?').run(aud.dept, aud.level, p.id);
   res.redirect(back('Saved who this upload is for.'));
@@ -4196,9 +4235,10 @@ app.post('/admin/levels/promoters/:id/remove', central, (req, res) => {
 });
 
 app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, res) => {
-  const page = db.prepare('SELECT kind, author_id FROM pages WHERE id=?').get(req.params.id);
+  const page = db.prepare('SELECT kind, author_id, admin_id FROM pages WHERE id=?').get(req.params.id);
   if (!page) return res.redirect(back('Page not found.'));
   if (page.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can change it.'));
+  if (!ownsAdminPage(req.user, page)) return res.redirect(back(NOT_YOURS));
   if (page.kind !== 'html' && !can.allKinds(req.user)) return res.sendStatus(403);
   if (!req.file) return res.redirect(back('Choose a file first.'));
   if (page.kind === 'pdf' || page.kind === 'doc') {
@@ -4211,6 +4251,8 @@ app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, re
 app.post('/admin/pages/:id/video', filesAdmin, (req, res) => {
   const vid = youtubeId(req.body.video_url);
   if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
+  const own = db.prepare('SELECT author_id, admin_id FROM pages WHERE id=?').get(req.params.id);
+  if (!own || !ownsAdminPage(req.user, own)) return res.redirect(back(NOT_YOURS));
   db.prepare("UPDATE pages SET video_id=? WHERE id=? AND kind='video'").run(vid, req.params.id);
   res.redirect(back('Video link updated.'));
 });
@@ -4250,13 +4292,16 @@ app.post('/news/:id/approver-reject', (req, res) => {
   res.redirect(back('Rejected.'));
 });
 app.post('/admin/news/:id/delete', newsAdmin, (req, res) => {
+  const own = db.prepare('SELECT author_id FROM news WHERE id=?').get(req.params.id);
+  if (own && !mayManageNews(req.user, own)) return res.redirect(back(NOT_YOURS));
   db.prepare('DELETE FROM news WHERE id=?').run(req.params.id);
   res.redirect(back('News deleted.'));
 });
 app.get('/admin/news/:id/edit', newsAdmin, (req, res) => {
   const n = db.prepare('SELECT * FROM news WHERE id=?').get(req.params.id);
   if (!n) return res.redirect(back('News item not found.'));
-  res.send(layout('Edit news', `<p class="mut"><a href="/admin#news">&larr; Admin</a></p><h1 style="font-size:26px">Edit news</h1>
+  if (!mayManageNews(req.user, n)) return res.redirect(back(NOT_YOURS));
+  res.send(layout('Edit news', `<p class="mut"><a href="/admin?tab=news">&larr; Admin</a></p><h1 style="font-size:26px">Edit news</h1>
 ${n.image_data ? `<img src="/news-image/${n.id}" style="max-width:220px;border-radius:10px;display:block;margin-bottom:10px">` : ''}
 <form class="card" method="post" action="/admin/news/${n.id}/edit" enctype="multipart/form-data">
 <input name="title" value="${esc(n.title)}" required maxlength="140">
@@ -4266,8 +4311,9 @@ ${n.image_data ? `<img src="/news-image/${n.id}" style="max-width:220px;border-r
 <button>Save changes</button></form>`, req.user));
 });
 app.post('/admin/news/:id/edit', newsAdmin, upload.single('image'), (req, res) => {
-  const n = db.prepare('SELECT id FROM news WHERE id=?').get(req.params.id);
+  const n = db.prepare('SELECT id, author_id FROM news WHERE id=?').get(req.params.id);
   if (!n) return res.redirect(back('News item not found.'));
+  if (!mayManageNews(req.user, n)) return res.redirect(back(NOT_YOURS));
   const title = String(req.body.title || '').trim().slice(0, 140);
   const body = String(req.body.body || '').trim().slice(0, 2000000);
   if (!title || !body) return res.redirect(`/admin/news/${n.id}/edit`);
@@ -4277,14 +4323,16 @@ app.post('/admin/news/:id/edit', newsAdmin, upload.single('image'), (req, res) =
   res.redirect(back('News updated.'));
 });
 app.post('/admin/pages/:id/toggle', pagesAdmin, (req, res) => {
-  const p = db.prepare('SELECT author_id FROM pages WHERE id=?').get(req.params.id);
+  const p = db.prepare('SELECT author_id, admin_id FROM pages WHERE id=?').get(req.params.id);
   if (p && p.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can change it.'));
+  if (p && !ownsAdminPage(req.user, p)) return res.redirect(back(NOT_YOURS));
   db.prepare('UPDATE pages SET members_only = 1 - members_only WHERE id=?').run(req.params.id);
   res.redirect('/admin');
 });
 app.post('/admin/pages/:id/delete', pagesAdmin, (req, res) => {
-  const p = db.prepare('SELECT author_id FROM pages WHERE id=?').get(req.params.id);
+  const p = db.prepare('SELECT author_id, admin_id FROM pages WHERE id=?').get(req.params.id);
   if (p && p.author_id) return res.redirect(back('That was uploaded by a lecturer -- only they can delete it.'));
+  if (p && !ownsAdminPage(req.user, p)) return res.redirect(back(NOT_YOURS));
   db.prepare('DELETE FROM pages WHERE id=?').run(req.params.id);
   res.redirect(back('Page deleted.'));
 });
@@ -4331,6 +4379,169 @@ app.post('/admin/users/:id/role', central, (req, res) => {
   const target = db.prepare('SELECT email FROM users WHERE id=?').get(req.params.id);
   if (target && target.email !== ADMIN_EMAIL) db.prepare('UPDATE users SET role=? WHERE id=?').run(role, req.params.id);
   res.redirect(back('Role updated.'));
+});
+
+// ---------- Admin team: the central admin appoints (and changes) admins by @username, each with just the job they are given ----------
+const TEAM_ROLES = ROLES.filter(r => r !== 'user');
+const ROLE_JOB = { partial: 'Can upload plain HTML pages.', content: 'Can upload every kind of file (PDF, Word, video, CBT).', news: 'Can post news and review what students share.', support: 'Can help people who cannot log in.', observer: 'Can look but not change anything.', admin: 'Full admin: everything except the central admin\'s own powers.' };
+const teamBack = msg => '/admin/team?msg=' + encodeURIComponent(msg);
+app.get('/admin/team', central, (req, res) => {
+  const staff = db.prepare("SELECT id,name,email,username,role FROM users WHERE role!='user' ORDER BY name").all();
+  const roleOpts = (cur, withUser) => (withUser ? ['user'] : []).concat(TEAM_ROLES).map(r => `<option value="${r}"${cur === r ? ' selected' : ''}>${esc(ROLE_LABEL[r])}</option>`).join('');
+  const rows = staff.map(u => u.email === ADMIN_EMAIL
+    ? `<div class="card"><b>${esc(u.name)}</b> ${u.username ? `<span class="mut">${atLink(u.username)}</span>` : ''}<br><span class="mut">Central admin</span></div>`
+    : `<div class="card"><b>${esc(u.name)}</b> ${u.username ? `<span class="mut">${atLink(u.username)}</span>` : ''}<br><span class="mut">${esc(ROLE_JOB[u.role] || '')}</span>
+<form method="post" action="/admin/team/${u.id}/role" class="row" style="gap:6px;margin-top:8px"><select name="role" style="width:auto">${roleOpts(u.role, true)}</select><button>Save</button></form></div>`).join('');
+  res.send(layout('Admin team', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Admin team</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+<p class="mut" style="margin-top:0">Give someone a job by their @username. Each role only opens the tools for that job. They stay on the team until you change their role here.</p>
+<form class="card" method="post" action="/admin/team/appoint"><label class="mut">@username or email</label><input name="who" placeholder="@username" required maxlength="120" autocapitalize="none" autocomplete="off">
+<label class="mut">Role</label><select name="role">${roleOpts('news', false)}</select><button>Appoint</button></form>
+<h3>Roles</h3>${TEAM_ROLES.map(r => `<p class="mut" style="margin:2px 0"><b>${esc(ROLE_LABEL[r])}</b> &mdash; ${esc(ROLE_JOB[r] || '')}</p>`).join('')}
+<h3>Current team (${staff.length})</h3>${rows || '<p class="mut">No one yet.</p>'}`, req.user));
+});
+function setTeamRole(target, role, by) {
+  db.prepare('UPDATE users SET role=? WHERE id=?').run(role, target.id);
+  notify([target.id], { title: role === 'user' ? 'Admin role removed' : 'You were appointed: ' + ROLE_LABEL[role], body: role === 'user' ? `${by.name} changed your role back to a normal member.` : `${by.name} gave you a role on Studies Hub. Open Admin to start.`, url: role === 'user' ? '/dashboard' : '/admin', tag: 'role' });
+}
+app.post('/admin/team/appoint', central, (req, res) => {
+  const who = String(req.body.who || '').trim().replace(/^@/, '').toLowerCase().slice(0, 120), role = TEAM_ROLES.includes(req.body.role) ? req.body.role : null;
+  if (!who || !role) return res.redirect(teamBack('Type a @username and choose a role.'));
+  const u = db.prepare('SELECT id,name,email,role,is_lecturer FROM users WHERE lower(username)=? OR lower(email)=?').get(who, who);
+  if (!u) return res.redirect(teamBack('No member found with that username or email.'));
+  if (u.email === ADMIN_EMAIL) return res.redirect(teamBack('That is you, the central admin.'));
+  if (u.is_lecturer) return res.redirect(teamBack('Lecturer accounts cannot be given admin roles.'));
+  setTeamRole(u, role, req.user);
+  res.redirect(teamBack(`${u.name} is now: ${ROLE_LABEL[role]}.`));
+});
+app.post('/admin/team/:id/role', central, (req, res) => {
+  const role = req.body.role === 'user' ? 'user' : TEAM_ROLES.includes(req.body.role) ? req.body.role : null;
+  const u = role && db.prepare('SELECT id,name,email FROM users WHERE id=?').get(req.params.id);
+  if (!u || u.email === ADMIN_EMAIL) return res.redirect(teamBack('Could not change that role.'));
+  setTeamRole(u, role, req.user);
+  res.redirect(teamBack(role === 'user' ? `${u.name} is a normal member again.` : `${u.name} is now: ${ROLE_LABEL[role]}.`));
+});
+
+// ---------- Site structure: the central admin edits faculties, departments, institutions and courses ----------
+const sback = (msg, anchor) => '/admin/structure?msg=' + encodeURIComponent(msg) + (anchor ? '#' + anchor : '');
+// Changes a name everywhere it is stored (people, uploads, news reach, logs) so nothing is left pointing at the old name.
+function renameValue(cols, from, to) {
+  let n = 0;
+  for (const t of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name))
+    for (const c of db.prepare(`PRAGMA table_info("${t}")`).all())
+      if (cols.includes(c.name)) n += Number(db.prepare(`UPDATE "${t}" SET "${c.name}"=? WHERE "${c.name}"=?`).run(to, from).changes);
+  return n;
+}
+function renameInPageAudience(from, to) { // uploads keep their departments as a comma-separated list
+  for (const r of db.prepare("SELECT id,dept FROM pages WHERE dept IS NOT NULL AND dept!=''").all()) {
+    const parts = r.dept.split(','); if (!parts.includes(from)) continue;
+    db.prepare('UPDATE pages SET dept=? WHERE id=?').run([...new Set(parts.map(x => x === from ? to : x))].join(','), r.id);
+  }
+}
+const clean = (v, max) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, max);
+app.get('/admin/structure', central, (req, res) => {
+  const depts = db.prepare('SELECT id,name,faculty FROM departments ORDER BY faculty,name').all(), facs = [...new Set(depts.map(d => d.faculty))];
+  const people = db.prepare("SELECT department n, COUNT(*) c FROM users WHERE department IS NOT NULL AND department!='' GROUP BY department").all();
+  const pc = Object.fromEntries(people.map(r => [r.n, r.c]));
+  const facList = `<datalist id="facList">${facs.map(f => `<option value="${esc(f)}">`).join('')}</datalist>`;
+  const deptHtml = facs.map(f => `<div class="card"><form method="post" action="/admin/structure/faculty/rename" class="row" style="gap:6px"><input type="hidden" name="from" value="${esc(f)}"><input name="to" value="${esc(f)}" maxlength="80" required style="flex:1"><button>Rename faculty</button></form>
+${depts.filter(d => d.faculty === f).map(d => `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><form method="post" action="/admin/structure/department/${d.id}/save" class="row" style="gap:6px"><input name="name" value="${esc(d.name)}" maxlength="120" required style="flex:2;min-width:160px"><input name="faculty" list="facList" value="${esc(d.faculty)}" maxlength="80" required style="flex:1;min-width:130px" title="Faculty this department belongs to"><button>Save</button></form>
+<span class="mut" style="font-size:12px">${pc[d.name] || 0} student${(pc[d.name] || 0) === 1 ? '' : 's'}</span> <form method="post" action="/admin/structure/department/${d.id}/delete" style="display:inline" onsubmit="return confirm('Remove this department from the list?')"><button class="link">Remove</button></form></div>`).join('')}</div>`).join('');
+  const instRows = db.prepare('SELECT i.id,i.name,(SELECT COUNT(*) FROM users u WHERE u.university=i.name) c FROM institutions i ORDER BY i.name').all();
+  const strays = db.prepare("SELECT university n, COUNT(*) c FROM users WHERE university IS NOT NULL AND university!='' AND university NOT IN (SELECT name FROM institutions) GROUP BY university ORDER BY university").all();
+  const instHtml = instRows.map(i => `<div class="card"><form method="post" action="/admin/structure/institution/${i.id}/save" class="row" style="gap:6px"><input name="name" value="${esc(i.name)}" maxlength="120" required style="flex:1;min-width:200px"><button>Rename</button></form><span class="mut" style="font-size:12px">${i.c} member${i.c === 1 ? '' : 's'}</span> <form method="post" action="/admin/structure/institution/${i.id}/delete" style="display:inline" onsubmit="return confirm('Take this institution off the picker list? Existing members keep it.')"><button class="link">Remove from list</button></form></div>`).join('')
+    + (strays.length ? `<p class="mut">Typed in by members and not on the list:</p>${strays.map(x => `<div class="card row"><span>${esc(x.n)} <span class="mut">(${x.c})</span></span><form method="post" action="/admin/structure/institution/add"><input type="hidden" name="name" value="${esc(x.n)}"><button class="link">Add to list</button></form></div>`).join('')}` : '');
+  const courses = db.prepare('SELECT c.id,c.name,(SELECT COUNT(*) FROM lecturer_courses lc WHERE lc.course_id=c.id) l,(SELECT COUNT(*) FROM pages p WHERE p.course_id=c.id) p FROM courses c ORDER BY c.name').all();
+  const courseHtml = courses.map(c => `<div class="card"><form method="post" action="/admin/structure/course/${c.id}/rename" class="row" style="gap:6px"><input name="name" value="${esc(c.name)}" maxlength="120" required style="flex:1;min-width:180px"><button>Rename</button></form>
+<span class="mut" style="font-size:12px">${c.l} lecturer${c.l === 1 ? '' : 's'} &middot; ${c.p} upload${c.p === 1 ? '' : 's'} &middot; <a href="/lecturer/course/${c.id}">Open folder</a></span>
+<div class="row" style="gap:6px;margin-top:6px"><form method="post" action="/admin/structure/course/${c.id}/merge" class="row" style="gap:6px"><select name="into" style="width:auto"><option value="">Move everything into&hellip;</option>${courses.filter(o => o.id !== c.id).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select><button class="link">Merge</button></form>
+<form method="post" action="/admin/structure/course/${c.id}/delete" onsubmit="return confirm('Delete this course? Lecturers lose it from their list and its uploads become unfiled.')"><button class="link">Delete</button></form></div></div>`).join('');
+  res.send(layout('Site structure', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Site structure</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${facList}
+<p class="mut" style="margin-top:0">Changing a name here changes it for everyone it is attached to.</p>
+<details id="faculties" class="card" open><summary style="cursor:pointer;font-weight:600">Faculties &amp; departments (${depts.length})</summary>
+<form class="card row" method="post" action="/admin/structure/department/add" style="gap:6px;margin-top:10px"><input name="name" placeholder="New department" required maxlength="120" style="flex:2;min-width:160px"><input name="faculty" list="facList" placeholder="Faculty" required maxlength="80" style="flex:1;min-width:130px"><button>Add</button></form>${deptHtml}</details>
+<details id="institutions" class="card"><summary style="cursor:pointer;font-weight:600">Institutions (${instRows.length})</summary>
+<form class="card row" method="post" action="/admin/structure/institution/add" style="gap:6px;margin-top:10px"><input name="name" placeholder="New institution" required maxlength="120" style="flex:1;min-width:200px"><button>Add</button></form>${instHtml}</details>
+<details id="courses" class="card"><summary style="cursor:pointer;font-weight:600">Lecturer courses (${courses.length})</summary>
+<p class="mut">These are the courses lecturers pick and upload under. If something is not really a course, rename it, delete it, or merge it into the right one.</p>
+<form class="card row" method="post" action="/admin/structure/course/add" style="gap:6px"><input name="name" placeholder="New course" required maxlength="120" style="flex:1;min-width:180px"><button>Add</button></form>${courseHtml || '<p class="mut">No courses yet.</p>'}</details>
+<script>(function(){var h=location.hash.slice(1),d=h&&document.getElementById(h);if(d&&d.tagName==='DETAILS'){d.open=true;d.scrollIntoView()}})()</script>`, req.user));
+});
+app.post('/admin/structure/faculty/rename', central, (req, res) => {
+  const from = clean(req.body.from, 80), to = clean(req.body.to, 80);
+  if (!from || !to) return res.redirect(sback('Type the new faculty name.'));
+  if (from !== to) renameValue(['faculty', 'scope_faculty'], from, to);
+  res.redirect(sback(from === to ? 'No change.' : `Faculty renamed to ${to}.`, 'faculties'));
+});
+app.post('/admin/structure/department/add', central, (req, res) => {
+  const name = clean(req.body.name, 120), faculty = clean(req.body.faculty, 80) || 'Other';
+  if (!name) return res.redirect(sback('Type a department name.'));
+  if (db.prepare('SELECT 1 FROM departments WHERE name=?').get(name)) return res.redirect(sback('That department already exists.', 'faculties'));
+  db.prepare('INSERT INTO departments(name,faculty) VALUES(?,?)').run(name, faculty);
+  res.redirect(sback(`Added ${name} under ${faculty}.`, 'faculties'));
+});
+app.post('/admin/structure/department/:id/save', central, (req, res) => {
+  const d = db.prepare('SELECT * FROM departments WHERE id=?').get(req.params.id), name = clean(req.body.name, 120), faculty = clean(req.body.faculty, 80) || 'Other';
+  if (!d || !name) return res.redirect(sback('Could not save that department.', 'faculties'));
+  if (name !== d.name) {
+    if (db.prepare('SELECT 1 FROM departments WHERE name=? AND id!=?').get(name, d.id)) return res.redirect(sback('Another department already has that name.', 'faculties'));
+    db.prepare('UPDATE departments SET name=? WHERE id=?').run(name, d.id);
+    renameValue(['department', 'scope_department'], d.name, name); renameInPageAudience(d.name, name);
+  }
+  if (faculty !== d.faculty) db.prepare('UPDATE departments SET faculty=? WHERE id=?').run(faculty, d.id);
+  res.redirect(sback(`Saved ${name}${faculty !== d.faculty ? ` (now under ${faculty})` : ''}.`, 'faculties'));
+});
+app.post('/admin/structure/department/:id/delete', central, (req, res) => {
+  const d = db.prepare('SELECT * FROM departments WHERE id=?').get(req.params.id);
+  if (!d) return res.redirect(sback('Not found.', 'faculties'));
+  const n = db.prepare('SELECT COUNT(*) n FROM users WHERE department=?').get(d.name).n;
+  if (n) return res.redirect(sback(`${n} student${n === 1 ? ' is' : 's are'} in ${d.name}. Rename it or move it instead of removing it.`, 'faculties'));
+  db.prepare('DELETE FROM departments WHERE id=?').run(d.id);
+  res.redirect(sback(`Removed ${d.name}.`, 'faculties'));
+});
+app.post('/admin/structure/institution/add', central, (req, res) => {
+  const name = clean(req.body.name, 120);
+  if (!name || /^Other\b/i.test(name)) return res.redirect(sback('Type an institution name.', 'institutions'));
+  db.prepare('INSERT OR IGNORE INTO institutions(name) VALUES(?)').run(name);
+  res.redirect(sback(`Added ${name}.`, 'institutions'));
+});
+app.post('/admin/structure/institution/:id/save', central, (req, res) => {
+  const i = db.prepare('SELECT * FROM institutions WHERE id=?').get(req.params.id), name = clean(req.body.name, 120);
+  if (!i || !name) return res.redirect(sback('Could not save that institution.', 'institutions'));
+  if (name !== i.name) {
+    if (db.prepare('SELECT 1 FROM institutions WHERE name=? AND id!=?').get(name, i.id)) return res.redirect(sback('Another institution already has that name.', 'institutions'));
+    db.prepare('UPDATE institutions SET name=? WHERE id=?').run(name, i.id); renameValue(['university'], i.name, name);
+  }
+  res.redirect(sback(`Saved ${name}.`, 'institutions'));
+});
+app.post('/admin/structure/institution/:id/delete', central, (req, res) => {
+  db.prepare('DELETE FROM institutions WHERE id=?').run(req.params.id);
+  res.redirect(sback('Removed from the picker list.', 'institutions'));
+});
+app.post('/admin/structure/course/add', central, (req, res) => {
+  const name = clean(req.body.name, 120);
+  if (!name) return res.redirect(sback('Type a course name.', 'courses'));
+  db.prepare('INSERT OR IGNORE INTO courses(name) VALUES(?)').run(name);
+  res.redirect(sback(`Added ${name}.`, 'courses'));
+});
+app.post('/admin/structure/course/:id/rename', central, (req, res) => {
+  const c = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id), name = clean(req.body.name, 120);
+  if (!c || !name) return res.redirect(sback('Could not save that course.', 'courses'));
+  if (db.prepare('SELECT 1 FROM courses WHERE name=? AND id!=?').get(name, c.id)) return res.redirect(sback('Another course already has that name. Use Merge instead.', 'courses'));
+  db.prepare('UPDATE courses SET name=? WHERE id=?').run(name, c.id);
+  res.redirect(sback(`Saved ${name}.`, 'courses'));
+});
+app.post('/admin/structure/course/:id/delete', central, (req, res) => {
+  const c = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id);
+  if (!c) return res.redirect(sback('Not found.', 'courses'));
+  db.prepare('DELETE FROM lecturer_courses WHERE course_id=?').run(c.id); db.prepare('UPDATE pages SET course_id=NULL WHERE course_id=?').run(c.id); db.prepare('DELETE FROM courses WHERE id=?').run(c.id);
+  res.redirect(sback(`Deleted ${c.name}.`, 'courses'));
+});
+app.post('/admin/structure/course/:id/merge', central, (req, res) => {
+  const c = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id), to = db.prepare('SELECT * FROM courses WHERE id=?').get(Number(req.body.into) || 0);
+  if (!c || !to || c.id === to.id) return res.redirect(sback('Choose the course to move everything into.', 'courses'));
+  db.prepare('UPDATE OR IGNORE lecturer_courses SET course_id=? WHERE course_id=?').run(to.id, c.id); db.prepare('DELETE FROM lecturer_courses WHERE course_id=?').run(c.id);
+  db.prepare('UPDATE pages SET course_id=? WHERE course_id=?').run(to.id, c.id); db.prepare('DELETE FROM courses WHERE id=?').run(c.id);
+  res.redirect(sback(`${c.name} was merged into ${to.name}.`, 'courses'));
 });
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
