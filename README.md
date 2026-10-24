@@ -222,6 +222,11 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - Phone numbers, emails, links and @usernames are tappable everywhere (chat, news, sponsor posts). Tapping @name opens that person's profile (`/@name`).
 - Pages refresh themselves every few seconds (new posts, badges, counts) without a manual reload. A page is left alone while you are typing in a form.
 
+## Sharing documents, and photos/videos in chat
+- Press and hold any document or course page (the cards on Browse, the dashboard and so on) to get **Discuss with someone**. Pick a friend or group and the link is sent to that chat. A quick tap still just opens the page.
+- Photos, videos and stickers in chat do not load by themselves. They show a card with the file size (for example "12 MB"); tapping it downloads it from the server and shows it on the site. Photos open full screen, and there is a "Save to phone" link on photos and videos. Once you have opened one it stays visible on that device.
+- Sending is instant: the message is created on the server as an empty placeholder first, and the file is then uploaded into it with a progress bar (the other person sees "Sending..."). Tap the cross to cancel. Videos are supported (up to 200 MB). Placeholders that never receive a file are cleaned up after an hour.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.

@@ -45,7 +45,7 @@ db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id I
 db.exec('CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id)');
 // Voice notes and stickers ride on the same messages table (kind = text | voice | sticker); their media is encrypted too.
 const msgCols = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
-for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'text'"], ['media_enc', 'BLOB'], ['media_iv', 'BLOB'], ['media_mime', 'TEXT'], ['media_ms', 'INTEGER'], ['media_name', 'TEXT']])
+for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'text'"], ['media_enc', 'BLOB'], ['media_iv', 'BLOB'], ['media_mime', 'TEXT'], ['media_ms', 'INTEGER'], ['media_name', 'TEXT'], ['media_size', 'INTEGER']])
   if (!msgCols.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
 // Each member's personal sticker board.
 db.exec('CREATE TABLE IF NOT EXISTS stickers(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
@@ -958,7 +958,43 @@ body.msg-selecting .chat-head{display:none}
 .sticker-msg img{width:150px;max-width:100%;max-height:150px;object-fit:contain}
 .bubble.img-msg img{display:block;max-width:220px;max-height:280px;width:100%;object-fit:cover;border-radius:10px;margin-bottom:2px}
 .file-chip{display:flex;align-items:center;gap:6px;color:inherit;text-decoration:none;font-weight:600}
-.file-chip:hover{text-decoration:underline}
+.file-chip{min-width:200px;padding:2px 0}.file-chip:hover{text-decoration:none}
+a[href^="/p/"]{-webkit-touch-callout:none}
+.shsheet{position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center}
+.shbox{width:100%;max-width:520px;max-height:82vh;overflow:auto;background:var(--card,#111);color:var(--fg);border-radius:20px 20px 0 0;padding:10px 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -10px 40px rgba(0,0,0,.4);animation:shup .18s ease-out}@keyframes shup{from{transform:translateY(30px);opacity:0}}
+.shgrip{width:40px;height:4px;border-radius:4px;background:var(--line);margin:0 auto 12px}.shtitle{display:block;font-size:17px}.shsub{font-size:13px;opacity:.7;margin:2px 0 10px}
+.shopt{display:block;width:100%;text-align:left;margin:6px 0;padding:14px;border-radius:14px;font-size:16px;font-weight:600;background:var(--panel);color:var(--fg);border:1px solid var(--line);box-shadow:none;text-decoration:none;cursor:pointer}.shcancel{text-align:center;opacity:.8}
+.shfind{width:100%;margin:0 0 8px}.shlist{display:flex;flex-direction:column;gap:2px}
+.shrow{display:flex;align-items:center;gap:12px;width:100%;margin:0;padding:10px;border-radius:12px;background:none;color:var(--fg);border:0;box-shadow:none;text-align:left;font-size:16px;cursor:pointer}.shrow:hover,.shrow:active{background:var(--panel)}
+.shav{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#38b0f8,#a78bfa);color:#fff;font-weight:700;flex:none}.shname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shtoast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:9999;display:flex;gap:12px;align-items:center;padding:12px 16px;border-radius:14px;background:#10172a;color:#fff;font-size:14px;box-shadow:0 8px 30px rgba(0,0,0,.4)}.shtoast a{color:#7dd3fc;font-weight:700;text-decoration:none}
+.fc-ico{font-size:26px;line-height:1}.fc-main{display:flex;flex-direction:column;min-width:0;flex:1}.fc-main .file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}.fc-size{font-size:12px;opacity:.7;font-weight:500}.fc-dl{font-size:18px;opacity:.8}
+.fc-bar{display:block;height:4px;border-radius:4px;background:rgba(127,127,127,.3);margin-top:4px;overflow:hidden}.fc-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#38b0f8,#a78bfa);transition:width .2s}
+.rp-ico{width:52px;height:52px;flex:none;display:flex;align-items:center;justify-content:center;font-size:24px;background:rgba(0,0,0,.14)}
+.mcard{position:relative;width:230px;max-width:100%;border-radius:14px;overflow:hidden;background:linear-gradient(135deg,rgba(56,176,248,.22),rgba(167,139,250,.22));border:1px solid var(--line)}
+.mcard.mc-sticker{width:150px}
+.mc-ph{height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding-bottom:34px;background-size:cover;background-position:center}
+.mc-sticker .mc-ph{height:120px}
+.mc-ph.has-prev{filter:none;position:relative}.mc-ph.has-prev .mc-ico,.mc-ph.has-prev .mc-lbl{display:none}
+.mc-ico{font-size:36px;line-height:1;display:flex}.mc-lbl{font-size:13px;opacity:.85;font-weight:600}
+.mc-dl{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);margin:0;padding:7px 14px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap;background:rgba(15,20,35,.72);color:#fff;border:1px solid rgba(255,255,255,.25);backdrop-filter:blur(6px);box-shadow:none}
+.mc-state-idle,.mc-state-err{cursor:pointer}
+.mc-prog{position:absolute;left:10px;right:10px;bottom:10px;display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:12px;background:rgba(15,20,35,.72);color:#fff;font-size:12px}
+.mc-bar{flex:1;height:5px;border-radius:5px;background:rgba(255,255,255,.25);overflow:hidden}.mc-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#38b0f8,#a78bfa);transition:width .15s}
+.mc-pct{white-space:nowrap;font-variant-numeric:tabular-nums}
+.mc-cancel{margin:0;padding:0 4px;background:none;border:0;color:inherit;font-size:15px;box-shadow:none;cursor:pointer;line-height:1}
+.mc-spin{display:inline-block;width:20px;height:20px;border-radius:50%;border:3px solid rgba(127,127,127,.35);border-top-color:#38b0f8;animation:mcspin .8s linear infinite}@keyframes mcspin{to{transform:rotate(360deg)}}
+.mcard.done{background:none;border:0;border-radius:10px;overflow:visible}
+.mc-img{display:block;width:100%;max-height:300px;object-fit:cover;border-radius:10px;cursor:zoom-in}
+.mc-sticker .mc-img{object-fit:contain;max-height:150px;cursor:default}
+.mc-vid{display:block;width:100%;max-height:300px;border-radius:10px;background:#000}
+.mc-save{display:block;font-size:12px;padding:4px 2px 0;color:inherit;opacity:.8;text-decoration:none}
+.mcard:not(.done)+.save-st{display:none}
+.mviewer{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center}
+.mviewer img{max-width:100%;max-height:100%;object-fit:contain}
+.mv-bar{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:linear-gradient(rgba(0,0,0,.6),transparent)}
+.mv-x{margin:0;width:38px;height:38px;border-radius:50%;padding:0;background:rgba(255,255,255,.15);color:#fff;border:0;font-size:18px;box-shadow:none;cursor:pointer}
+.mv-save{color:#fff;font-weight:700;font-size:14px;text-decoration:none;padding:8px 14px;border-radius:999px;background:rgba(255,255,255,.15)}
 .file-name{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
 .sticker-msg time{font-size:11px;opacity:.65;align-self:flex-end;text-align:right}
 .save-st{font-size:12px;color:var(--blue)}
@@ -1095,6 +1131,39 @@ ${drawerNav}
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to receive new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/terms">Terms, Conditions, and Policies</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 <script>(function(){var P=location.pathname;if(/^\\/(login|signup|welcome|lecturer|call|chat\\/|forgot|reset|verify|pay)/.test(P))return;var main=document.querySelector('main');if(!main||main.querySelector('script'))return;var last=inner(main),busy=false;function inner(m){var c=m.cloneNode(true),pb=c.querySelector('#pushBar');if(pb)pb.remove();return c.innerHTML}function dirty(){var f=main.querySelectorAll('input,textarea,select');for(var i=0;i<f.length;i++){var e=f[i];if(e.type==='hidden'||e.type==='submit'||e.type==='button')continue;if(e.type==='checkbox'||e.type==='radio'){if(e.checked!==e.defaultChecked)return true}else if(e.tagName==='SELECT'){for(var j=0;j<e.options.length;j++)if(e.options[j].selected!==e.options[j].defaultSelected)return true}else if(e.value!==e.defaultValue)return true}var a=document.activeElement;return !!(a&&main.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))}function sync(sel,doc){var a=document.querySelectorAll(sel),b=doc.querySelectorAll(sel);if(a.length!==b.length)return;for(var i=0;i<a.length;i++)if(a[i].innerHTML!==b[i].innerHTML)a[i].innerHTML=b[i].innerHTML}function tick(){if(busy||document.hidden||document.getElementById('scrim')&&document.getElementById('scrim').classList.contains('show'))return;busy=true;fetch(location.href,{cache:'no-store',credentials:'same-origin',headers:{'X-Live':'1'}}).then(function(r){if(!r.ok||r.redirected||(r.headers.get('content-type')||'').indexOf('text/html')<0)return null;return r.text()}).then(function(h){if(!h)return;var d=new DOMParser().parseFromString(h,'text/html');sync('.menu-btn',d);sync('#drawer a.drawer-item',d);var m=d.querySelector('main');if(!m||m.querySelector('script'))return;var sel=window.getSelection&&String(window.getSelection());if(sel)return;var nw=inner(m);if(nw!==last&&nw!==inner(main)){if(dirty())return;var y=window.scrollY,pb=main.querySelector('#pushBar');main.innerHTML=nw;if(pb)main.insertBefore(pb,main.firstChild);window.scrollTo(0,y)}last=nw}).catch(function(){}).then(function(){busy=false})}setInterval(tick,4000);document.addEventListener('visibilitychange',function(){if(!document.hidden)tick()})})()</script>
+${user ? `<script>(function(){var T=null,x0=0,y0=0,fired=false,sheet=null,ptype='';
+function pageLink(n){var a=n&&n.closest?n.closest('a[href^="/p/"]'):null;if(!a)return null;var h=a.getAttribute('href')||'';return h.split('/').length===3&&h.indexOf('?')<0&&h.indexOf('#')<0&&h.length>3?a:null}
+function titleOf(a){var h=a.querySelector('h1,h2,h3,h4'),t=(h?h.textContent:a.textContent)||'';return t.split(String.fromCharCode(10)).join(' ').split(' ').filter(Boolean).join(' ').slice(0,120)}
+function mk(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e}
+function close(){if(sheet){sheet.parentNode.removeChild(sheet);sheet=null}}
+function toast(msg,href,label){var t=mk('div','shtoast',msg);if(href){var a=mk('a',null,label||'Open');a.href=href;t.appendChild(a)}document.body.appendChild(t);setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t)},4500)}
+function shell(){close();sheet=mk('div','shsheet');sheet.addEventListener('click',function(e){if(e.target===sheet)close()});var box=mk('div','shbox');sheet.appendChild(box);document.body.appendChild(sheet);return box}
+function menu(a){
+  var href=a.getAttribute('href'),title=titleOf(a),box=shell();
+  box.appendChild(mk('div','shgrip'));box.appendChild(mk('b','shtitle',title||'This page'));box.appendChild(mk('div','shsub','What would you like to do?'));
+  var d=mk('button','shopt','💬  Discuss with someone');d.type='button';d.onclick=function(){pick(href,title)};box.appendChild(d);
+  var o=mk('a','shopt','📖  Open');o.href=href;box.appendChild(o);
+  var c=mk('button','shopt shcancel','Cancel');c.type='button';c.onclick=close;box.appendChild(c)}
+function pick(href,title){
+  var box=shell();box.appendChild(mk('div','shgrip'));box.appendChild(mk('b','shtitle','Discuss with…'));box.appendChild(mk('div','shsub',title));
+  var q=mk('input','shfind');q.placeholder='Search your chats';q.type='search';box.appendChild(q);
+  var list=mk('div','shlist',null);list.appendChild(mk('div','shsub','Loading…'));box.appendChild(list);var all=[];
+  function draw(){var f=q.value.trim().toLowerCase();list.innerHTML='';var n=0;all.forEach(function(t){if(f&&t.name.toLowerCase().indexOf(f)<0)return;n++;var b=mk('button','shrow');b.type='button';b.appendChild(mk('span','shav',t.kind==='group'?'👥':(t.name.charAt(0)||'?').toUpperCase()));b.appendChild(mk('span','shname',t.name));b.onclick=function(){send(t,href,title)};list.appendChild(b)});if(!n)list.appendChild(mk('div','shsub',all.length?'No match.':'You have no friends or groups yet. Add a friend first.'))}
+  q.addEventListener('input',draw);
+  fetch('/api/chats/targets',{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){all=j.targets||[];draw()}).catch(function(){list.innerHTML='';list.appendChild(mk('div','shsub','Could not load your chats.'))});
+  var c=mk('button','shopt shcancel','Cancel');c.type='button';c.onclick=close;box.appendChild(c)}
+function send(t,href,title){
+  var body={body:'📚 Let us discuss: '+title+String.fromCharCode(10)+location.origin+href};if(t.kind==='group')body.group=t.id;else body.to=t.id;
+  close();
+  fetch('/api/messages/send',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){
+    if(j&&j.id)toast('Sent to '+t.name+' ✓',t.kind==='group'?'/chat/group/'+t.id:'/chat/'+t.id,'Open chat');else toast((j&&j.error)||'Could not send.')
+  }).catch(function(){toast('Could not send. Check your connection.')})}
+document.addEventListener('pointerdown',function(e){ptype=e.pointerType||'';var a=pageLink(e.target);if(!a)return;fired=false;x0=e.clientX;y0=e.clientY;clearTimeout(T);T=setTimeout(function(){fired=true;if(navigator.vibrate)try{navigator.vibrate(15)}catch(x){}menu(a)},500)},true);
+document.addEventListener('pointermove',function(e){if(T&&(Math.abs(e.clientX-x0)>10||Math.abs(e.clientY-y0)>10)){clearTimeout(T);T=null}},true);
+['pointerup','pointercancel','scroll'].forEach(function(n){document.addEventListener(n,function(){clearTimeout(T);T=null},true)});
+document.addEventListener('click',function(e){if(fired){e.preventDefault();e.stopPropagation();fired=false}},true);
+document.addEventListener('contextmenu',function(e){var a=pageLink(e.target);if(a&&ptype==='touch')e.preventDefault()},true)})()</script>
+` : ''}
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
 </body></html>`;
 };
@@ -1603,9 +1672,15 @@ function markRead(rows, viewerId) {
   for (const m of rows) if (m.sender_id !== viewerId && !isRead(m.id, viewerId)) ins.run(m.id, viewerId);
 }
 const clock = iso => new Date(iso + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function fmtBytes(n) { n = Number(n) || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return Math.max(1, Math.round(n / 1024)) + ' KB'; if (n < 1073741824) return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB'; return (n / 1073741824).toFixed(1) + ' GB'; }
+const MEDIA_KINDS = ['image', 'video', 'file'];
+const mediaSizeOf = m => m.media_size || (m.media_enc ? Math.max(0, m.media_enc.length - 16) : 0);
+const isPendingMedia = m => MEDIA_KINDS.includes(m.kind) && !m.media_enc && !m.deleted_at;
+const MEDIA_ICON = { image: '&#128444;&#65039;', video: '&#127916;', sticker: '&#128512;' };
+const MEDIA_LABEL = { image: 'Photo', video: 'Video', sticker: 'Sticker' };
 const fmtDur = ms => { const t = Math.round((ms || 0) / 1000); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
 const fmtSize = b => b == null ? '' : b < 1024 * 1024 ? Math.round(b / 1024) + ' KB' : (b / (1024 * 1024)).toFixed(1) + ' MB';
-const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'call' ? '📞 Call' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'file' ? `📄 ${m.media_name || 'File'}` : decryptMsg(m.body_enc, m.iv).slice(0, 40);
+const snippetOf = m => m.deleted_at ? 'Message deleted' : m.kind === 'call' ? '📞 Call' : m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'video' ? '🎬 Video' : m.kind === 'file' ? `📄 ${m.media_name || 'File'}` : decryptMsg(m.body_enc, m.iv).slice(0, 40);
 function messageReplyInfo(m, viewerId, isGroup) {
   if (!m.reply_to_id || m.deleted_at) return null;
   const parent = db.prepare('SELECT * FROM messages WHERE id=?').get(m.reply_to_id);
@@ -1628,7 +1703,7 @@ function messageReplyInfo(m, viewerId, isGroup) {
 function replyPreviewHtml(m, viewerId, isGroup) {
   const reply = messageReplyInfo(m, viewerId, isGroup);
   if (!reply) return '';
-  const thumb = reply.kind === 'sticker' || reply.kind === 'image' ? `<img class="rp-thumb${reply.kind === 'sticker' ? ' st' : ''}" src="/api/messages/media/${reply.id}" alt="" loading="lazy">` : '';
+  const thumb = MEDIA_ICON[reply.kind] ? `<span class="rp-ico">${MEDIA_ICON[reply.kind]}</span>` : '';
   return `<div class="reply-preview" data-reply-to="${reply.id}"><div class="rp-body"><b class="rp-name">${esc(reply.from_name)}</b><span class="rp-text">${esc(reply.text)}</span></div>${thumb}</div>`;
 }
 function bubbleHtml(m, meId, isGroup) {
@@ -1642,9 +1717,17 @@ function bubbleHtml(m, meId, isGroup) {
   const starred = isStarred(m.id, meId), starAttr = starred ? ' data-starred="1"' : '', starMark = starred ? '<span class="starmark"> &#9733;</span>' : '';
   if (m.deleted_at) return `<div class="bubble ${side} deleted" data-id="${m.id}"${starAttr} data-kind="${m.kind}">${senderTag}<span class="mut">This message was deleted</span><time data-t="${esc(m.created_at)}">${clock(m.created_at)}</time></div>`;
   if (m.kind === 'voice') return `<div class="bubble ${side}" data-id="${m.id}"${starAttr} data-kind="voice">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<audio controls preload="none" src="/api/messages/media/${m.id}"></audio>${reactHtml}<time data-t="${esc(m.created_at)}" data-pre="🎤 ${fmtDur(m.media_ms)} &middot; ">🎤 ${fmtDur(m.media_ms)} &middot; ${clock(m.created_at)}${starMark}${tick}</time></div>`;
-  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}"${starAttr} data-kind="sticker">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<img src="/api/messages/media/${m.id}" alt="sticker">${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
-  if (m.kind === 'image') return `<div class="bubble ${side} img-msg" data-id="${m.id}"${starAttr} data-kind="image">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<a href="/api/messages/media/${m.id}" target="_blank" rel="noopener noreferrer"><img src="/api/messages/media/${m.id}" alt="photo" loading="lazy"></a>${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
-  if (m.kind === 'file') return `<div class="bubble ${side}" data-id="${m.id}"${starAttr} data-kind="file">${fwd}<a class="file-chip" href="/api/messages/media/${m.id}" download="${esc(m.media_name || 'file')}">📄 <span class="file-name">${esc(m.media_name || 'File')}</span></a>${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
+  const mcard = `<div class="mcard mc-${m.kind}" data-mid="${m.id}" data-mk="${m.kind}" data-size="${mediaSizeOf(m)}" data-name="${esc(m.media_name || '')}"${isPendingMedia(m) ? ' data-pending="1"' : ''}><div class="mc-ph"><span class="mc-ico">${MEDIA_ICON[m.kind] || ''}</span><span class="mc-lbl">${MEDIA_LABEL[m.kind] || ''} &middot; ${fmtBytes(mediaSizeOf(m))}</span></div></div>`;
+  const stamp = `<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time>`;
+  if (m.kind === 'sticker') return `<div class="sticker-msg ${side}" data-id="${m.id}"${starAttr} data-kind="sticker">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}${mcard}${side === 'them' ? `<button type="button" class="link save-st" data-save="${m.id}">+ Save sticker</button>` : ''}${reactHtml}${stamp}</div>`;
+  if (m.kind === 'image' || m.kind === 'video') return `<div class="bubble ${side} img-msg" data-id="${m.id}"${starAttr} data-kind="${m.kind}">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}${mcard}${reactHtml}${stamp}</div>`;
+  if (m.kind === 'file') {
+    const nm = esc(m.media_name || 'File'), sz = fmtBytes(mediaSizeOf(m));
+    const chip = isPendingMedia(m)
+      ? `<div class="file-chip pending" data-fid="${m.id}"><span class="fc-ico">&#128196;</span><span class="fc-main"><span class="file-name">${nm}</span><span class="fc-size">${sz} &middot; Sending&hellip;</span></span><span class="mc-spin"></span></div>`
+      : `<a class="file-chip" href="/api/messages/media/${m.id}?dl=1" download="${nm}"><span class="fc-ico">&#128196;</span><span class="fc-main"><span class="file-name">${nm}</span><span class="fc-size">${sz}</span></span><span class="fc-dl">&#11015;</span></a>`;
+    return `<div class="bubble ${side}" data-id="${m.id}"${starAttr} data-kind="file">${senderTag}${fwd}${chip}${reactHtml}${stamp}</div>`;
+  }
   return `<div class="bubble ${side}" data-id="${m.id}"${starAttr} data-kind="text">${senderTag}${fwd}${replyPreviewHtml(m, meId, isGroup)}<span class="msg-text">${linkify(decryptMsg(m.body_enc, m.iv))}</span>${m.edited_at ? '<span class="mut"> (edited)</span>' : ''}${reactHtml}<time data-t="${esc(m.created_at)}">${clock(m.created_at)}${starMark}${tick}</time></div>`;
 }
 
@@ -1735,7 +1818,7 @@ app.post('/api/messages/forward', (req, res) => {
       if (!buf) continue;
       newId = insertMedia(me, t, m.kind, buf, m.media_mime, m.media_ms, m.media_name, null).id;
       db.prepare('UPDATE messages SET forwarded=1 WHERE id=?').run(newId);
-      preview = m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : `📄 ${(m.media_name || 'File').slice(0, 60)}`;
+      preview = m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'video' ? '🎬 Video' : `📄 ${(m.media_name || 'File').slice(0, 60)}`;
     } else continue;
     count++;
     notifyNewMessage(req.user, t, '↪ ' + preview, newId);
@@ -1921,6 +2004,7 @@ function dur(ms){var t=Math.round((ms||0)/1000);return Math.floor(t/60)+':'+('0'
 function stamp(t){var iso=t.getAttribute('data-t');if(!iso)return;var txt=(t.getAttribute('data-pre')||'')+fmt(iso),n=t.firstChild;if(n&&n.nodeType===3)n.nodeValue=txt;else t.insertBefore(document.createTextNode(txt),t.firstChild)}
 function el(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e}
 ${linkTokens.toString()}
+${fmtBytes.toString()}
 function linkifyInto(container,text){
   linkTokens(text).forEach(function(k){
     if(k.t==='text'){container.appendChild(document.createTextNode(k.v));return}
@@ -1936,11 +2020,11 @@ var replyThumb=document.getElementById('replyThumb');
 function startReply(id){
   var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;
   var kind=b.getAttribute('data-kind')||'text',textEl=b.querySelector('.msg-text'),fileEl=b.querySelector('.file-name'),tm=b.querySelector('time'),dm=/(\\d+:\\d\\d)/.exec((tm&&tm.getAttribute('data-pre'))||'');
-  var text=kind==='voice'?('🎤 Voice note'+(dm?' · '+dm[1]:'')):kind==='sticker'?'Sticker':kind==='image'?'📷 Photo':kind==='file'?('📄 '+(fileEl?fileEl.textContent.trim():'File')):(textEl?textEl.textContent.trim():'Message');
+  var text=kind==='voice'?('🎤 Voice note'+(dm?' · '+dm[1]:'')):kind==='sticker'?'Sticker':kind==='image'?'📷 Photo':kind==='video'?'🎬 Video':kind==='file'?('📄 '+(fileEl?fileEl.textContent.trim():'File')):(textEl?textEl.textContent.trim():'Message');
   var author=b.classList.contains('me')?'You':(b.querySelector('.sender-name')?b.querySelector('.sender-name').textContent:(convType==='group'?'Group member':((document.querySelector('.chat-head b')||{}).textContent||'Member')));
   replyTarget={id:Number(id),from_name:author,text:text.slice(0,160)||'Message',kind:kind};
   replyWho.textContent='Replying to '+author;replyWhat.textContent=replyTarget.text;
-  if(kind==='sticker'||kind==='image'){replyThumb.src='/api/messages/media/'+id;replyThumb.className='rp-thumb'+(kind==='sticker'?' st':'');replyThumb.hidden=false}else{replyThumb.hidden=true;replyThumb.removeAttribute('src')}
+  replyThumb.hidden=true;replyThumb.removeAttribute('src');
   replyBar.hidden=false;input.focus();
 }
 replyCancel.addEventListener('click',clearReply);
@@ -1959,19 +2043,20 @@ function doDelete(id,scope,skip){if(!skip&&!confirm(scope==='everyone'?'Delete t
   }).catch(function(){})}
 function senderTag(m){if(convType!=='group'||m.from===myId)return'';return el('div','sender-name',m.from_name||'')}
 function replyBox(r){var rp=el('div','reply-preview'),bd=el('div','rp-body');rp.setAttribute('data-reply-to',r.id||'');bd.appendChild(el('b','rp-name',r.from_name||'Reply'));bd.appendChild(el('span','rp-text',r.text||'Message'));rp.appendChild(bd);
-  if(r.kind==='sticker'||r.kind==='image'){var im=document.createElement('img');im.className='rp-thumb'+(r.kind==='sticker'?' st':'');im.src='/api/messages/media/'+r.id;im.alt='';im.loading='lazy';rp.appendChild(im)}
+  var ric={image:'🖼️',video:'🎬',sticker:'😀'}[r.kind];if(ric)rp.appendChild(el('span','rp-ico',ric))
   return rp}
 function bubble(m){
   if(seen[m.id]){if(m.reactions)renderReactions(m.id,m.reactions);return}
   seen[m.id]=1;
+  if(m.from===myId&&m.pending&&startingUps>0){delete seen[m.id];return}
   var hello=thread.querySelector('.hello');if(hello)hello.parentNode.removeChild(hello);
   var mine=m.from===myId,side=mine?'me':'them',d,t=el('time');t.setAttribute('data-t',m.created_at);
   if(m.kind==='call'&&m.call){d=el('div','call-entry'+(m.call.bad?' missed':''));d.appendChild(el('span',null,m.call.icon));d.appendChild(el('span',null,m.call.text))}
   else if(m.deleted){d=el('div','bubble '+side+' deleted');d.appendChild(el('span','mut','This message was deleted'))}
   else if(m.kind==='voice'){d=el('div','bubble '+side);var st=senderTag(m);if(st)d.appendChild(st);var a=document.createElement('audio');a.controls=true;a.preload='none';a.src='/api/messages/media/'+m.id;d.appendChild(a);t.setAttribute('data-pre','🎤 '+dur(m.ms)+' · ')}
-  else if(m.kind==='sticker'){d=el('div','sticker-msg '+side);var st2=senderTag(m);if(st2)d.appendChild(st2);var im=document.createElement('img');im.src='/api/messages/media/'+m.id;im.alt='sticker';d.appendChild(im);if(!mine){var sb=el('button','link save-st','+ Save sticker');sb.type='button';sb.setAttribute('data-save',m.id);d.appendChild(sb)}}
-  else if(m.kind==='image'){d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);var ia=document.createElement('a');ia.href='/api/messages/media/'+m.id;ia.target='_blank';ia.rel='noopener noreferrer';var iim=document.createElement('img');iim.src='/api/messages/media/'+m.id;iim.alt='photo';iim.loading='lazy';ia.appendChild(iim);d.appendChild(ia)}
-  else if(m.kind==='file'){d=el('div','bubble '+side);var fa=document.createElement('a');fa.className='file-chip';fa.href='/api/messages/media/'+m.id;fa.setAttribute('download',m.name||'file');fa.appendChild(document.createTextNode('📄 '));var fn=el('span','file-name',m.name||'File');fa.appendChild(fn);d.appendChild(fa)}
+  else if(m.kind==='sticker'){d=el('div','sticker-msg '+side);var st2=senderTag(m);if(st2)d.appendChild(st2);d.appendChild(mcard(m));if(!mine){var sb=el('button','link save-st','+ Save sticker');sb.type='button';sb.setAttribute('data-save',m.id);d.appendChild(sb)}}
+  else if(m.kind==='image'||m.kind==='video'){if(mine&&m.pending&&startingUps>0)return;d=el('div','bubble '+side+' img-msg');var st4=senderTag(m);if(st4)d.appendChild(st4);d.appendChild(mcard(m))}
+  else if(m.kind==='file'){if(mine&&m.pending&&startingUps>0)return;d=el('div','bubble '+side);var st5=senderTag(m);if(st5)d.appendChild(st5);d.appendChild(fileChip(m))}
   else{d=el('div','bubble '+side);var st3=senderTag(m);if(st3)d.appendChild(st3);var sp=el('span','msg-text');linkifyInto(sp,m.body);d.appendChild(sp);if(m.edited)d.appendChild(el('span','mut',' (edited)'))}
   function topRef(){var r=d.firstChild;while(r&&(r.className==='sender-name'||r.className==='fwd'))r=r.nextSibling;return r}
   if(m.fwd&&!m.deleted)d.insertBefore(el('div','fwd','\u21AA Forwarded'),topRef());
@@ -1985,9 +2070,10 @@ function bubble(m){
 function updateTick(id,status){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var tk=b.querySelector('[data-tick]');if(!tk)return;tk.innerHTML=tickHtml(status)}
 Array.prototype.forEach.call(thread.querySelectorAll('time[data-t]'),stamp);
 var polling=false;
-function poll(){if(polling)return;polling=true;fetch('/api/messages/poll?'+qs+'&after='+lastId+'&seen='+(document.hidden?'0':'1'),{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
+function poll(){if(polling)return;polling=true;fetch('/api/messages/poll?'+qs+'&after='+lastId+'&seen='+(document.hidden?'0':'1')+pendQ(),{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
   (j.messages||[]).forEach(function(m){bubble(m);if(m.id>lastId)lastId=m.id});
   (j.receipts||[]).forEach(function(r){updateTick(r.id,r.status)});
+  (j.ready||[]).forEach(readyMsg);
   polling=false;
 }).catch(function(){polling=false})}
 document.addEventListener('visibilitychange',function(){if(!document.hidden)poll()});
@@ -2127,16 +2213,104 @@ stZip.addEventListener('change',function(){var f=stZip.files&&stZip.files[0];if(
     });
   }).catch(function(){upStatusHide();alert('Could not read that zip file.')});
 });
+/* ---- photos, videos, stickers and files: nothing downloads until you tap, and what you send appears at once ---- */
+var DLKEY='sh_dl',dlSet={};try{JSON.parse(localStorage.getItem(DLKEY)||'[]').forEach(function(i){dlSet[i]=1})}catch(e){}
+function isDl(id){return !!dlSet[id]}
+function markDl(id){dlSet[id]=1;try{var a=Object.keys(dlSet);if(a.length>3000)a=a.slice(-3000);localStorage.setItem(DLKEY,JSON.stringify(a))}catch(e){}}
+var pend={},ups={},startingUps=0;
+var M_ICO={image:'🖼️',video:'🎬',sticker:'😀'},M_LBL={image:'Photo',video:'Video',sticker:'Sticker'};
+function pendQ(){var k=Object.keys(pend);return k.length?'&pend='+k.slice(0,20).join(','):''}
+function mUrl(id){return '/api/messages/media/'+id}
+function mSize(c){return Number(c.getAttribute('data-size'))||0}
+function mState(c,st){c.className=c.className.replace(/ ?mc-state-[a-z]+/g,'').replace(/ ?done/g,'')+' mc-state-'+st}
+function mSet(c,st,pct,note){
+  mState(c,st);var k=c.getAttribute('data-mk'),h='<div class="mc-ph"><span class="mc-ico">'+(st==='wait'?'<span class="mc-spin"></span>':M_ICO[k])+'</span><span class="mc-lbl">'+(st==='wait'?'Sending… ':'')+M_LBL[k]+'</span></div>';
+  if(st==='idle')h+='<button type="button" class="mc-dl">⬇ '+fmtBytes(mSize(c))+'</button>';
+  else if(st==='err')h+='<button type="button" class="mc-dl">⟳ Try again · '+fmtBytes(mSize(c))+'</button>';
+  else if(st==='load'||st==='up')h+='<div class="mc-prog"><div class="mc-bar"><i style="width:'+(pct||0)+'%"></i></div><span class="mc-pct">'+(note||'')+'</span>'+(st==='up'?'<button type="button" class="mc-cancel" aria-label="Cancel">✕</button>':'')+'</div>';
+  c.innerHTML=h;
+  if(c.__prev&&st==='up'){c.firstChild.style.backgroundImage='url('+c.__prev+')';c.firstChild.className+=' has-prev'}}
+function mProg(c,pct,note){var i=c.querySelector('.mc-bar i'),t=c.querySelector('.mc-pct');if(i)i.style.width=pct+'%';if(t)t.textContent=note||''}
+function mShow(c,url){
+  var id=c.getAttribute('data-mid'),k=c.getAttribute('data-mk');mState(c,'done');c.className+=' done';c.innerHTML='';
+  if(k==='video'){var v=document.createElement('video');v.className='mc-vid';v.src=url;v.controls=true;v.playsInline=true;v.preload='metadata';c.appendChild(v);var a=document.createElement('a');a.className='mc-save';a.href=mUrl(id)+'?dl=1';a.setAttribute('download','');a.textContent='⬇ Save to phone';c.appendChild(a)}
+  else{var im=document.createElement('img');im.className='mc-img';im.alt=M_LBL[k];im.src=url;im.setAttribute('data-view',url);c.appendChild(im)}}
+function mInit(c){
+  var id=c.getAttribute('data-mid');
+  if(c.getAttribute('data-pending')==='1'){c.removeAttribute('data-pending');pend[id]=1;mSet(c,'wait');return}
+  if(isDl(id)){mShow(c,mUrl(id));return}
+  mSet(c,'idle')}
+function mcard(m){
+  var c=el('div','mcard mc-'+m.kind);c.setAttribute('data-mid',m.id);c.setAttribute('data-mk',m.kind);c.setAttribute('data-size',m.size||0);c.setAttribute('data-name',m.name||'');
+  if(m.uploading){if(m.kind==='image')c.__prev=URL.createObjectURL(m.uploading);mSet(c,'up',0,'Sending… 0%')}
+  else{if(m.pending)c.setAttribute('data-pending','1');mInit(c)}
+  return c}
+function mDownload(c){
+  var id=c.getAttribute('data-mid'),x=new XMLHttpRequest(),sz=mSize(c);x.open('GET',mUrl(id));x.responseType='blob';mSet(c,'load',0,'0%');
+  x.onprogress=function(e){var tot=e.lengthComputable?e.total:sz;if(tot)mProg(c,Math.min(100,Math.round(e.loaded*100/tot)),fmtBytes(e.loaded)+' / '+fmtBytes(tot))};
+  x.onload=function(){if(x.status===200&&x.response){markDl(id);mShow(c,URL.createObjectURL(x.response))}else mSet(c,'err')};
+  x.onerror=function(){mSet(c,'err')};x.send()}
+function fileChip(m){
+  var wait=!!(m.pending||m.uploading),d=document.createElement(wait?'div':'a');d.className='file-chip'+(wait?' pending':'');
+  if(!wait){d.href=mUrl(m.id)+'?dl=1';d.setAttribute('download',m.name||'file')}
+  d.appendChild(el('span','fc-ico','📄'));var mn=el('span','fc-main');mn.appendChild(el('span','file-name',m.name||'File'));
+  mn.appendChild(el('span','fc-size',fmtBytes(m.size)+(wait?' · Sending…':'')));
+  if(m.uploading){var bar=el('span','fc-bar');bar.appendChild(document.createElement('i'));mn.appendChild(bar)}
+  d.appendChild(mn);
+  if(m.uploading){var cb=el('button','mc-cancel','✕');cb.type='button';d.appendChild(cb)}else if(wait)d.appendChild(el('span','mc-spin'));else d.appendChild(el('span','fc-dl','⬇'));
+  return d}
+function readyMsg(r){
+  delete pend[r.id];var b=thread.querySelector('[data-id="'+r.id+'"]');if(!b)return;
+  if(r.gone){b.parentNode.removeChild(b);return}
+  var c=b.querySelector('.mcard');if(c){if(r.size)c.setAttribute('data-size',r.size);mInit(c)}
+  var fc=b.querySelector('.file-chip.pending');if(fc){var nm=(b.querySelector('.file-name')||{}).textContent;fc.parentNode.replaceChild(fileChip({id:r.id,name:nm,size:r.size}),fc)}}
+var viewer=null;
+function closeViewer(){if(viewer){viewer.parentNode.removeChild(viewer);viewer=null}}
+function openViewer(url,id){
+  closeViewer();viewer=el('div','mviewer');var im=document.createElement('img');im.src=url;viewer.appendChild(im);
+  var bar=el('div','mv-bar'),cl=el('button','mv-x','✕');cl.type='button';cl.setAttribute('data-vclose','1');
+  var sv=el('a','mv-save','⬇ Save to phone');sv.href=mUrl(id)+'?dl=1';sv.setAttribute('download','');bar.appendChild(cl);bar.appendChild(sv);viewer.appendChild(bar);
+  viewer.addEventListener('click',function(e){if(e.target===viewer||(e.target.getAttribute&&e.target.getAttribute('data-vclose')))closeViewer()});document.body.appendChild(viewer)}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeViewer()});
+thread.addEventListener('click',function(e){
+  var cb=e.target.closest?e.target.closest('.mc-cancel'):null;
+  if(cb){var bb=cb.closest('[data-id]'),u=bb&&ups[bb.getAttribute('data-id')];if(u)u.cancel();return}
+  var c=e.target.closest?e.target.closest('.mcard'):null;if(!c)return;
+  if(e.target.closest('.mc-save'))return;
+  var im=e.target.closest('.mc-img');
+  if(im){if(c.getAttribute('data-mk')!=='sticker')openViewer(im.getAttribute('data-view')||im.src,c.getAttribute('data-mid'));return}
+  if(/mc-state-(idle|err)/.test(c.className))mDownload(c)});
+Array.prototype.forEach.call(thread.querySelectorAll('.mcard'),mInit);
+Array.prototype.forEach.call(thread.querySelectorAll('.file-chip.pending[data-fid]'),function(n){pend[n.getAttribute('data-fid')]=1});
+function sendFile(f){
+  if(f.size>200*1024*1024){alert('That file is too big (200 MB is the limit).');return}
+  var kind=f.type.indexOf('image/')===0?'image':f.type.indexOf('video/')===0?'video':'file',tmp='u'+Date.now()+Math.floor(Math.random()*1000),up={xhr:null,dead:false,id:0};
+  startingUps++;ups[tmp]=up;
+  bubble({id:tmp,from:myId,kind:kind,name:f.name,size:f.size,created_at:new Date().toISOString().slice(0,19).replace('T',' '),tick:'sent',uploading:f});
+  var b=thread.querySelector('[data-id="'+tmp+'"]'),c=b&&b.querySelector('.mcard');
+  function prog(pct){if(c)mProg(c,pct,'Sending… '+pct+'%');else if(b){var t=b.querySelector('.fc-size'),bi=b.querySelector('.fc-bar i');if(t)t.textContent=fmtBytes(f.size)+' · Sending… '+pct+'%';if(bi)bi.style.width=pct+'%'}}
+  function clean(){delete ups[tmp];if(up.id)delete ups[up.id];if(b&&b.parentNode)b.parentNode.removeChild(b)}
+  up.cancel=function(){up.dead=true;if(up.xhr)up.xhr.abort();if(up.id)fetch('/api/messages/'+up.id+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:'everyone'})}).catch(function(){});clean()};
+  function finish(id){
+    delete ups[id];markDl(id);
+    if(c){c.setAttribute('data-size',f.size);mShow(c,URL.createObjectURL(f))}
+    else{var fc=b.querySelector('.file-chip');if(fc)fc.parentNode.replaceChild(fileChip({id:id,name:f.name,size:f.size}),fc)}
+    updateTick(id,'sent')}
+  var sb=Object.assign({name:f.name,size:f.size,mime:f.type||'application/octet-stream'},convType==='group'?{group:convId}:{to:convId});
+  fetch('/api/messages/attachment/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sb)}).then(function(r){return r.json()}).then(function(j){
+    startingUps--;if(up.dead)return;
+    if(!j||!j.id){alert((j&&j.error)||'Could not send that file.');clean();return}
+    up.id=j.id;ups[j.id]=up;seen[j.id]=1;if(j.id>lastId)lastId=j.id;
+    if(b){b.setAttribute('data-id',j.id);if(c)c.setAttribute('data-mid',j.id)}
+    var x=new XMLHttpRequest(),fd=new FormData();up.xhr=x;fd.append('file',f,f.name);
+    x.open('POST','/api/messages/attachment/'+j.id);
+    x.upload.onprogress=function(e){if(e.lengthComputable)prog(Math.min(100,Math.round(e.loaded*100/e.total)))};
+    x.onload=function(){if(up.dead)return;if(x.status===200)finish(j.id);else{var m='Could not send that file.';try{m=JSON.parse(x.responseText).error||m}catch(er){}alert(m);up.cancel()}};
+    x.onerror=function(){if(up.dead)return;alert('Could not send that file. Check your connection and try again.');up.cancel()};
+    x.send(fd)
+  }).catch(function(){startingUps--;if(up.dead)return;alert('Could not send that file. Check your connection and try again.');clean()})}
 var attachInput=document.getElementById('fileInput');
-attachInput.addEventListener('change',function(){var f=attachInput.files&&attachInput.files[0];if(!f)return;
-  upStatusShow('Sending '+f.name+'\u2026');
-  var fd=new FormData();if(convType==='group')fd.append('group',convId);else fd.append('to',convId);fd.append('file',f,f.name);
-  fetch('/api/messages/attachment',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){
-    attachInput.value='';upStatusHide();
-    if(j&&j.id){var kind=/^image\\//.test(f.type)?'image':'file';bubble({id:j.id,from:myId,kind:kind,name:f.name,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}
-    else alert((j&&j.error)||'Could not send that file.');
-  }).catch(function(){upStatusHide();alert('Could not send that file.')});
-});
+attachInput.addEventListener('change',function(){var fs=Array.prototype.slice.call(attachInput.files||[]);attachInput.value='';fs.slice(0,10).forEach(sendFile)});
 thread.addEventListener('click',function(e){
   var save=e.target.closest?e.target.closest('[data-save]'):null;
   if(save){fetch('/api/stickers/from-message/'+save.getAttribute('data-save'),{method:'POST'}).then(function(r){return r.json()}).then(function(j){save.textContent=(j&&j.ok)?'✓ Saved to your stickers':((j&&j.error)||'Could not save');save.disabled=true}).catch(function(){save.textContent='Could not save'});return}
@@ -2296,7 +2470,7 @@ function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastI
 <div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker(s)<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" multiple></label>
 <label class="btn ghost st-add">+ Add a .zip of pictures<input type="file" id="stZip" accept=".zip,application/zip,application/x-zip-compressed"></label><div id="sgrid" class="sgrid"></div></div></div>
 <div id="replyBar" class="reply-bar" hidden><div class="rp-body"><b id="replyWho" class="rp-name">Replying</b><span id="replyWhat" class="rp-text"></span></div><img id="replyThumb" class="rp-thumb" alt="" hidden><button type="button" id="replyCancel" class="link" aria-label="Cancel reply">&#10005;</button></div>
-<form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" style="display:none">📎</label><textarea id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required rows="1"></textarea><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
+<form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" multiple style="display:none">📎</label><textarea id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required rows="1"></textarea><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
 <div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
 <p id="upStatus" class="mut" style="margin:4px 0 0" hidden></p>
 <script>${script}</script>`, req.user, { noAI: true }));
@@ -2435,12 +2609,13 @@ function sendBytes(req, res, buf, mime) {
   }
   res.send(buf);
 }
+let lastPendingSweep = 0;
 const AUDIO_MIME = /^audio\/[a-z0-9.+-]+(;\s*codecs=[a-z0-9.,+-]+)?$/i;
 const STICKER_MIMES = ['image/png', 'image/webp', 'image/gif', 'image/jpeg'];
 const MAX_STICKERS = 60;
 const insertMedia = (from, target, kind, buf, mime, ms, name, replyId) => {
   const t = encryptMsg(''), m = encryptBytes(buf);
-  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_enc,media_iv,media_mime,media_ms,media_name,reply_to_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(from, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, m.enc, m.iv, mime, ms || null, name || null, replyId || null);
+  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_enc,media_iv,media_mime,media_ms,media_name,reply_to_id,media_size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(from, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, m.enc, m.iv, mime, ms || null, name || null, replyId || null, buf.length);
   return { id: Number(info.lastInsertRowid), created_at: db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid).created_at };
 };
 
@@ -2493,10 +2668,37 @@ app.post('/api/messages/attachment', upload.single('file'), (req, res) => {
   if (!target) return res.status(400).json({ error: 'Invalid message.' });
   if (!req.file) return res.status(400).json({ error: 'Choose a file first.' });
   if (limited('attach:' + req.user.id, 20, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
-  const kind = /^image\//.test(req.file.mimetype) ? 'image' : 'file';
+  const kind = /^image\//.test(req.file.mimetype) ? 'image' : /^video\//.test(req.file.mimetype) ? 'video' : 'file';
   const result = insertMedia(req.user.id, target, kind, req.file.buffer, req.file.mimetype, null, req.file.originalname.slice(0, 150));
-  notifyNewMessage(req.user, target, kind === 'image' ? '📷 Photo' : `📄 ${req.file.originalname.slice(0, 60)}`, result.id);
+  notifyNewMessage(req.user, target, kind === 'image' ? '📷 Photo' : kind === 'video' ? '🎬 Video' : `📄 ${req.file.originalname.slice(0, 60)}`, result.id);
   res.json(result);
+});
+// Two-step sending: the message is dropped on the server straight away as an empty placeholder (so it shows in the chat at once),
+// then the file itself is uploaded into it. Everyone in the chat sees "Sending..." until the file has arrived.
+app.post('/api/messages/attachment/start', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const target = resolveTarget(req);
+  if (!target) return res.status(400).json({ error: 'Invalid message.' });
+  if (limited('attach:' + req.user.id, 20, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
+  const b = req.body || {}, size = Math.max(0, Math.floor(Number(b.size) || 0));
+  if (size > 200 * 1024 * 1024) return res.status(413).json({ error: 'That file is too big (200 MB is the limit).' });
+  const mime = /^[\w.+-]+\/[\w.+-]+$/.test(String(b.mime || '')) ? String(b.mime).slice(0, 100) : 'application/octet-stream';
+  const name = String(b.name || 'file').replace(/[\r\n"]/g, '').slice(0, 150) || 'file';
+  const kind = /^image\//.test(mime) ? 'image' : /^video\//.test(mime) ? 'video' : 'file';
+  const t = encryptMsg('');
+  const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_mime,media_name,media_size) VALUES(?,?,?,?,?,?,?,?,?)').run(req.user.id, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, mime, name, size);
+  res.json({ id: Number(info.lastInsertRowid), kind, created_at: db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid).created_at });
+});
+app.post('/api/messages/attachment/:id', upload.single('file'), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const m = db.prepare('SELECT id,sender_id,recipient_id,group_id,kind,deleted_at,(media_enc IS NOT NULL) AS filled FROM messages WHERE id=?').get(Number(req.params.id));
+  if (!m || m.sender_id !== req.user.id || m.deleted_at || m.filled || !MEDIA_KINDS.includes(m.kind)) return res.status(404).json({ error: 'This message is no longer waiting for a file.' });
+  if (!req.file) return res.status(400).json({ error: 'Choose a file first.' });
+  const kind = /^image\//.test(req.file.mimetype) ? 'image' : /^video\//.test(req.file.mimetype) ? 'video' : 'file';
+  const enc = encryptBytes(req.file.buffer);
+  db.prepare('UPDATE messages SET media_enc=?, media_iv=?, media_mime=?, media_size=?, media_name=?, kind=? WHERE id=?').run(enc.enc, enc.iv, req.file.mimetype, req.file.buffer.length, String(req.file.originalname || 'file').slice(0, 150), kind, m.id);
+  notifyNewMessage(req.user, { recipient_id: m.recipient_id, group_id: m.group_id }, kind === 'image' ? '📷 Photo' : kind === 'video' ? '🎬 Video' : `📄 ${String(req.file.originalname).slice(0, 60)}`, m.id);
+  res.json({ ok: true, id: m.id, kind, size: req.file.buffer.length });
 });
 // A voice note or sticker's file -- only people in that conversation can fetch it.
 app.get('/api/messages/media/:id', (req, res) => {
@@ -2507,6 +2709,10 @@ app.get('/api/messages/media/:id', (req, res) => {
   if (!allowed) return res.sendStatus(404);
   const buf = decryptBytes(m.media_enc, m.media_iv);
   if (!buf) return res.sendStatus(404);
+  if (req.query.dl) {
+    const ext = ((m.media_mime || '').split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5);
+    res.setHeader('Content-Disposition', `attachment; filename="${String(m.media_name || ('studies-hub-' + (m.kind || 'file') + '.' + ext)).replace(/[^\w .()-]/g, '_')}"`);
+  }
   sendBytes(req, res, buf, m.media_mime);
 });
 
@@ -2542,7 +2748,7 @@ app.get('/api/messages/poll', (req, res) => {
     id: m.id, from: m.sender_id, from_name: (meta[m.id] || {}).from_name, kind: m.kind || 'text',
     deleted: !!m.deleted_at, edited: !!m.edited_at,
     body: m.deleted_at ? '' : (m.kind === 'text' || !m.kind ? decryptMsg(m.body_enc, m.iv) : ''),
-    ms: m.media_ms || 0, name: m.media_name || '', created_at: m.created_at,
+    ms: m.media_ms || 0, name: m.media_name || '', size: mediaSizeOf(m), pending: isPendingMedia(m), created_at: m.created_at,
     reactions: reactionsFor(m.id),
     reply: messageReplyInfo(m, req.user.id, !!m.group_id), fwd: !!m.forwarded, starred: isStarred(m.id, req.user.id), call: m.kind === 'call' ? callInfo(m, req.user.id) : undefined,
     tick: m.sender_id === req.user.id && !m.group_id ? tickFor(m, m.recipient_id) : undefined,
@@ -2554,7 +2760,15 @@ app.get('/api/messages/poll', (req, res) => {
     const mine = db.prepare("SELECT id,recipient_id,delivered_at FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 30").all(req.user.id, withId);
     receipts = mine.map(m => ({ id: m.id, status: tickFor(m, m.recipient_id) }));
   }
-  res.json({ messages, receipts });
+  // Uploads the page is still waiting on: tell it which have now arrived (or were cancelled).
+  const ready = [];
+  String(req.query.pend || '').split(',').slice(0, 20).map(Number).filter(n => Number.isSafeInteger(n) && n > 0).forEach(id => {
+    const r = db.prepare('SELECT id,sender_id,recipient_id,group_id,kind,media_size,deleted_at,(media_enc IS NOT NULL) AS filled FROM messages WHERE id=?').get(id);
+    if (!r || r.deleted_at || !canSeeMsg(req.user.id, r)) ready.push({ id, gone: true });
+    else if (r.filled) ready.push({ id, kind: r.kind, size: r.media_size || 0 });
+  });
+  if (Date.now() - lastPendingSweep > 60e3) { lastPendingSweep = Date.now(); db.prepare("DELETE FROM messages WHERE media_enc IS NULL AND kind IN ('image','video','file') AND created_at < datetime('now','-60 minutes')").run(); }
+  res.json({ messages, receipts, ready });
 });
 
 app.post('/api/messages/:id/react', (req, res) => {
