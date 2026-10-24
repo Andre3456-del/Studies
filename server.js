@@ -251,7 +251,7 @@ async function pushTo(sub, payload) {
   try {
     const r = await fetch(sub.endpoint, {
       method: 'POST', signal: ctl.signal,
-      headers: { Authorization: vapidHeader(sub.endpoint), 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', TTL: '86400', Urgency: 'high' },
+      headers: { Authorization: vapidHeader(sub.endpoint), 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', TTL: String(Math.max(0, Math.min(86400, Number(payload && payload.ttl) || 86400))), Urgency: 'high' },
       body: encryptPush(JSON.stringify(payload), sub.p256dh, sub.auth),
     });
     if (r.status === 404 || r.status === 410) db.prepare('DELETE FROM push_subscriptions WHERE id=?').run(sub.id); // that phone/browser unsubscribed
@@ -440,7 +440,7 @@ app.use((req, res, next) => {
 
 // LiveKit calling module; credentials stay in server-side environment variables.
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
-registerCalling(app, { db, crypto, logCall: (callerId, calleeId, kind, state, secs) => {
+registerCalling(app, { db, crypto, notify, logCall: (callerId, calleeId, kind, state, secs) => {
   // A line in the 1-to-1 chat: "Video call - 47 sec", "Missed video call", "Declined".
   const enc = encryptMsg(JSON.stringify({ k: kind, s: state, d: secs || 0 }));
   const id = Number(db.prepare("INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind) VALUES(?,?,NULL,?,?,'call')").run(callerId, calleeId, enc.body_enc, enc.iv).lastInsertRowid);
@@ -741,6 +741,17 @@ function flushQueuedUploads(){
 self.addEventListener('push',function(e){
   var d={};
   try{d=e.data.json()}catch(_){d={title:'Studies Hub',body:e.data?e.data.text():''}}
+  if(d.ringEnd){
+    e.waitUntil(self.registration.showNotification(d.title||'Call ended',{tag:d.tag,silent:true,icon:'/icon-192.png',badge:'/icon-192.png'}).then(function(){return new Promise(function(r){setTimeout(r,700)})}).then(function(){return self.registration.getNotifications({tag:d.tag})}).then(function(list){list.forEach(function(n){n.close()})}));
+    return;
+  }
+  if(d.ring){
+    e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
+      for(var i=0;i<cs.length;i++){if(cs[i].visibilityState==='visible')return}
+      return self.registration.showNotification(d.title||'Incoming call',{body:d.body||'Incoming call',icon:d.icon||'/icon-192.png',badge:'/icon-192.png',tag:d.tag,renotify:true,requireInteraction:true,silent:false,vibrate:[500,250,500,250,500,250,500,250,500,250,500],actions:[{action:'answer',title:'Answer'},{action:'decline',title:'Decline'}],data:{url:'/chat',call:d.ring}});
+    }));
+    return;
+  }
   e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
     var url=d.url||'/';
     for(var i=0;i<cs.length;i++){var c=cs[i];if(c.visibilityState==='visible'&&c.focused&&new URL(c.url).pathname===url.split('?')[0])return}
@@ -750,14 +761,23 @@ self.addEventListener('push',function(e){
     return self.registration.showNotification(d.title||'Studies Hub',options);
   }));
 });
+function openApp(url){
+  return self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
+    for(var i=0;i<cs.length;i++){var c=cs[i];if('focus' in c){if(c.navigate)c.navigate(url);return c.focus()}}
+    return self.clients.openWindow(url);
+  });
+}
 self.addEventListener('notificationclick',function(e){
   var n=e.notification,data=n.data||{},url=data.url||'/';
   n.close();
+  if(data.call){
+    var cid=encodeURIComponent(data.call.id);
+    if(e.action==='decline'){e.waitUntil(fetch('/api/calls/'+cid+'/decline',{method:'POST',credentials:'include'}).catch(function(){}));return}
+    if(e.action==='answer'){e.waitUntil(fetch('/api/calls/'+cid+'/accept',{method:'POST',credentials:'include'}).then(function(r){return r.ok?r.json():{}}).then(function(j){return openApp(j&&j.url?j.url:'/chat')}).catch(function(){return openApp('/chat')}));return}
+    e.waitUntil(openApp('/chat'));return;
+  }
   if(e.action==='reply'&&data.replyTo&&!/[?&]reply_to=/.test(url))url+=(url.indexOf('?')>=0?'&':'?')+'reply_to='+encodeURIComponent(data.replyTo);
-  e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
-    for(var i=0;i<cs.length;i++){var c=cs[i];if('focus' in c){if(c.navigate)c.navigate(url);return c.focus()}}
-    return self.clients.openWindow(url);
-  }));
+  e.waitUntil(openApp(url));
 });`;
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
@@ -1128,7 +1148,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
-<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to receive new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/terms">Terms, Conditions, and Policies</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/terms">Terms, Conditions, and Policies</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 <script>(function(){var P=location.pathname;if(/^\\/(login|signup|welcome|lecturer|call|chat\\/|forgot|reset|verify|pay)/.test(P))return;var main=document.querySelector('main');if(!main||main.querySelector('script'))return;var last=inner(main),busy=false;function inner(m){var c=m.cloneNode(true),pb=c.querySelector('#pushBar');if(pb)pb.remove();return c.innerHTML}function dirty(){var f=main.querySelectorAll('input,textarea,select');for(var i=0;i<f.length;i++){var e=f[i];if(e.type==='hidden'||e.type==='submit'||e.type==='button')continue;if(e.type==='checkbox'||e.type==='radio'){if(e.checked!==e.defaultChecked)return true}else if(e.tagName==='SELECT'){for(var j=0;j<e.options.length;j++)if(e.options[j].selected!==e.options[j].defaultSelected)return true}else if(e.value!==e.defaultValue)return true}var a=document.activeElement;return !!(a&&main.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))}function sync(sel,doc){var a=document.querySelectorAll(sel),b=doc.querySelectorAll(sel);if(a.length!==b.length)return;for(var i=0;i<a.length;i++)if(a[i].innerHTML!==b[i].innerHTML)a[i].innerHTML=b[i].innerHTML}function tick(){if(busy||document.hidden||document.getElementById('scrim')&&document.getElementById('scrim').classList.contains('show'))return;busy=true;fetch(location.href,{cache:'no-store',credentials:'same-origin',headers:{'X-Live':'1'}}).then(function(r){if(!r.ok||r.redirected||(r.headers.get('content-type')||'').indexOf('text/html')<0)return null;return r.text()}).then(function(h){if(!h)return;var d=new DOMParser().parseFromString(h,'text/html');sync('.menu-btn',d);sync('#drawer a.drawer-item',d);var m=d.querySelector('main');if(!m||m.querySelector('script'))return;var sel=window.getSelection&&String(window.getSelection());if(sel)return;var nw=inner(m);if(nw!==last&&nw!==inner(main)){if(dirty())return;var y=window.scrollY,pb=main.querySelector('#pushBar');main.innerHTML=nw;if(pb)main.insertBefore(pb,main.firstChild);window.scrollTo(0,y)}last=nw}).catch(function(){}).then(function(){busy=false})}setInterval(tick,4000);document.addEventListener('visibilitychange',function(){if(!document.hidden)tick()})})()</script>
 ${user ? `<script>(function(){var T=null,x0=0,y0=0,fired=false,sheet=null,ptype='';

@@ -227,6 +227,11 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - Photos, videos and stickers in chat do not load by themselves. They show a card with the file size (for example "12 MB"); tapping it downloads it from the server and shows it on the site. Photos open full screen, and there is a "Save to phone" link on photos and videos. Once you have opened one it stays visible on that device.
 - Sending is instant: the message is created on the server as an empty placeholder first, and the file is then uploaded into it with a progress bar (the other person sees "Sending..."). Tap the cross to cancel. Videos are supported (up to 200 MB). Placeholders that never receive a file are cleaned up after an hour.
 
+## Calls: ringing, screen sharing and staying alive
+- When someone calls you, your phone gets a ringing notification (with **Answer** and **Decline**) even if the site is closed, as long as you turned on notifications and have data. It disappears when the call is answered, declined, cancelled or missed. Tapping the notification itself opens the app on the normal incoming-call screen.
+- The **share screen** button is in the call's bottom bar. Sharing a screen in a voice call turns it into a video call for everybody; everyone else sees the shared screen big, with people as small tiles. Phone browsers (Android and iPhone) do not allow screen capture at all, so on a phone the button explains this; sharing works from a laptop or desktop browser.
+- Calls keep going while you use other apps: the call shows lock-screen controls like a media player, video calls can pop out into a small floating window (More > Pop out video window), and the screen stays awake. Browsers on iPhone may still freeze a call in the background; installing the site to the home screen helps.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.

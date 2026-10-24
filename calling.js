@@ -3,7 +3,7 @@ const { AccessToken } = require('livekit-server-sdk');
 
 const RING_MS = 45000; // how long a call rings before it counts as missed
 
-function registerCalling(app, { db, crypto, logCall }) {
+function registerCalling(app, { db, crypto, notify, logCall }) {
   db.exec("CREATE TABLE IF NOT EXISTS call_sessions(id TEXT PRIMARY KEY,room_name TEXT UNIQUE NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('audio','video')),group_id INTEGER,created_by INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'active',created_at TEXT DEFAULT CURRENT_TIMESTAMP,ended_at TEXT); CREATE TABLE IF NOT EXISTS call_participants(call_id TEXT NOT NULL,user_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'invited',invited_by INTEGER NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(call_id,user_id)); CREATE INDEX IF NOT EXISTS call_participants_user_status ON call_participants(user_id,status);");
   const cpCols = db.prepare('PRAGMA table_info(call_participants)').all().map(c => c.name);
   if (!cpCols.includes('joined_at')) db.exec('ALTER TABLE call_participants ADD COLUMN joined_at TEXT');
@@ -12,12 +12,25 @@ function registerCalling(app, { db, crypto, logCall }) {
   const callById = id => db.prepare('SELECT * FROM call_sessions WHERE id=?').get(id);
   const participant = (id,u) => db.prepare('SELECT * FROM call_participants WHERE call_id=? AND user_id=?').get(id,u);
   const people = id => db.prepare('SELECT cp.user_id,cp.status,u.name FROM call_participants cp JOIN users u ON u.id=cp.user_id WHERE cp.call_id=? ORDER BY u.name').all(id);
+  // Ringing on the phone itself: a push notification with Answer / Decline, even when the site is closed. unring() takes it away again.
+  function ring(call, ids) {
+    if (!notify || !ids.length) return;
+    try {
+      const caller = db.prepare('SELECT name FROM users WHERE id=?').get(call.created_by), g = call.group_id ? db.prepare('SELECT name FROM groups WHERE id=?').get(call.group_id) : null;
+      notify(ids, { title: g ? g.name : (caller ? caller.name : 'Studies Hub'), body: '\u{1F4DE} Incoming ' + (call.kind === 'video' ? 'video' : 'voice') + ' call' + (g && caller ? ' from ' + caller.name : ''), url: '/chat', tag: 'call-' + call.id, ring: { id: call.id, kind: call.kind }, ttl: 45 });
+    } catch (e) { console.error('Call ring failed:', e.message); }
+  }
+  function unring(call, ids) {
+    if (!notify || !ids.length) return;
+    try { notify(ids, { title: 'Call ended', body: '', tag: 'call-' + call.id, ringEnd: true, ttl: 120 }); } catch (e) { /* best effort */ }
+  }
   const ready = () => !!(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
   // One place that ends a call: marks everybody, and for a 1-to-1 call writes the "Video call - 47 sec / Missed / Declined" line into their chat.
   function finishCall(c, reason) {
     const cur = callById(c.id); if (!cur || cur.status !== 'active') return;
     const ps = db.prepare('SELECT * FROM call_participants WHERE call_id=?').all(cur.id);
     db.prepare("UPDATE call_sessions SET status='ended',ended_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'").run(cur.id);
+    unring(cur, ps.filter(p => p.status === 'invited').map(p => p.user_id));
     const callee = ps.find(p => p.user_id !== cur.created_by);
     if (!cur.group_id && ps.length === 2 && callee && logCall) {
       let state = reason === 'declined' ? 'declined' : 'missed', secs = 0;
@@ -32,7 +45,7 @@ function registerCalling(app, { db, crypto, logCall }) {
       const stale = db.prepare("SELECT cp.call_id,cp.user_id FROM call_participants cp JOIN call_sessions c ON c.id=cp.call_id WHERE cp.status='invited' AND c.status='active' AND (strftime('%s','now')-strftime('%s',COALESCE(cp.updated_at,cp.created_at)))*1000>?").all(RING_MS);
       for (const r of stale) {
         db.prepare("UPDATE call_participants SET status='missed',updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=? AND status='invited'").run(r.call_id, r.user_id);
-        const c = callById(r.call_id); if (c && !c.group_id) finishCall(c, 'missed');
+        const c = callById(r.call_id); if (c) unring(c, [r.user_id]); if (c && !c.group_id) finishCall(c, 'missed');
       }
       for (const c of db.prepare("SELECT * FROM call_sessions WHERE status='active' AND created_at < datetime('now','-6 hours')").all()) finishCall(c, 'ended');
     } catch (e) { console.error('Call sweep failed:', e.message); }
@@ -63,7 +76,8 @@ function registerCalling(app, { db, crypto, logCall }) {
     db.prepare('INSERT INTO call_sessions(id,room_name,kind,group_id,created_by,status) VALUES(?,?,?,?,?,?)').run(id,room,kind,gid,uid,'active');
     db.prepare("INSERT INTO call_participants(call_id,user_id,status,invited_by) VALUES(?,?,?,?)").run(id,uid,'joined',uid);
     const add=db.prepare("INSERT OR IGNORE INTO call_participants(call_id,user_id,status,invited_by) VALUES(?,?,?,?)");
-    for(const target of ids)if(mayInvite({id,group_id:gid},uid,target))add.run(id,target,'invited',uid);
+    const rung=[];for(const target of ids)if(mayInvite({id,group_id:gid},uid,target)){add.run(id,target,'invited',uid);rung.push(target);}
+    ring({id,kind,group_id:gid,created_by:uid},rung);
     res.status(201).json({id,kind,url:'/call/'+encodeURIComponent(id)});
   });
   app.get('/api/calls/incoming',(req,res)=>{
@@ -86,12 +100,12 @@ function registerCalling(app, { db, crypto, logCall }) {
   app.post('/api/calls/:id/accept',(req,res)=>{
     if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
     if(!c||c.status!=='active'||!p||!['invited','joined'].includes(p.status))return res.status(404).json({error:'This call invitation is no longer available.'});
-    db.prepare("UPDATE call_participants SET status='joined',joined_at=COALESCE(joined_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=?").run(c.id,req.user.id);res.json({ok:true,url:'/call/'+encodeURIComponent(c.id)});
+    db.prepare("UPDATE call_participants SET status='joined',joined_at=COALESCE(joined_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=?").run(c.id,req.user.id);unring(c,[req.user.id]);res.json({ok:true,url:'/call/'+encodeURIComponent(c.id)});
   });
   app.post('/api/calls/:id/decline',(req,res)=>{
     if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
     if(!c||!participant(c.id,req.user.id))return res.status(404).json({error:'Call not found.'});
-    db.prepare("UPDATE call_participants SET status='declined',updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=? AND status='invited'").run(c.id,req.user.id);if(!c.group_id)finishCall(c,'declined');res.json({ok:true});
+    db.prepare("UPDATE call_participants SET status='declined',updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=? AND status='invited'").run(c.id,req.user.id);unring(c,[req.user.id]);if(!c.group_id)finishCall(c,'declined');res.json({ok:true});
   });
   app.post('/api/calls/:id/invite',(req,res)=>{
     if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
@@ -99,7 +113,8 @@ function registerCalling(app, { db, crypto, logCall }) {
     const ids=Array.isArray(req.body&&req.body.user_ids)?[...new Set(req.body.user_ids.map(Number).filter(n=>Number.isSafeInteger(n)&&n>0))]:[];
     if(!ids.length||ids.length>30)return res.status(400).json({error:'Choose 1–30 people.'});
     const add=db.prepare("INSERT INTO call_participants(call_id,user_id,status,invited_by) VALUES(?,?,?,?) ON CONFLICT(call_id,user_id) DO UPDATE SET status='invited',invited_by=excluded.invited_by,updated_at=CURRENT_TIMESTAMP WHERE call_participants.status IN ('declined','left')");
-    let n=0;for(const target of ids)if(mayInvite(c,req.user.id,target)){add.run(c.id,target,'invited',req.user.id);n++;}
+    let n=0;const rung=[];for(const target of ids)if(mayInvite(c,req.user.id,target)){add.run(c.id,target,'invited',req.user.id);n++;rung.push(target);}
+    ring(c,rung);
     if(!n)return res.status(400).json({error:'No eligible people selected.'});res.json({ok:true,invited:n});
   });
   app.post('/api/calls/:id/token',async(req,res)=>{
@@ -108,6 +123,12 @@ function registerCalling(app, { db, crypto, logCall }) {
     if(!ready())return res.status(503).json({error:'Calling needs LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in Railway Variables.'});
     try{const t=new AccessToken(process.env.LIVEKIT_API_KEY,process.env.LIVEKIT_API_SECRET,{identity:'user-'+req.user.id,name:String(req.user.name||'StudiesHub member').slice(0,80),ttl:'1h'});t.addGrant({roomJoin:true,room:c.room_name,canPublish:true,canSubscribe:true,canPublishData:true});res.json({serverUrl:process.env.LIVEKIT_URL,token:await t.toJwt(),kind:c.kind});}
     catch(e){console.error('LiveKit token generation failed:',e.message);res.status(503).json({error:'Could not prepare the call. Check LiveKit settings.'});}
+  });
+  // Sharing a screen turns a voice call into a video call for everybody (new joiners get the video screen too).
+  app.post('/api/calls/:id/video',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
+    if(!c||c.status!=='active'||!p||p.status!=='joined')return res.status(404).json({error:'Call not found.'});
+    db.prepare("UPDATE call_sessions SET kind='video' WHERE id=?").run(c.id);res.json({ok:true,kind:'video'});
   });
   app.post('/api/calls/:id/leave',(req,res)=>{
     if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
@@ -136,7 +157,7 @@ function callScreen() {
   let room, lp, voiceOn = false, sharing = false, micOn = true, camOn = C.kind === 'video', startedAt = 0, everConnected = false, facing = 'user', ended = false, status = {}, toastT;
   const api = (url, body) => fetch(url, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined })
     .then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw Error(j.error || 'Request failed'); return j; });
-  const toast = t => { const e = $('toast'); e.textContent = t; e.style.opacity = '1'; clearTimeout(toastT); toastT = setTimeout(() => { e.style.opacity = '0'; }, 2200); };
+  const toast = (t, ms) => { const e = $('toast'); e.textContent = t; e.style.opacity = '1'; clearTimeout(toastT); toastT = setTimeout(() => { e.style.opacity = '0'; }, ms || 2200); };
   const pad = n => String(n).padStart(2, '0');
   function goBack() { try { const f = $('site'); if (f && !f.hidden && f.contentWindow.location.href) { location.href = f.contentWindow.location.href; return; } } catch (e) { /* use the default */ } location.href = '/chat'; }
   // Minimise: the call keeps running in this page while the rest of the site loads inside it, so you can browse anywhere.
@@ -160,7 +181,11 @@ function callScreen() {
     }
     return e;
   }
-  function layoutTiles() { const n = $('remote').children.length; $('remote').setAttribute('data-n', Math.min(n, 4)); }
+  function layoutTiles() {
+    const r = $('remote'), n = r.children.length, hasScreen = !!r.querySelector('.rtile.screen'); r.setAttribute('data-n', Math.min(n, 4));
+    if (hasScreen) r.setAttribute('data-screen', '1'); else r.removeAttribute('data-screen');
+    let i = 0; Array.prototype.forEach.call(r.children, t => { t.style.top = t.classList.contains('screen') ? '' : (76 + 118 * i++) + 'px'; });
+  }
   function showFailed(why) {
     if (ended) return; ended = true; if (room) room.disconnect(); expand();
     $('whyText').textContent = why || ''; $('failed').hidden = false;
@@ -190,7 +215,8 @@ function callScreen() {
   function attach(track, p, pub) {
     if (track.kind === 'audio') { const a = track.attach(); a.autoplay = true; a.style.display = 'none'; a.setAttribute('data-aid', track.sid); document.body.appendChild(a); return; }
     const screen = isScreen(pub), key = p.identity + (screen ? '-screen' : ''), box = tile(key, (p.name || p.identity) + (screen ? ' (screen)' : '')), old = box.querySelector('video'); if (old) old.remove();
-    const v = track.attach(); v.autoplay = true; v.playsInline = true; box.insertBefore(v, box.firstChild); box.classList.add('hasvideo'); if (screen) { box.classList.add('screen'); toast((p.name || 'Someone') + ' is sharing their screen'); }
+    const v = track.attach(); v.autoplay = true; v.playsInline = true; box.insertBefore(v, box.firstChild); box.classList.add('hasvideo'); if (screen) { box.classList.add('screen'); toast((p.name || 'Someone') + ' is sharing their screen'); upgradeToVideo(false); }
+    layoutTiles();
   }
   function detach(track, p, pub) {
     track.detach().forEach(e => e.remove());
@@ -206,6 +232,7 @@ function callScreen() {
     $('camBtn').classList.toggle('off', !camOn); $('camBtn').title = camOn ? 'Turn camera off' : 'Turn camera on';
     $('selfWin').hidden = C.kind !== 'video' || !camOn; $('selfWin').classList.toggle('mirror', facing === 'user');
     $('selfMute').hidden = micOn;
+    $('shareQuick').classList.toggle('on', sharing); $('shareQuick').title = sharing ? 'Stop sharing' : 'Share your screen';
     $('shareBar').hidden = !sharing; $('shareBtn').textContent = sharing ? 'Stop sharing your screen' : 'Share your screen';
   }
   async function applyVoice() {
@@ -220,6 +247,26 @@ function callScreen() {
       proc.onHowl(() => toast('Echo detected. Use earphones, or move the phones apart.'));
       proc.onLost(() => { voiceOn = false; t.stopProcessor().catch(() => {}); });
     } catch (e) { voiceOn = false; if (proc) proc.close(); }
+  }
+  // Keeps the call going while you use other apps: the phone treats it like a media player (lock-screen controls), and a video call can pop out into a small floating window.
+  function popOut() {
+    const v = document.querySelector('#remote .rtile.screen video') || document.querySelector('#remote video');
+    if (v && v.requestPictureInPicture) return v.requestPictureInPicture().catch(() => toast('Your browser did not allow a pop-out window'));
+    toast('Pop-out is not available in this browser'); return Promise.resolve();
+  }
+  function keepAlive() {
+    try {
+      const ms = navigator.mediaSession; if (!ms) return;
+      ms.metadata = new MediaMetadata({ title: 'Studies Hub ' + (C.kind === 'video' ? 'video' : 'voice') + ' call', artist: C.title || 'Call in progress', artwork: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }] });
+      ms.playbackState = 'playing';
+      const on = (a, f) => { try { ms.setActionHandler(a, f); } catch (e) { /* not supported here */ } };
+      on('hangup', () => leave()); on('togglemicrophone', () => $('micBtn').onclick()); on('togglecamera', () => $('camBtn').onclick());
+      on('enterpictureinpicture', () => { popOut(); });
+    } catch (e) { /* optional */ }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { if (C.kind === 'video' && document.pictureInPictureEnabled && !document.pictureInPictureElement) popOut(); }
+      else { if (document.pictureInPictureElement && document.exitPictureInPicture) document.exitPictureInPicture().catch(() => {}); if (room) room.startAudio().catch(() => {}); }
+    });
   }
   async function start() {
     try {
@@ -260,6 +307,7 @@ function callScreen() {
       updateButtons(); refresh();
       setInterval(refresh, 2000); setInterval(tickTimer, 1000);
       try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {}); } catch (e) { /* optional */ }
+      keepAlive();
     } catch (e) { showFailed(e.message || 'Could not join the call.'); }
   }
   async function leave() { try { await api('/api/calls/' + C.id + '/leave', {}); } catch (e) { /* already gone */ } ended = true; if (room) room.disconnect(); goBack(); }
@@ -296,14 +344,25 @@ function callScreen() {
   $('moreBtn').addEventListener('click', fillDevices);
   $('audioDevice').onchange = e => room && e.target.value && room.switchActiveDevice('audioinput', e.target.value).catch(() => {});
   $('videoDevice').onchange = e => room && e.target.value && room.switchActiveDevice('videoinput', e.target.value).catch(() => {});
+  // A voice call becomes a video call (for everybody) the moment somebody shares their screen.
+  function upgradeToVideo(tell) {
+    if (C.kind === 'video') return; C.kind = 'video'; document.body.classList.remove('audio'); document.body.classList.add('video');
+    $('camBtn').hidden = false; $('videoDevice').hidden = false; if (tell) api('/api/calls/' + C.id + '/video', {}).catch(() => {});
+    updateButtons(); toast(tell ? 'This call is now a video call' : 'The call switched to video for the screen share');
+  }
   async function toggleShare() {
     if (!lp) return; $('moreMenu').hidden = true;
-    try { sharing = !sharing; await lp.setScreenShareEnabled(sharing); if (sharing) toast('You are sharing your screen'); }
+    if (!sharing && !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) { toast('This phone’s browser does not allow sharing the screen. Open the call on a laptop or computer to share, or turn on your camera to show something.', 7000); return; }
+    try {
+      sharing = !sharing;
+      if (sharing) await lp.setScreenShareEnabled(true, { contentHint: 'detail', resolution: { width: 1920, height: 1080, frameRate: 15 } }); else await lp.setScreenShareEnabled(false);
+      if (sharing) { upgradeToVideo(true); toast('You are sharing your screen. Switch to what you want to show; the call keeps going.', 6000); }
+    }
     catch (e) { sharing = false; toast(e && e.name === 'NotAllowedError' ? 'Screen sharing was cancelled' : 'Could not share your screen'); }
     updateButtons();
   }
-  $('shareBtn').onclick = toggleShare; $('stopShare').onclick = toggleShare;
-  if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) $('shareBtn').hidden = true; // phones' browsers cannot share a screen
+  $('popBtn').onclick = () => { $('moreMenu').hidden = true; popOut(); };
+  $('shareBtn').onclick = toggleShare; $('stopShare').onclick = toggleShare; $('shareQuick').onclick = toggleShare;
   $('endAllBtn').onclick = async () => { if (!confirm('End this call for everyone?')) return; try { await api('/api/calls/' + C.id + '/end', {}); } catch (e) { toast(e.message); } ended = true; if (room) room.disconnect(); goBack(); };
   async function openInvite() {
     try {
@@ -411,6 +470,7 @@ const callCss = '*{box-sizing:border-box}html,body{margin:0;height:100%;backgrou
   + '#remote:not([data-n="1"]) .rname{display:block}.avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover}'
   + '#site{position:absolute;left:0;right:0;bottom:0;top:calc(44px + env(safe-area-inset-top,0px));width:100%;height:calc(100% - 44px - env(safe-area-inset-top,0px));border:0;background:#fff}'
   + '#miniBar{position:absolute;left:0;right:0;top:0;height:calc(44px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 10px 0;z-index:30;display:flex;align-items:center;gap:8px;background:#00a884;color:#fff;cursor:pointer;font-size:15px}#miniBar span{flex:1;font-weight:600}.ibtn.sm{width:34px;height:34px;background:#0003}.ibtn.sm.off{background:#fff;color:#111}.ibtn.sm.red{background:#e53935}'
+  + '.ibtn.on{background:#25d366!important;color:#06240f!important}body:not(.mini) #remote[data-screen="1"]{display:block;position:relative}body:not(.mini) #remote[data-screen="1"] .rtile.screen{position:absolute;inset:0;z-index:1;background:#000}body:not(.mini) #remote[data-screen="1"] .rtile:not(.screen){position:absolute;right:8px;width:84px;height:112px;z-index:3;border-radius:12px;overflow:hidden;box-shadow:0 4px 14px #0008}body:not(.mini) #remote[data-screen="1"] .rtile:not(.screen) .rname{display:none}'
   + 'body.mini #stage{pointer-events:none;background:transparent}body.mini .top,body.mini .pill,body.mini #shareBar,body.mini #moreMenu,body.mini .selfwin,body.mini #toast{display:none!important}body.mini #miniBar,body.mini #remote{pointer-events:auto}'
   + 'body.mini #remote{position:fixed;right:12px;bottom:calc(90px + env(safe-area-inset-bottom,0px));width:112px;height:168px;flex:none;display:block;z-index:25;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px #000a;border:1px solid #ffffff44;cursor:pointer}body.mini .rtile{height:100%}body.mini .rname,body.mini .avatar{display:none!important}body.mini.audio #remote{display:none}'
   + '.rtile.screen video{object-fit:contain}#shareBar{position:absolute;left:50%;transform:translateX(-50%);top:calc(84px + env(safe-area-inset-top,0px));z-index:9;display:flex;align-items:center;gap:12px;background:#00a884;color:#fff;padding:6px 8px 6px 16px;border-radius:99px;font-size:14px}#shareBar button{background:#0003;border:0;color:#fff;border-radius:99px;padding:6px 14px;font:inherit;cursor:pointer}'
@@ -426,6 +486,7 @@ const callCss = '*{box-sizing:border-box}html,body{margin:0;height:100%;backgrou
 const ICON = {
   mic: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   cam: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="13" height="12" rx="2.5"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></svg>',
+  share: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M12 12V8M9.5 10.5L12 8l2.5 2.5"/></svg>',
   more: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
   end: '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 9c-3.2 0-6.2 1-8.6 2.8a1.5 1.5 0 0 0-.2 2.2l1.4 1.5a1.5 1.5 0 0 0 2 .1l2-1.5a1.5 1.5 0 0 0 .6-1.3V12a11 11 0 0 1 6.8 0v.8a1.5 1.5 0 0 0 .6 1.3l2 1.5a1.5 1.5 0 0 0 2-.1l1.4-1.5a1.5 1.5 0 0 0-.2-2.2C18.200 10 15.200 9 12 9z"/></svg>',
   add: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="4"/><path d="M2.500 20a7.500 7.500 0 0 1 15 0M19 8v6M16 11h6"/></svg>',
@@ -438,12 +499,12 @@ function callPage(data) {
     + '<div id="miniBar" hidden><span id="miniText">Tap to return to call</span><button type="button" class="ibtn sm" id="miniMic" title="Mute">' + ICON.mic + '</button><button type="button" class="ibtn sm red" id="miniEnd" title="End call">' + ICON.end + '</button></div>'
     + '<div class="top"><button type="button" class="ibtn" id="minBtn" title="Minimise">' + ICON.min + '</button><div class="who"><b><span id="peerName"></span><span id="peerMute" hidden> 🔇</span></b><span id="sub">Connecting…</span></div><button type="button" class="ibtn" id="addBtn" title="Add people">' + ICON.add + '</button></div>'
     + '<div id="remote" data-n="0"></div>'
-    + (video ? '<div id="selfWin" class="selfwin mirror"><video id="selfVid" autoplay playsinline muted></video><span id="selfMute" hidden>🔇</span><button type="button" class="ibtn" id="flipBtn" title="Flip camera">' + ICON.flip + '</button></div>' : '<div id="selfWin" hidden><video id="selfVid" muted></video><span id="selfMute" hidden></span><button type="button" id="flipBtn" hidden></button></div>')
+    + (video ? '<div id="selfWin" class="selfwin mirror"><video id="selfVid" autoplay playsinline muted></video><span id="selfMute" hidden>🔇</span><button type="button" class="ibtn" id="flipBtn" title="Flip camera">' + ICON.flip + '</button></div>' : '<div id="selfWin" class="selfwin mirror" hidden><video id="selfVid" autoplay playsinline muted></video><span id="selfMute" hidden>🔇</span><button type="button" class="ibtn" id="flipBtn" title="Flip camera">' + ICON.flip + '</button></div>')
     + '<div id="toast"></div>'
     + '<div id="shareBar" hidden><span>You’re sharing your screen</span><button type="button" id="stopShare">Stop</button></div>'
-    + '<div id="moreMenu" hidden><button type="button" class="row" id="inviteMenu">Add people to the call</button><button type="button" class="row" id="shareBtn">Share your screen</button>' + (data.host && data.group ? '<button type="button" class="row" id="endAllBtn">End call for everyone</button>' : '<button type="button" class="row" id="endAllBtn" hidden>End call for everyone</button>')
+    + '<div id="moreMenu" hidden><button type="button" class="row" id="inviteMenu">Add people to the call</button><button type="button" class="row" id="shareBtn">Share your screen</button><button type="button" class="row" id="popBtn">Pop out video window</button>' + (data.host && data.group ? '<button type="button" class="row" id="endAllBtn">End call for everyone</button>' : '<button type="button" class="row" id="endAllBtn" hidden>End call for everyone</button>')
     + '<label>Microphone<select id="audioDevice"><option value="">Default</option></select></label>' + (video ? '<label>Camera<select id="videoDevice"><option value="">Default</option></select></label>' : '<select id="videoDevice" hidden></select>') + '</div>'
-    + '<div class="pill"><button type="button" class="ibtn" id="moreBtn" title="More">' + ICON.more + '</button>' + (video ? '<button type="button" class="ibtn" id="camBtn" title="Camera">' + ICON.cam + '</button>' : '<button type="button" class="ibtn" id="camBtn" hidden></button>')
+    + '<div class="pill"><button type="button" class="ibtn" id="moreBtn" title="More">' + ICON.more + '</button><button type="button" class="ibtn" id="shareQuick" title="Share your screen">' + ICON.share + '</button>' + (video ? '<button type="button" class="ibtn" id="camBtn" title="Camera">' + ICON.cam + '</button>' : '<button type="button" class="ibtn" id="camBtn" title="Camera" hidden>' + ICON.cam + '</button>')
     + '<button type="button" class="ibtn" id="micBtn" title="Mute">' + ICON.mic + '</button><button type="button" class="ibtn red" id="endBtn" title="End call">' + ICON.end + '</button></div>'
     + '<div id="failed" hidden><h2>Couldn’t make call</h2><p id="whyText"></p><div class="btnrow"><button type="button" class="tbtn" id="cancelBtn">Cancel</button><button type="button" class="tbtn go" id="againBtn">Call again</button></div></div>'
     + '<div id="inviteBox" hidden><div class="card"><b>Add people</b><div id="choices"></div><div class="btnrow"><button type="button" class="tbtn" id="cancelInvites">Cancel</button><button type="button" class="tbtn go" id="sendInvites">Add</button></div></div></div>'
