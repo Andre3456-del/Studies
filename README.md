@@ -237,6 +237,7 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - What an admin posts belongs to them: other admins, including the central admin, cannot see, edit or delete another admin's news or uploads. Student news stays with the news admins, and uploads made before this rule existed stay with the full admins.
 - **Admin team** (central admin only): appoint someone by @username or email with exactly the role you want (partial, files, news, login help, observer, full admin), change it later, or set them back to a normal member.
 - **Site structure** (central admin only): rename faculties, rename departments or move them to another faculty (students, uploads and news reach follow the new name), add/rename institutions, and add/rename/merge/delete lecturer courses. Opening the lecturer dashboard as the central admin goes straight to the course editor.
+- A course's shared folder (what lecturers post to it) is visible only to verified lecturers who teach that same course. Students and admins, the central admin included, cannot open it. The central admin is treated as a student unless he registers a lecturer account. Students still see lecturer material through the normal pages meant for their department and level.
 - The side menu scrolls. On laptops and desktops it also has up/down buttons and works with the mouse wheel and the arrow, Page Up/Down, Home and End keys; phones just swipe.
 
 ## Other email options

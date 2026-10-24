@@ -3189,10 +3189,10 @@ app.get('/lecturer/course/:id', (req, res) => {
   if (!req.user) return res.redirect('/login');
   const course = db.prepare('SELECT * FROM courses WHERE id=?').get(req.params.id);
   if (!course) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
-  if (req.user.is_lecturer) {
-    const owns = db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(req.user.id, course.id);
-    if (!owns && !can.full(req.user)) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
-  } else if (!can.full(req.user)) return res.status(404).send(layout('Not found', '<p><a href="/dashboard">Back</a></p>', req.user));
+  // What lecturers post to a course is for the lecturers who teach that same course (verified ones) and nobody else -- not students, and not admins
+  // (the central admin is a student unless he registers as a lecturer). Students reach lecturer material through the normal pages meant for them.
+  const owns = req.user.is_lecturer && req.user.lecturer_status === 'approved' && db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(req.user.id, course.id);
+  if (!owns) return res.status(404).send(layout('Not found', `<p><a href="${req.user.is_lecturer ? '/lecturer' : '/dashboard'}">Back</a></p>`, req.user));
   const rows = db.prepare(`SELECT p.*, u.name AS author_name, u.university AS author_university FROM pages p JOIN users u ON u.id=p.author_id WHERE p.course_id=? ORDER BY u.university, u.name, p.id DESC`).all(course.id);
   const byUni = {};
   rows.forEach(r => { (byUni[r.author_university] = byUni[r.author_university] || {})[r.author_name] = (byUni[r.author_university][r.author_name] || []).concat(r); });
@@ -3201,7 +3201,7 @@ ${Object.keys(byUni[uni]).sort().map(name => `<details style="margin:8px 0 0 10p
 ${byUni[uni][name].map(p => { const [icon, label] = KIND_META[p.kind] || KIND_META.html; return `<p style="margin:6px 0 6px 14px"><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a> <span class="mut">${label}</span></p>`; }).join('')}
 </details>`).join('')}
 </details>`).join('') || '<p class="mut">No uploads for this course yet.</p>';
-  res.send(layout(course.name, `<p class="mut"><a href="${req.user.is_lecturer ? '/lecturer' : '/admin'}">&larr; Back</a></p><h1>${esc(course.name)}</h1>${html}`, req.user));
+  res.send(layout(course.name, `<p class="mut"><a href="/lecturer">&larr; Back</a></p><h1>${esc(course.name)}</h1>${html}`, req.user));
 });
 app.get('/api/username/check', (req, res) => {
   if (!req.user) return res.sendStatus(401);
@@ -4452,7 +4452,7 @@ ${depts.filter(d => d.faculty === f).map(d => `<div style="margin-top:10px;paddi
     + (strays.length ? `<p class="mut">Typed in by members and not on the list:</p>${strays.map(x => `<div class="card row"><span>${esc(x.n)} <span class="mut">(${x.c})</span></span><form method="post" action="/admin/structure/institution/add"><input type="hidden" name="name" value="${esc(x.n)}"><button class="link">Add to list</button></form></div>`).join('')}` : '');
   const courses = db.prepare('SELECT c.id,c.name,(SELECT COUNT(*) FROM lecturer_courses lc WHERE lc.course_id=c.id) l,(SELECT COUNT(*) FROM pages p WHERE p.course_id=c.id) p FROM courses c ORDER BY c.name').all();
   const courseHtml = courses.map(c => `<div class="card"><form method="post" action="/admin/structure/course/${c.id}/rename" class="row" style="gap:6px"><input name="name" value="${esc(c.name)}" maxlength="120" required style="flex:1;min-width:180px"><button>Rename</button></form>
-<span class="mut" style="font-size:12px">${c.l} lecturer${c.l === 1 ? '' : 's'} &middot; ${c.p} upload${c.p === 1 ? '' : 's'} &middot; <a href="/lecturer/course/${c.id}">Open folder</a></span>
+<span class="mut" style="font-size:12px">${c.l} lecturer${c.l === 1 ? '' : 's'} &middot; ${c.p} upload${c.p === 1 ? '' : 's'}</span>
 <div class="row" style="gap:6px;margin-top:6px"><form method="post" action="/admin/structure/course/${c.id}/merge" class="row" style="gap:6px"><select name="into" style="width:auto"><option value="">Move everything into&hellip;</option>${courses.filter(o => o.id !== c.id).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select><button class="link">Merge</button></form>
 <form method="post" action="/admin/structure/course/${c.id}/delete" onsubmit="return confirm('Delete this course? Lecturers lose it from their list and its uploads become unfiled.')"><button class="link">Delete</button></form></div></div>`).join('');
   res.send(layout('Site structure', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Site structure</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${facList}
