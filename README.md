@@ -240,6 +240,12 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - A course's shared folder (what lecturers post to it) is visible only to verified lecturers who teach that same course. Students and admins, the central admin included, cannot open it. The central admin is treated as a student unless he registers a lecturer account. Students still see lecturer material through the normal pages meant for their department and level.
 - The side menu scrolls. On laptops and desktops it also has up/down buttons and works with the mouse wheel and the arrow, Page Up/Down, Home and End keys; phones just swipe.
 
+## Removing people completely, and security
+
+- **Remove user** wipes the person from everywhere: chats and what they sent, friendships, groups they started (handed to the oldest member, or closed if empty), uploads, payments, calls, notifications, sign-ins and the Continue-with-Google link. Signing in with Google again afterwards creates a brand-new account. Old id numbers are never reused, and start-up sweeps away leftovers from earlier removals.
+- **Lecturer portal** shows only lecturer uploads: your own and those of colleagues teaching the same course. Student and admin uploads are never shown to lecturers.
+- **Security**: safety headers and click-jacking protection on every page; forged requests from other websites are refused; sign-in keys are stored only as one-way fingerprints; wrong-password lockout per account and per connection; limits on sign-ups and reset requests; easy-to-guess passwords refused; uploaded web pages run in a sealed box and chat files can never run as pages.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.

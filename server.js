@@ -141,6 +141,32 @@ if (!existingAdmin) {
 
 const app = express();
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+// Safety headers on every response: the site cannot be shown inside someone else's page (click-jacking), browsers
+// must not guess file types, the address of this site is not leaked to other sites, and HTTPS is remembered.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(self), usb=(), serial=()');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+  if (process.env.NODE_ENV === 'production' || req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+// Forged-request shield: a browser that is changing something (POST/PUT/PATCH/DELETE) from a different website,
+// or from a sandboxed page, is turned away. Phones and apps that send no Origin at all are unaffected.
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const o = req.headers.origin, site = req.headers['sec-fetch-site'];
+  if (site === 'cross-site') return res.status(403).type('text').send('Blocked: this request came from another website.');
+  if (o) {
+    let ok = false;
+    try { const h = new URL(o).host, mine = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim(); ok = h === mine; if (!ok && process.env.BASE_URL) ok = h === new URL(process.env.BASE_URL).host; } catch (e) { ok = false; }
+    if (!ok) return res.status(403).type('text').send('Blocked: this request came from another website.');
+  }
+  next();
+});
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json({ limit: '20kb' }));
 
@@ -321,6 +347,9 @@ function uniqueSlug(base) {
   while (db.prepare('SELECT 1 FROM pages WHERE slug=?').get(s)) s = `${base}-${i++}`;
   return s;
 }
+const COMMON_PW = new Set(['password','password1','password12','password123','12345678','123456789','1234567890','qwertyuiop','qwerty123','11111111','00000000','iloveyou','abc12345','abcd1234','admin123','welcome1','welcome123','letmein1','studieshub','studies123','football1','whatever1','passw0rd','p@ssw0rd','nigeria123','unilag123','changeme']);
+const weakPw = (pw, email) => { const l = String(pw).toLowerCase(); return COMMON_PW.has(l) || /^(.)\1+$/.test(l) || (email && l === String(email).toLowerCase()) || (email && l === String(email).split('@')[0].toLowerCase()); };
+const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 12);
 const fails = new Map();
 const recent = ip => (fails.get(ip) || []).filter(t => Date.now() - t < 9e5);
 const tooMany = ip => recent(ip).length >= 10;
@@ -414,19 +443,122 @@ async function sendSafely(req, u) {
   catch (e) { console.error('Verification email failed:', e.message); return 'fail'; }
 }
 
+// The browser keeps the real session key; the database keeps only a one-way fingerprint of it, so even someone who
+// got a copy of the database could not sign in as anybody.
+const sidKey = raw => crypto.createHash('sha256').update('sid:' + String(raw)).digest('hex');
+for (const r of db.prepare('SELECT id FROM sessions WHERE length(id)<64').all()) db.prepare('UPDATE OR REPLACE sessions SET id=? WHERE id=?').run(sidKey(r.id), r.id);
+
+// ---------- removing a person completely ----------
+// Everything that belongs to or mentions a person is wiped in one go: chats, friendships, groups they started,
+// uploads, payments, calls, notifications, sign-ins (including Continue with Google, which is just their email on
+// their account). Their old id number is never handed out again, and anything an earlier removal left behind is
+// swept at start-up, so a new person can never inherit someone else's friends or messages.
+function dbRun(sql, ...a) { try { return db.prepare(sql).run(...a); } catch (e) { if (!/no such (table|column)/i.test(e.message)) throw e; } }
+function dbAll(sql, ...a) { try { return db.prepare(sql).all(...a); } catch (e) { if (!/no such (table|column)/i.test(e.message)) throw e; return []; } }
+function deleteMessageRows(ids) {
+  for (let i = 0; i < ids.length; i += 400) {
+    const part = ids.slice(i, i + 400), q = part.map(() => '?').join(',');
+    for (const t of ['message_reads', 'message_hidden', 'message_stars', 'message_reactions']) dbRun(`DELETE FROM ${t} WHERE message_id IN (${q})`, ...part);
+    dbRun(`UPDATE messages SET reply_to_id=NULL WHERE reply_to_id IN (${q})`, ...part);
+    dbRun(`DELETE FROM messages WHERE id IN (${q})`, ...part);
+  }
+}
+function deleteGroupEntirely(gid) {
+  deleteMessageRows(dbAll('SELECT id FROM messages WHERE group_id=?', gid).map(r => r.id));
+  dbRun('DELETE FROM group_members WHERE group_id=?', gid);
+  dbRun("DELETE FROM chat_prefs WHERE kind='group' AND target_id=?", gid);
+  for (const c of dbAll('SELECT id FROM call_sessions WHERE group_id=?', gid)) { dbRun('DELETE FROM call_participants WHERE call_id=?', c.id); dbRun('DELETE FROM call_sessions WHERE id=?', c.id); }
+  dbRun('DELETE FROM groups WHERE id=?', gid);
+}
+function wipeUserData(id) {
+  id = Number(id);
+  deleteMessageRows(dbAll('SELECT id FROM messages WHERE sender_id=? OR (recipient_id=? AND group_id IS NULL)', id, id).map(r => r.id));
+  for (const t of ['message_reads', 'message_hidden', 'message_stars', 'message_reactions']) dbRun(`DELETE FROM ${t} WHERE user_id=?`, id);
+  dbRun('DELETE FROM friendships WHERE requester_id=? OR addressee_id=?', id, id);
+  for (const g of dbAll('SELECT id FROM groups WHERE created_by=?', id)) { // a group they started carries on with its oldest other member in charge, or ends if nobody is left
+    const heir = db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id!=? ORDER BY (role=\'admin\') DESC, added_at, user_id LIMIT 1').get(g.id, id);
+    if (heir) { db.prepare('UPDATE groups SET created_by=? WHERE id=?').run(heir.user_id, g.id); db.prepare("UPDATE group_members SET role='admin' WHERE group_id=? AND user_id=?").run(g.id, heir.user_id); }
+  }
+  dbRun('DELETE FROM group_members WHERE user_id=?', id);
+  for (const g of dbAll('SELECT g.id FROM groups g WHERE NOT EXISTS (SELECT 1 FROM group_members m WHERE m.group_id=g.id)')) deleteGroupEntirely(g.id);
+  dbRun("DELETE FROM chat_prefs WHERE user_id=? OR (kind='dm' AND target_id=?)", id, id);
+  dbRun('DELETE FROM push_subscriptions WHERE user_id=?', id);
+  dbRun('DELETE FROM stickers WHERE user_id=?', id);
+  for (const c of dbAll('SELECT id FROM call_sessions WHERE created_by=?', id)) { dbRun('DELETE FROM call_participants WHERE call_id=?', c.id); dbRun('DELETE FROM call_sessions WHERE id=?', c.id); }
+  dbRun('DELETE FROM call_participants WHERE user_id=? OR invited_by=?', id, id);
+  dbRun('DELETE FROM purchases WHERE page_id IN (SELECT id FROM pages WHERE author_id=?)', id);
+  dbRun('DELETE FROM pages WHERE author_id=?', id);
+  dbRun('UPDATE pages SET admin_id=NULL WHERE admin_id=?', id);
+  dbRun('DELETE FROM purchases WHERE user_id=?', id);
+  dbRun('DELETE FROM lecturer_courses WHERE lecturer_id=?', id);
+  dbRun('UPDATE news SET author_id=NULL WHERE author_id=?', id);
+  dbRun('UPDATE news SET approver_id=NULL WHERE approver_id=?', id);
+  dbRun('DELETE FROM sponsor_posts WHERE user_id=?', id);
+  dbRun('DELETE FROM level_log WHERE by_user=?', id);
+  dbRun('UPDATE users SET position_approver_id=NULL WHERE position_approver_id=?', id);
+  dbRun('DELETE FROM sessions WHERE user_id=?', id);
+}
+function setIdFloor(n) {
+  const cur = Number((db.prepare("SELECT value FROM secrets WHERE key='user_id_floor'").get() || {}).value || 0);
+  if (n > cur) db.prepare("INSERT INTO secrets(key,value) VALUES('user_id_floor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(n));
+}
+function purgeUser(id) {
+  id = Number(id);
+  const u = db.prepare('SELECT id,role FROM users WHERE id=?').get(id);
+  if (!u || u.role === 'admin') return false;
+  db.exec('BEGIN');
+  try {
+    wipeUserData(id);
+    db.prepare('DELETE FROM users WHERE id=?').run(id);
+    setIdFloor(id);
+    db.exec('COMMIT');
+  } catch (e) { try { db.exec('ROLLBACK'); } catch (_) {} throw e; }
+  return true;
+}
+// A brand-new person always gets a number nobody has ever had, and starts with nothing attached to it.
+function insertUser(cols, vals) {
+  const floor = Number((db.prepare("SELECT value FROM secrets WHERE key='user_id_floor'").get() || {}).value || 0);
+  const id = Math.max(floor, db.prepare('SELECT COALESCE(MAX(id),0) m FROM users').get().m) + 1;
+  setIdFloor(id);
+  wipeUserData(id);
+  db.prepare(`INSERT INTO users(id,${cols}) VALUES(?,${vals.map(() => '?').join(',')})`).run(id, ...vals);
+  return id;
+}
+// Start-up clean-up: finds anything left behind by people removed in the past (before this existed) and deletes it,
+// including chats and friendships that are older than the account they have ended up attached to.
+function sweepRemnants() {
+  const exists = new Set(db.prepare('SELECT id FROM users').all().map(r => r.id));
+  const ghosts = new Set();
+  for (const r of dbAll('SELECT DISTINCT sender_id a FROM messages UNION SELECT DISTINCT recipient_id FROM messages WHERE group_id IS NULL UNION SELECT requester_id FROM friendships UNION SELECT addressee_id FROM friendships UNION SELECT user_id FROM group_members UNION SELECT user_id FROM purchases UNION SELECT user_id FROM push_subscriptions UNION SELECT user_id FROM chat_prefs UNION SELECT lecturer_id FROM lecturer_courses UNION SELECT user_id FROM stickers UNION SELECT user_id FROM sponsor_posts')) if (r.a != null && !exists.has(r.a)) ghosts.add(r.a);
+  for (const r of dbAll('SELECT DISTINCT author_id a FROM pages WHERE author_id IS NOT NULL')) if (!exists.has(r.a)) ghosts.add(r.a);
+  let floor = 0;
+  for (const g of ghosts) { wipeUserData(g); floor = Math.max(floor, g); }
+  for (const r of dbAll('SELECT MAX(sender_id) a FROM messages UNION SELECT MAX(requester_id) FROM friendships UNION SELECT MAX(addressee_id) FROM friendships UNION SELECT MAX(id) FROM users')) if (r.a) floor = Math.max(floor, r.a);
+  setIdFloor(floor);
+  const early = new Set();
+  for (const r of dbAll("SELECT m.id FROM messages m JOIN users u ON u.id=m.sender_id WHERE u.created_at IS NOT NULL AND datetime(m.created_at) < datetime(u.created_at)")) early.add(r.id);
+  for (const r of dbAll("SELECT m.id FROM messages m JOIN users u ON u.id=m.recipient_id WHERE m.group_id IS NULL AND u.created_at IS NOT NULL AND datetime(m.created_at) < datetime(u.created_at)")) early.add(r.id);
+  deleteMessageRows([...early]);
+  dbRun("DELETE FROM friendships WHERE id IN (SELECT f.id FROM friendships f JOIN users u ON u.id IN (f.requester_id,f.addressee_id) WHERE u.created_at IS NOT NULL AND datetime(f.created_at) < datetime(u.created_at))");
+  dbRun("DELETE FROM group_members WHERE rowid IN (SELECT gm.rowid FROM group_members gm JOIN users u ON u.id=gm.user_id WHERE u.created_at IS NOT NULL AND gm.added_at IS NOT NULL AND datetime(gm.added_at) < datetime(u.created_at))");
+  dbRun("DELETE FROM purchases WHERE id IN (SELECT p.id FROM purchases p JOIN users u ON u.id=p.user_id WHERE u.created_at IS NOT NULL AND datetime(p.created_at) < datetime(u.created_at))");
+  for (const g of dbAll('SELECT g.id FROM groups g WHERE NOT EXISTS (SELECT 1 FROM group_members m WHERE m.group_id=g.id)')) deleteGroupEntirely(g.id);
+  if (ghosts.size || early.size) console.log(`Clean-up: removed leftovers of ${ghosts.size} deleted account(s) and ${early.size} message(s) that pre-dated their owner.`);
+}
 function startSession(res, userId) {
-  const sid = crypto.randomBytes(24).toString('hex');
-  db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(sid, userId, Date.now() + 7 * 864e5);
-  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+  const sid = crypto.randomBytes(32).toString('hex');
+  db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(sidKey(sid), userId, Date.now() + 7 * 864e5);
+  const secure = process.env.NODE_ENV === 'production' || !!(res.req && res.req.secure);
+  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secure ? '; Secure' : ''}`);
 }
 
 app.get('/health', (req, res) => res.type('text').send('ok'));
 
 app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
-  req.sid = c ? c.slice(4) : null;
+  req.sid = c && /^[0-9a-f]{48,64}$/.test(c.slice(4)) ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(req.sid, Date.now()) || null
+    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -516,6 +648,12 @@ function departmentCheckboxes(selectedList) {
 // An upload is either general (no department, no level), or aimed at one or more departments and/or one level.
 function sortedFor(page, user) {
   if (can.pages(user)) return true;
+  // A lecturer sees only lecturer uploads: their own and those of colleagues teaching the same course. Anything a
+  // student (or the admin acting as a student) uploads is never shown in the lecturer portal.
+  if (user && user.is_lecturer) {
+    if (page.author_id != null && page.author_id === user.id) return true;
+    return page.course_id != null && user.lecturer_status === 'approved' && !!db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(user.id, page.course_id);
+  }
   if (page.dept == null && page.level == null) return true;
   if (!user) return false;
   if (page.dept != null && !deptListOf(page).includes(user.department)) return false;
@@ -524,7 +662,7 @@ function sortedFor(page, user) {
 }
 // Everyone who should be told about a new upload.
 function audienceFor(page) {
-  const where = ["role='user'", 'verified=1'], args = [];
+  const where = ["role='user'", 'verified=1', 'is_lecturer=0'], args = [];
   const list = page.dept != null ? deptListOf(page) : [];
   if (list.length) { where.push(`department IN (${list.map(() => '?').join(',')})`); args.push(...list); }
   if (page.level != null) { where.push('level=?'); args.push(page.level); }
@@ -1244,7 +1382,7 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD })));
 
 app.get('/browse', (req, res) => {
-  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
+  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level,author_id,course_id FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
   const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
   res.send(layout('All pages', `<h1>All pages</h1>${grid}`, req.user));
 });
@@ -2635,6 +2773,11 @@ function notifyNewMessage(sender, target, preview, messageId) {
 
 // Sends bytes with Range support -- iPhones refuse to play audio without it.
 function sendBytes(req, res, buf, mime) {
+  // Only ordinary pictures, video, audio and PDFs are shown as such; anything else (HTML, SVG, scripts) is sent as a
+  // plain download and fenced off, so a file someone sends in chat can never run on the site.
+  const okType = /^(image\/(png|jpe?g|gif|webp|avif|bmp)|video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+|application\/pdf)(;.*)?$/i.test(String(mime || ''));
+  mime = okType ? mime : 'application/octet-stream';
+  if (!/^application\/pdf/i.test(mime)) res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   res.setHeader('Content-Type', mime || 'application/octet-stream');
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'private, max-age=3600');
@@ -3319,6 +3462,8 @@ function preparePage(html, home) {
   const add = [];
   if (!/<meta[^>]+charset/i.test(h)) add.push('<meta charset="utf-8">');
   if (!/<meta[^>]+name\s*=\s*["']?viewport/i.test(h)) add.push('<meta name="viewport" content="width=device-width, initial-scale=1">');
+  const memShim = '<script>try{localStorage.getItem("x")}catch(e){var mk=function(){var d={};return{getItem:function(k){return k in d?d[k]:null},setItem:function(k,v){d[k]=String(v)},removeItem:function(k){delete d[k]},clear:function(){d={}},key:function(i){return Object.keys(d)[i]||null},get length(){return Object.keys(d).length}}};try{Object.defineProperty(window,"localStorage",{value:mk()});Object.defineProperty(window,"sessionStorage",{value:mk()})}catch(_){}}</script>';
+  add.push(memShim);
   if (add.length) {
     const tags = add.join('');
     if (/<head[^>]*>/i.test(h)) h = h.replace(/<head[^>]*>/i, m => m + tags);
@@ -3382,7 +3527,11 @@ app.get('/p/:slug', (req, res) => {
     return res.send(layout(p.title, paywallBody(p, req), req.user));
   }
   res.setHeader('Cache-Control', 'private, no-cache');
-  if (p.kind === 'html' || p.kind === 'cbt') return res.type('html').send(preparePage(p.html, '/'));
+  if (p.kind === 'html' || p.kind === 'cbt') {
+    // Uploaded pages run in a sealed box: they work normally but cannot reach this site's sign-in or act as the person viewing.
+    res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');
+    return res.type('html').send(preparePage(p.html, '/'));
+  }
   if (p.kind === 'video') {
     return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
   }
@@ -3420,8 +3569,10 @@ app.get('/p/:slug/raw', (req, res) => {
   const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
   if (!p || !p.file_data || !sortedFor(p, req.user)) return res.status(404).send('Not found');
   if (!canViewPage(p, req.user)) return res.status(p.members_only && !p.paid ? 401 : 402).send('Not available');
-  res.setHeader('Content-Type', p.file_mime || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `${p.kind === 'pdf' ? 'inline' : 'attachment'}; filename="${(p.file_name || p.slug).replace(/"/g, '')}"`);
+  const safeMime = /^(application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.[a-z.]+|image\/(png|jpe?g|gif|webp))$/i.test(String(p.file_mime || ''));
+  res.setHeader('Content-Type', safeMime ? p.file_mime : 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', `${p.kind === 'pdf' && safeMime ? 'inline' : 'attachment'}; filename="${(p.file_name || p.slug).replace(/"/g, '')}"`);
   res.send(Buffer.from(p.file_data));
 });
 
@@ -3631,16 +3782,18 @@ app.post('/admin/sponsors/:id/reject', admin, (req, res) => {
 
 app.get('/signup', (req, res) => res.send(authForm('signup')));
 app.post('/signup', async (req, res) => {
+  if (limited('signup-ip:' + req.ip, 12, 3600e3)) return res.status(429).send('Too many sign-ups from this connection. Please try again later.');
   const name = String(req.body.name || '').trim().slice(0, 80);
   const email = String(req.body.email || '').trim().toLowerCase();
   const pw = String(req.body.password || '');
   const bad = m => res.status(400).send(authForm('signup', m));
   if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
   if (pw.length < 8) return bad('Password must be at least 8 characters.');
+  if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');
   let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
   if (u && u.verified) return bad('That email is already registered. Try logging in.');
   if (!u) { // an existing unverified account is never modified here, only re-sent a link
-    const id = db.prepare('INSERT INTO users(name,email,hash) VALUES(?,?,?)').run(name, email, bcrypt.hashSync(pw, 12)).lastInsertRowid;
+    const id = insertUser('name,email,hash', [name, email, bcrypt.hashSync(pw, 12)]);
     u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
   }
   if ((await sendSafely(req, u)) === 'fail') return bad("We couldn't send the verification email. Please try again in a minute.");
@@ -3677,6 +3830,7 @@ app.get('/lecturer/signup', (req, res) => res.send(layout('Lecturer sign up', `<
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
 <p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`, null, { footer: true })));
 app.post('/lecturer/signup', async (req, res) => {
+  if (limited('signup-ip:' + req.ip, 12, 3600e3)) return res.status(429).send('Too many sign-ups from this connection. Please try again later.');
   const name = String(req.body.name || '').trim().slice(0, 80);
   const email = String(req.body.email || '').trim().toLowerCase();
   const pw = String(req.body.password || '');
@@ -3684,10 +3838,11 @@ app.post('/lecturer/signup', async (req, res) => {
 <form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required><button>Create lecturer account</button></form></div>`, null, { footer: true }));
   if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
   if (pw.length < 8) return bad('Password must be at least 8 characters.');
+  if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');
   let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
   if (u && u.verified) return bad('That email is already registered. Try logging in.');
   if (!u) {
-    const id = db.prepare('INSERT INTO users(name,email,hash,is_lecturer) VALUES(?,?,?,1)').run(name, email, bcrypt.hashSync(pw, 12)).lastInsertRowid;
+    const id = insertUser('name,email,hash,is_lecturer', [name, email, bcrypt.hashSync(pw, 12), 1]);
     u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
   }
   if ((await sendSafely(req, u)) === 'fail') return bad("We couldn't send the verification email. Please try again in a minute.");
@@ -3698,12 +3853,16 @@ app.get('/login', (req, res) => res.send(authForm('login', '', safeNext(req.quer
 app.post('/login', (req, res) => {
   const next = safeNext(req.body.next);
   if (tooMany(req.ip)) return res.status(429).send(authForm('login', 'Too many attempts. Try again in 15 minutes.', next));
-  const u = db.prepare('SELECT * FROM users WHERE email=?').get(String(req.body.email || '').trim().toLowerCase());
+  const who = String(req.body.email || '').trim().toLowerCase().slice(0, 200), acct = 'acct:' + who;
+  if (tooMany(acct)) return res.status(429).send(authForm('login', 'Too many attempts on this account. Try again in 15 minutes, or reset your password.', next));
+  const u = db.prepare('SELECT * FROM users WHERE email=?').get(who);
+  if (!u) bcrypt.compareSync(String(req.body.password || ''), DUMMY_HASH); // same waiting time whether or not the email exists
   if (!u || !bcrypt.compareSync(String(req.body.password || ''), u.hash)) {
-    noteFail(req.ip);
+    noteFail(req.ip); noteFail(acct);
     return res.status(401).send(authForm('login', 'Wrong email or password.', next));
   }
   if (!u.verified) return res.status(403).send(notice('Verify your email', 'Your email is not verified yet. Check your inbox for the link, or request a new one.', resendForm(u.email)));
+  fails.delete('acct:' + who);
   startSession(res, u.id);
   res.redirect(next || '/');
 });
@@ -3726,6 +3885,7 @@ app.post('/resend', async (req, res) => {
 // ---------- forgot password: 6-digit email code (same flow for every account, admin included) ----------
 app.get('/forgot', (req, res) => res.send(forgotForm()));
 app.post('/forgot', async (req, res) => {
+  if (limited('forgot-ip:' + req.ip, 10, 15 * 60e3)) return res.status(429).send('Too many requests. Please try again in a few minutes.');
   const email = String(req.body.email || '').trim().toLowerCase();
   if (limited('forgot-ip:' + req.ip, 8, 15 * 60e3)) return res.status(429).send(forgotForm('Too many requests. Try again in a few minutes.'));
   const u = email && db.prepare('SELECT * FROM users WHERE email=?').get(email);
@@ -3744,6 +3904,7 @@ app.post('/reset', (req, res) => {
   const bad = m => res.status(400).send(resetForm(email, m));
   if (limited('reset-ip:' + req.ip, 10, 15 * 60e3)) return res.status(429).send(resetForm(email, 'Too many attempts. Try again in a few minutes.'));
   if (pw.length < 8) return bad('Password must be at least 8 characters.');
+  if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');
   const u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
   if (!u || !u.reset_hash || !u.reset_expires) return bad('Invalid or expired code.');
   const clear = () => db.prepare('UPDATE users SET reset_hash=NULL, reset_expires=NULL, reset_attempts=0 WHERE id=?').run(u.id);
@@ -3786,7 +3947,7 @@ app.get('/auth/google/callback', async (req, res) => {
     const asLecturer = (req.headers.cookie || '').split(';').map(x => x.trim()).some(x => x === 'gaslecturer=1');
     let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
     if (!u) {
-      const id = db.prepare('INSERT INTO users(name,email,hash,verified,is_lecturer) VALUES(?,?,?,1,?)').run(String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), asLecturer ? 1 : 0).lastInsertRowid;
+      const id = insertUser('name,email,hash,verified,is_lecturer', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, asLecturer ? 1 : 0]);
       u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
     } else if (!u.verified) { // drop any password someone set before the real owner proved the email
       db.prepare('UPDATE users SET verified=1, hash=? WHERE id=?').run(rnd(), u.id);
@@ -3834,14 +3995,15 @@ app.post('/api/chat', async (req, res) => {
     .slice(-10).map(m => ({ role: m.role, content: m.content.slice(0, 1000) }));
   while (msgs.length && msgs[0].role !== 'user') msgs.shift();
   if (!msgs.length || msgs[msgs.length - 1].role !== 'user') return res.status(400).json({ error: 'Send a question first.' });
-  const pages = db.prepare('SELECT slug,title FROM pages ORDER BY id DESC LIMIT 50').all();
+  const pages = db.prepare('SELECT slug,title,dept,level,author_id,course_id FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, req.user)).slice(0, 50);
   const system = `You are the assistant for Studies Hub, a website that hosts study pages. Answer clearly and briefly in plain language, and say so when you are not sure. Pages currently on the site: ${pages.map(p => `${p.title} (/p/${p.slug})`).join(', ') || 'none yet'}. Do not invent pages or features that are not listed.`;
   try { res.json({ reply: await askAI(msgs, system) }); }
   catch (e) { console.error('AI error:', e.message); res.status(502).json({ error: 'The assistant could not answer right now. Please try again.' }); }
 });
 
 app.post('/logout', (req, res) => {
-  if (req.sid) db.prepare('DELETE FROM sessions WHERE id=?').run(req.sid);
+  if (req.sid) db.prepare('DELETE FROM sessions WHERE id=?').run(sidKey(req.sid));
+  res.setHeader('Clear-Site-Data', '"cache"'); // nothing from this account stays readable in the browser on a shared phone
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
   res.redirect('/');
 });
@@ -3863,7 +4025,7 @@ function previewTile(p) {
 // "Available" = free to view plus anything they've paid for; "Locked" = pay-to-view CBT they haven't unlocked yet.
 function dashboardBody(req) {
   const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?'), staff = can.pages(u);
-  const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
+  const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
   const isLocked = p => !!p.paid && !staff && !hasPurchased(u.id, p.id);
   const locked = rows.filter(isLocked), available = rows.filter(p => !isLocked(p));
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
@@ -4368,9 +4530,12 @@ app.post('/admin/users/:id/signout', supportAdmin, (req, res) => {
   res.redirect(back(`${t.name} was signed out everywhere.`));
 });
 app.post('/admin/users/:id/delete', admin, (req, res) => {
-  db.prepare("DELETE FROM sessions WHERE user_id=?").run(req.params.id);
-  db.prepare("DELETE FROM users WHERE id=? AND role!='admin'").run(req.params.id);
-  res.redirect(back('User removed.'));
+  const t = db.prepare('SELECT id,name,role FROM users WHERE id=?').get(Number(req.params.id));
+  if (!t) return res.redirect(back('That person is already gone.'));
+  if (t.role === 'admin') return res.redirect(back('The main admin account cannot be removed.'));
+  purgeUser(t.id);
+  console.log(`Audit: ${req.user.email} removed account #${t.id} completely`);
+  res.redirect(back(`${t.name} was removed completely: chats, friends, uploads, sign-ins and the Google link are all gone.`));
 });
 // Only the central admin (the ADMIN_EMAIL account) can create or change any kind of admin (files, news, login-help, partial, full),
 // and only for users who have already registered.
@@ -4546,4 +4711,5 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
+sweepRemnants();
 app.listen(PORT, () => console.log(`Studies Hub running on http://localhost:${PORT}`));
