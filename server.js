@@ -1234,7 +1234,6 @@ const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
 ] : [
   { href: '/dashboard', icon: '📊', label: 'Dashboard' },
   { href: '/news', icon: '📰', label: 'News' },
-  { href: '/browse', icon: '🌐', label: 'Browse pages' },
   { href: '/chat', icon: '💬', label: 'Chat', badge },
   ...(can.anyAdmin(user) || canPromote(user) ? [{ href: '/admin', icon: '🛠️', label: 'Admin' }] : []),
 ]) : [
