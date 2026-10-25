@@ -1239,7 +1239,6 @@ const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
   ...(can.anyAdmin(user) || canPromote(user) ? [{ href: '/admin', icon: '🛠️', label: 'Admin' }] : []),
 ]) : [
   { href: '/', icon: '🏠', label: 'Home' },
-  { href: '/browse', icon: '🌐', label: 'Browse pages' },
   { href: '/lecturer/portal', icon: '🎓', label: 'Lecturer portal' },
 ];
 const badgeText = n => n > 15 ? '15+' : String(n);
