@@ -3320,7 +3320,7 @@ app.get('/lecturer', (req, res) => {
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
-<label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
+<label class="mut">Which departments is this for? (leave all unchecked for every department)</label><div style="max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:6px 0">${departmentCheckboxes([])}</div>
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 <button>Publish &mdash; goes live immediately</button></form>
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');function sync(){fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
@@ -3380,7 +3380,7 @@ app.get('/lecturer/pages/:id/edit', (req, res) => {
 <input name="title" value="${esc(p.title)}" required maxlength="140">
 <label class="mut">Replace the file (optional -- leave blank to keep the current one)</label>
 <input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : '.html,.htm'}">
-<label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
+<label class="mut">Which departments? (leave all unchecked for every department)</label><div style="max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:6px 0">${departmentCheckboxes(deptListOf(p))}</div>
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>
 <button>Save changes</button></form>`, req.user));
 });

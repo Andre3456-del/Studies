@@ -246,6 +246,10 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - **Lecturer portal** shows only lecturer uploads: your own and those of colleagues teaching the same course. Student and admin uploads are never shown to lecturers.
 - **Security**: safety headers and click-jacking protection on every page; forged requests from other websites are refused; sign-in keys are stored only as one-way fingerprints; wrong-password lockout per account and per connection; limits on sign-ups and reset requests; easy-to-guess passwords refused; uploaded web pages run in a sealed box and chat files can never run as pages.
 
+## The lecturer portal is separate
+
+Lecturers have their own design, log-in, sign-up, password reset, menu and pages (all under `/lecturer`), and no links into the student site. A lecturer who opens a student page is sent back to their portal. Both sides run on the same server and database, and students still see what lecturers publish.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.
