@@ -308,7 +308,7 @@ async function pumpMail() {
       const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org', link = base + (p.url || '/');
       const first = esc(String(u.name || '').trim().split(/\s+/)[0] || 'there');
       const text = `Hi ${String(u.name || '').trim().split(/\s+/)[0] || 'there'},\n\n${p.title}${p.body ? '\n' + p.body : ''}\n\nOpen it: ${link}\n\nYou get this because email alerts are on for your Studies Hub account. Turn them off: ${base}/settings/notifications`;
-      const html = `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;color:#1b2430"><p style="margin:0 0 4px;color:#5b6675;font-size:13px">Studies Hub</p><h2 style="margin:0 0 8px">${esc(p.title)}</h2><p style="margin:0 0 6px">Hi ${first},</p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block">Open on Studies Hub</a></p><p style="color:#7a8593;font-size:12px;margin-top:24px">You get this because email alerts are on for your account. <a href="${esc(base)}/settings/notifications" style="color:#7a8593">Turn them off</a>.</p></div>`;
+      const html = emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(p.title)}</h2><p style="margin:0 0 6px">Hi ${first},</p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p style="margin:0 0 20px"><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open on Studies Hub</a></p><p style="color:#7a8593;font-size:12px;margin:0">You get this because email alerts are on for your account. <a href="${esc(base)}/settings/notifications" style="color:#7a8593">Turn them off</a>.</p>`, base);
       mailCount++;
       try { await deliver(u.email, p.title, text, html); } catch (e) { console.error('Alert email failed:', e.message); }
       await new Promise(r => setTimeout(r, 700));
@@ -424,6 +424,11 @@ async function gmailSend(to, subject, text, html) {
   if (!r.ok) throw new Error(`Gmail ${r.status}: ${await r.text()}`);
 }
 
+// Every email gets the same look: the Studies Hub logo and name at the top, then the message.
+function emailShell(inner, base) {
+  base = base || process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
+  return `<div style="background:#f3f5f9;padding:24px 12px"><div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;color:#1b2430;border:1px solid #e3e8ef"><div style="padding:18px 22px;border-bottom:1px solid #e3e8ef"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:10px"><img src="${base}/logo.png" width="40" height="40" alt="Studies Hub" style="display:block;border-radius:9px;border:0"></td><td style="font-size:18px;font-weight:700">Studies Hub</td></tr></table></div><div style="padding:22px;line-height:1.55">${inner}</div></div><p style="text-align:center;color:#7a8593;font:12px system-ui,Arial,sans-serif;margin:14px 0 0">${base.replace(/^https?:\/\//, '')}</p></div>`;
+}
 async function deliver(to, subject, text, html) {
   const from = process.env.MAIL_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
   if (GOOGLE_ON && process.env.GOOGLE_REFRESH_TOKEN) {
@@ -458,14 +463,14 @@ async function sendVerification(req, user) {
   const link = `${base}/verify?token=${token}`;
   const sent = await deliver(user.email, 'Verify your email for Studies Hub',
     `Hi ${user.name},\n\nConfirm your email to activate your account:\n${link}\n\nThis link expires in 24 hours. If you did not sign up, ignore this email.`,
-    `<p>Hi ${esc(user.name)},</p><p><a href="${link}">Confirm your email</a> to activate your account.</p><p>This link expires in 24 hours. If you did not sign up, ignore this email.</p>`);
+    emailShell(`<p style="margin:0 0 12px">Hi ${esc(user.name)},</p><p style="margin:0 0 16px">Confirm your email to activate your account.</p><p style="margin:0 0 16px"><a href="${link}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600">Confirm your email</a></p><p style="color:#5b6675;font-size:13px;margin:0">This link expires in 24 hours. If you did not sign up, ignore this email.</p>`, base));
   if (!sent) console.log(`[email not configured] Verification link for ${user.email}: ${link}`);
 }
 
 async function sendResetCode(email, code) {
   const sent = await deliver(email, 'Your Studies Hub password reset code',
     `Your password reset code is ${code}. It expires in 10 minutes. If you did not ask for it, ignore this email.`,
-    `<p>Your password reset code is:</p><h2 style="letter-spacing:4px">${code}</h2><p>It expires in 10 minutes. If you did not ask for it, ignore this email.</p>`);
+    emailShell(`<p style="margin:0 0 8px">Your password reset code is:</p><p style="font-size:32px;font-weight:700;letter-spacing:6px;margin:0 0 14px">${code}</p><p style="color:#5b6675;font-size:13px;margin:0">It expires in 10 minutes. If you did not ask for it, ignore this email.</p>`));
   if (!sent) console.log(`[email not configured] Reset code for ${email}: ${code}`);
 }
 
