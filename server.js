@@ -1297,7 +1297,7 @@ a{color:var(--brand)}.mut{color:var(--mut)}.err{color:var(--err);font-weight:600
 .top{position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:2px solid var(--brand)}
 .top-in{max-width:980px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .brand{font-size:20px;color:var(--ink);text-decoration:none;display:flex;align-items:center;gap:8px;margin-right:auto}
-.brand i{font-style:normal;background:var(--brand);color:var(--brand-ink);border-radius:6px;padding:1px 8px;font-size:15px}
+.brand .logo{width:32px;height:32px;border-radius:8px;object-fit:cover;display:block}
 .nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 .nav a,.nav .out{color:var(--ink);text-decoration:none;padding:7px 12px;border-radius:8px;font-size:15px;background:none;border:0;cursor:pointer;font-family:inherit}
 .nav a:hover,.nav .out:hover{background:var(--soft)}.nav a.on{background:var(--soft);font-weight:700}
@@ -1334,7 +1334,7 @@ const lecturerLayout = (title, body, user, opts = {}) => {
     : `<a href="/lecturer/portal"${on('portal')}>About</a><a href="/lecturer/login"${on('login')}>Log in</a><a class="cta" href="/lecturer/signup">Register</a>`;
   const description = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)} · Lecturer Portal</title>${description}<meta name="theme-color" content="#1f5d4a"><link rel="icon" href="/icon-192.png"><style>${LECT_CSS}</style></head><body>
-<header class="top"><div class="top-in"><a class="brand" href="${isL ? '/lecturer' : '/lecturer/portal'}"><i>SH</i> Lecturer Portal</a><nav class="nav">${nav}</nav></div></header>
+<header class="top"><div class="top-in"><a class="brand" href="${isL ? '/lecturer' : '/lecturer/portal'}"><img src="/icon-192.png" alt="Studies Hub" class="logo"> Lecturer Portal</a><nav class="nav">${nav}</nav></div></header>
 <main>${body}</main>
 <footer class="foot">Studies Hub Lecturer Portal &middot; <a href="/terms">Terms</a> &middot; <a href="/privacy">Privacy</a></footer></body></html>`;
 };
