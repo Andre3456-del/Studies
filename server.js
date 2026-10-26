@@ -571,17 +571,6 @@ app.use((req, res, next) => {
 });
 
 // LiveKit calling module; credentials stay in server-side environment variables.
-// ---------- lecturers have their own, separate portal ----------
-// Student pages are not reachable from it: a lecturer who lands on one is sent back to their own portal.
-const STUDENT_ONLY = /^\/(dashboard|news|chat|browse|welcome|sponsor|open|u\/|@)/;
-app.use((req, res, next) => {
-  const u = req.user;
-  if (!u || !u.is_lecturer || req.method !== 'GET') return next();
-  const p = req.path;
-  if (p === '/settings' || p.startsWith('/settings/')) return res.redirect('/lecturer/profile' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''));
-  if (p === '/' || STUDENT_ONLY.test(p)) return res.redirect('/lecturer');
-  next();
-});
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
 registerCalling(app, { db, crypto, notify, logCall: (callerId, calleeId, kind, state, secs) => {
   // A line in the 1-to-1 chat: "Video call - 47 sec", "Missed video call", "Declined".
@@ -1285,61 +1274,7 @@ if(bar&&window.Notification&&window.PushManager&&Notification.permission==='defa
   document.getElementById('pushNo').addEventListener('click',function(){try{localStorage.setItem('pushDismissed','1')}catch(_){}bar.hidden=true})
 }
 })();`;
-
-const LECT_CSS = `
-:root{--bg:#f5f1e8;--paper:#fffdf8;--ink:#1d2a2f;--mut:#5f6b6e;--line:#ded7c6;--brand:#1f5d4a;--brand-ink:#fff;--accent:#b5651d;--err:#b3261e;--soft:#ece6d6}
-@media(prefers-color-scheme:dark){:root{--bg:#121818;--paper:#1a2222;--ink:#e8eeea;--mut:#9aaaa4;--line:#2c3a37;--brand:#4fb394;--brand-ink:#08201a;--accent:#e0a15c;--err:#ff8a80;--soft:#223030}}
-*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;display:flex;flex-direction:column}
-h1,h2,h3,.brand{font-family:Georgia,"Times New Roman",serif;font-weight:700;letter-spacing:-.01em;line-height:1.2}
-h1{font-size:clamp(26px,5vw,38px);margin:.2em 0 .3em}h2{font-size:22px}h3{font-size:18px;margin:1.4em 0 .5em}
-a{color:var(--brand)}.mut{color:var(--mut)}.err{color:var(--err);font-weight:600}
-.top{position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:2px solid var(--brand)}
-.top-in{max-width:980px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.brand{font-size:20px;color:var(--ink);text-decoration:none;display:flex;align-items:center;gap:8px;margin-right:auto}
-.brand i{font-style:normal;background:var(--brand);color:var(--brand-ink);border-radius:6px;padding:1px 8px;font-size:15px}
-.nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
-.nav a,.nav .out{color:var(--ink);text-decoration:none;padding:7px 12px;border-radius:8px;font-size:15px;background:none;border:0;cursor:pointer;font-family:inherit}
-.nav a:hover,.nav .out:hover{background:var(--soft)}.nav a.on{background:var(--soft);font-weight:700}
-.nav a.cta{background:var(--brand);color:var(--brand-ink);font-weight:600}.nav form{margin:0}
-.who{width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;object-fit:cover}
-main{flex:1;width:100%;max-width:980px;margin:0 auto;padding:22px 16px 40px}
-.foot{border-top:1px solid var(--line);padding:16px;text-align:center;color:var(--mut);font-size:13px}.foot a{color:var(--mut)}
-.card,.panel{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 1px 0 rgba(0,0,0,.03)}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-input,select,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:11px 12px;margin:6px 0}
-input:focus,select:focus{outline:2px solid var(--brand);border-color:transparent}
-input[type=checkbox],input[type=radio]{width:auto;margin:0}
-button,.btn{display:inline-block;font:inherit;font-weight:600;background:var(--brand);color:var(--brand-ink);border:0;border-radius:10px;padding:11px 18px;cursor:pointer;text-decoration:none;margin-top:6px}
-.btn.ghost,button.ghost{background:transparent;color:var(--brand);border:1.5px solid var(--brand)}
-button.link,.link{background:none;border:0;color:var(--brand);padding:4px 6px;font-weight:600;cursor:pointer;margin:0;text-decoration:underline}
-.pill{display:inline-block;background:var(--soft);border-radius:99px;padding:3px 12px;font-size:13px;font-weight:600}.pill.pending{background:#f4e3b8;color:#6b4b00}
-.auth{max-width:440px;margin:18px auto}.auth.wide{max-width:none}
-.gbtn{display:block;text-align:center;margin-top:10px}
-.hero{background:var(--brand);color:var(--brand-ink);border-radius:18px;padding:26px 22px;margin:0 0 18px}
-.hero h1{margin:.1em 0}.hero p{margin:.2em 0;opacity:.92}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-size:12px;font-weight:700;opacity:.8}
-.hero .btn{background:var(--brand-ink);color:var(--brand);margin-right:8px}.hero .btn.ghost{background:transparent;color:var(--brand-ink);border:1.5px solid var(--brand-ink)}
-.stats{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 6px}.stat{flex:1;min-width:120px;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.stat b{display:block;font:700 26px Georgia,serif}.stat span{color:var(--mut);font-size:13px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.ccard{display:block;text-decoration:none;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-left:5px solid var(--accent);border-radius:12px;padding:14px}
-.ccard:hover{border-left-color:var(--brand)}.ccard b{display:block;font:700 17px Georgia,serif}.ccard span{color:var(--mut);font-size:13px}
-.item{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--line)}.item:last-child{border:0}
-details.card summary{cursor:pointer;font-weight:600}
-`;
-const lecturerLayout = (title, body, user, opts = {}) => {
-  const isL = !!(user && user.is_lecturer), on = k => (opts.active === k ? ' class="on"' : '');
-  const av = isL ? (user.avatar_mime ? `<img class="who" src="/avatar/${user.id}" alt="">` : `<span class="who">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`) : '';
-  const nav = isL
-    ? `<a href="/lecturer"${on('home')}>Courses</a><a href="/lecturer#upload"${on('upload')}>Upload</a><a href="/lecturer/profile"${on('profile')}>Profile</a><form method="post" action="/logout"><button class="out">Sign out</button></form>${av}`
-    : `<a href="/lecturer/portal"${on('portal')}>About</a><a href="/lecturer/login"${on('login')}>Log in</a><a class="cta" href="/lecturer/signup">Register</a>`;
-  const description = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)} · Lecturer Portal</title>${description}<meta name="theme-color" content="#1f5d4a"><link rel="icon" href="/icon-192.png"><style>${LECT_CSS}</style></head><body>
-<header class="top"><div class="top-in"><a class="brand" href="${isL ? '/lecturer' : '/lecturer/portal'}"><i>SH</i> Lecturer Portal</a><nav class="nav">${nav}</nav></div></header>
-<main>${body}</main>
-<footer class="foot">Studies Hub Lecturer Portal &middot; <a href="/terms">Terms</a> &middot; <a href="/privacy">Privacy</a></footer></body></html>`;
-};
 const layout = (title, body, user, opts = {}) => {
-  if ((user && user.is_lecturer) || opts.lecturer) return lecturerLayout(title, body, user, opts); // lecturers get their own, separate interface
   const avatarBit = user
     ? (user.avatar_mime ? `<img src="/avatar/${user.id}" class="drawer-av-img" alt="">` : `<span class="avatar" style="width:40px;height:40px;font-size:15px">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)
     : '';
@@ -1423,19 +1358,19 @@ ${login ? '<p class="mut"><a href="/forgot">Forgot password?</a></p>' : ''}
 <p class="mut">${login ? 'New here? <a href="/signup">Create an account</a>' : 'Already registered? <a href="/login">Log in</a>'}</p></div>`, null, { footer: true });
 };
 
-const forgotForm = (err = '', lect = false) => layout('Forgot password', `<div class="auth"><h1>Reset your password</h1><p class="mut">Enter your email and we will send a 6-digit code.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
-<form method="post" action="/forgot" class="card">${lect ? '<input type="hidden" name="portal" value="lecturer">' : ''}<input name="email" type="email" placeholder="Email address" required><button>Send code</button></form>
-<p class="mut"><a href="${lect ? '/lecturer/login' : '/login'}">Back to log in</a></p></div>`, null, { lecturer: lect });
+const forgotForm = (err = '') => layout('Forgot password', `<div class="auth"><h1>Reset your password</h1><p class="mut">Enter your email and we will send a 6-digit code.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
+<form method="post" class="card"><input name="email" type="email" placeholder="Email address" required><button>Send code</button></form>
+<p class="mut"><a href="/login">Back to log in</a></p></div>`, null);
 
-const resetForm = (email = '', err = '', lect = false) => layout('Enter your code', `<div class="auth"><h1>Enter your code</h1><p class="mut">If that email is registered, a 6-digit code is on its way. It expires in 10 minutes.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
-<form method="post" action="/reset" class="card">${lect ? '<input type="hidden" name="portal" value="lecturer">' : ''}<input name="email" type="email" placeholder="Email address" value="${esc(email)}" required>
+const resetForm = (email = '', err = '') => layout('Enter your code', `<div class="auth"><h1>Enter your code</h1><p class="mut">If that email is registered, a 6-digit code is on its way. It expires in 10 minutes.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
+<form method="post" class="card"><input name="email" type="email" placeholder="Email address" value="${esc(email)}" required>
 <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="6-digit code" required>
 <input name="password" type="password" placeholder="New password (8+ characters)" minlength="8" required><button>Set new password</button></form>
-<p class="mut"><a href="${lect ? '/lecturer/forgot' : '/forgot'}">Send a new code</a></p></div>`, null, { lecturer: lect });
+<p class="mut"><a href="/forgot">Send a new code</a></p></div>`, null);
 
-const notice = (title, msg, extra = '', lect = false) => layout(title, `<div class="auth"><h1>${esc(title)}</h1><p class="mut">${esc(msg)}</p>${extra}</div>`, null, { lecturer: lect });
-const resendForm = (email = '', lect = false) => `<form method="post" action="/resend" class="card">${lect ? '<input type="hidden" name="portal" value="lecturer">' : ''}<input name="email" type="email" placeholder="Email" value="${esc(email)}" required><button>Resend verification email</button></form>`;
-const checkEmailPage = (email, lect = false) => notice('Check your email', `We sent a verification link to ${email}. Click it to activate your account (it expires in 24 hours).`, resendForm(email, lect), lect);
+const notice = (title, msg, extra = '') => layout(title, `<div class="auth"><h1>${esc(title)}</h1><p class="mut">${esc(msg)}</p>${extra}</div>`, null);
+const resendForm = (email = '') => `<form method="post" action="/resend" class="card"><input name="email" type="email" placeholder="Email" value="${esc(email)}" required><button>Resend verification email</button></form>`;
+const checkEmailPage = email => notice('Check your email', `We sent a verification link to ${email}. Click it to activate your account (it expires in 24 hours).`, resendForm(email));
 
 // ---------- public + auth routes ----------
 // News is the front door of the whole site now: whoever you are, and whether you're logged in
@@ -3315,26 +3250,24 @@ app.get('/lecturer', (req, res) => {
   if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
   const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
   const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
-  const courseCards = myCourses.map(c => { const n = myPages.filter(x => x.course_id === c.id).length; return `<a class="ccard" href="/lecturer/course/${c.id}"><b>${esc(c.name)}</b><span>${n} upload${n === 1 ? '' : 's'} by you &middot; open course folder &rarr;</span></a>`; }).join('') || '<p class="mut">No courses linked to your account.</p>';
-  const uploadForm = `<form class="panel" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3 style="margin-top:0">Publish material</h3>
+  const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
+  const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
-<button>Publish &mdash; goes live immediately</button></form>
+<button>Publish -- goes live immediately</button></form>
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');function sync(){fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
   const pagesList = myPages.map(p => {
     const [icon, label] = KIND_META[p.kind] || KIND_META.html;
-    return `<div class="item"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
-<div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')" style="margin:0"><button class="link">Delete</button></form></div></div>`;
-  }).join('') || '<p class="mut">Nothing published yet.</p>';
-  const first = esc(String(req.user.name || '').trim().split(/\s+/)[0] || 'there');
-  res.send(layout('Courses', `<div class="hero"><p class="eyebrow">${esc(req.user.university)}${req.user.lecturer_reg_no ? ' &middot; ' + esc(req.user.lecturer_reg_no) : ''}</p><h1>Welcome, ${first}</h1><p>Your courses and everything you have published for students.</p></div>
-${req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : ''}
-<div class="stats"><div class="stat"><b>${myCourses.length}</b><span>Courses</span></div><div class="stat"><b>${myPages.length}</b><span>Uploads</span></div></div>
-<h3>Your courses</h3><div class="grid">${courseCards}</div>
-<h3>Publish</h3>${uploadForm}<h3>Your uploads (${myPages.length})</h3><div class="panel">${pagesList}</div>`, req.user, { active: 'home' }));
+    return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+<div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
+  }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
+  res.send(layout('My courses', `<h1>My courses</h1><p class="mut" style="margin-top:0">${esc(req.user.university)}${req.user.lecturer_reg_no ? ' &middot; ' + esc(req.user.lecturer_reg_no) : ''}</p>
+${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+<div>${courseLinks}</div>
+${uploadForm}<h3>Your uploads (${myPages.length})</h3>${pagesList}`, req.user));
 });
 app.post('/lecturer/upload', upload.single('file'), (req, res) => {
   if (!req.user || !req.user.is_lecturer) return res.sendStatus(403);
@@ -3356,20 +3289,6 @@ app.post('/lecturer/upload', upload.single('file'), (req, res) => {
   }
   announceUpload({ title: title || base, slug, paid: 0, ...aud });
   res.redirect('/lecturer?msg=' + encodeURIComponent(`Published at /p/${slug}`));
-});
-app.get('/lecturer/profile', (req, res) => {
-  if (!req.user) return res.redirect('/lecturer/login');
-  if (!req.user.is_lecturer) return res.redirect('/');
-  const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
-  const courses = db.prepare('SELECT c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(u.id).map(c => esc(c.name)).join(', ') || 'None yet';
-  const status = u.lecturer_status === 'approved' ? '<span class="pill">&#10003; Verified lecturer</span>' : u.lecturer_status === 'pending' ? '<span class="pill pending">Waiting for verification</span>' : u.lecturer_status === 'rejected' ? '<span class="err">Not approved</span>' : '';
-  const pic = u.avatar_mime ? `<img src="/avatar/${u.id}" class="who" style="width:64px;height:64px" alt="">` : `<span class="who" style="width:64px;height:64px;font-size:24px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
-  const msg = req.query.msg ? `<p class="${req.query.err ? 'err' : 'pill'}">${esc(req.query.msg)}</p>` : '';
-  res.send(layout('Profile', `<h1>Your profile</h1>${msg}
-<div class="panel row" style="justify-content:flex-start">${pic}<form method="post" action="/settings/avatar" enctype="multipart/form-data" style="flex:1;min-width:180px"><input type="file" name="file" accept="image/png,image/jpeg,image/webp" required><button class="ghost">Change picture</button></form></div>
-<form method="post" action="/settings/profile" class="panel"><label class="mut">Name</label><input name="name" value="${esc(u.name || '')}" required maxlength="80">
-<label class="mut">Staff / registration number (optional)</label><input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" maxlength="60"><button>Save</button></form>
-<div class="panel"><p style="margin:0 0 6px"><b>Institution:</b> ${esc(u.university || '')} ${status}</p><p class="mut" style="margin:0 0 6px"><b>Courses:</b> ${courses}</p><p class="mut" style="margin:0">To change your institution or courses, contact a full admin &middot; <a href="/lecturer/forgot">Change password</a></p></div>`, req.user, { active: 'profile' }));
 });
 app.get('/lecturer/pages/:id/edit', (req, res) => {
   if (!req.user || !req.user.is_lecturer) return res.redirect('/login');
@@ -3609,7 +3528,7 @@ app.get('/p/:slug', (req, res) => {
   if (p.kind === 'html' || p.kind === 'cbt') {
     // Uploaded pages run in a sealed box: they work normally but cannot reach this site's sign-in or act as the person viewing.
     res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');
-    return res.type('html').send(preparePage(p.html, req.user && req.user.is_lecturer ? '/lecturer' : '/'));
+    return res.type('html').send(preparePage(p.html, '/'));
   }
   if (p.kind === 'video') {
     return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
@@ -3881,50 +3800,40 @@ app.post('/signup', async (req, res) => {
 
 // Public lecturer portal landing page: discoverable without exposing lecturer-only content.
 app.get('/lecturer/portal', (req, res) => {
-  if (req.user && req.user.is_lecturer) return res.redirect('/lecturer');
-  res.send(layout('Welcome', `<div class="hero"><p class="eyebrow">For teaching staff</p><h1>Teach once. Reach every student.</h1>
-<p>Register with your institution, get verified, and publish notes and materials for your courses. Students see what you upload.</p>
-<p style="margin-top:14px"><a class="btn" href="/lecturer/signup">Register as a lecturer</a><a class="btn ghost" href="/lecturer/login">Log in</a></p></div>
-<div class="grid"><div class="card"><h3 style="margin-top:0">1. Register</h3><p class="mut" style="margin:0">Create your lecturer account and tell us where you teach and which courses you handle.</p></div>
-<div class="card"><h3 style="margin-top:0">2. Get verified</h3><p class="mut" style="margin:0">A full admin confirms you are on staff, so only real lecturers can publish.</p></div>
-<div class="card"><h3 style="margin-top:0">3. Publish</h3><p class="mut" style="margin:0">Upload PDFs, Word files or pages for a course, and share a course folder with colleagues who teach it.</p></div></div>`, null, { lecturer: true, active: 'portal', description: 'Official Studies Hub lecturer portal. Register or sign in to manage courses and share educational materials with students.' }));
+  res.send(layout('Lecturer Portal | Studies Hub', `<div class="auth" style="max-width:720px">
+<h1>Studies Hub Lecturer Portal</h1>
+<p>Lecturers can register, sign in, manage their linked courses, and share learning materials with students through Studies Hub.</p>
+<div class="card">
+<h2>New lecturer?</h2>
+<p class="mut">Create a lecturer account and complete your institution details. A full admin must verify your lecturer status before uploads are enabled.</p>
+<a class="btn" href="/lecturer/signup">Register as a lecturer</a>
+</div>
+<div class="card">
+<h2>Already registered?</h2>
+<p class="mut">Sign in to continue to your lecturer courses and uploads.</p>
+<a class="btn ghost" href="/lecturer/login">Lecturer log in</a>
+</div>
+<p class="mut">Students should use the regular <a href="/signup">student sign-up</a>.</p>
+</div>`, null, { description: 'Official Studies Hub lecturer portal. Register or sign in to manage courses and share educational materials with students.' }));
 });
-const lecturerLoginForm = (err = '') => layout('Log in', `<div class="auth"><h1>Lecturer log in</h1><p class="mut">Sign in to manage your courses and uploads.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
-<form method="post" class="card"><input name="email" type="email" placeholder="Email address" required autocomplete="username"><input name="password" type="password" placeholder="Password" required autocomplete="current-password"><button>Log in</button></form>
-${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
-<p class="mut"><a href="/lecturer/forgot">Forgot password?</a></p><p class="mut">New here? <a href="/lecturer/signup">Register as a lecturer</a></p></div>`, null, { lecturer: true, active: 'login' });
-app.get('/lecturer/login', (req, res) => req.user && req.user.is_lecturer ? res.redirect('/lecturer') : res.send(lecturerLoginForm()));
-app.post('/lecturer/login', (req, res) => {
-  const form = (m, c) => res.status(c).send(lecturerLoginForm(m));
-  if (tooMany(req.ip)) return form('Too many attempts. Try again in 15 minutes.', 429);
-  const who = String(req.body.email || '').trim().toLowerCase().slice(0, 200), acct = 'acct:' + who;
-  if (tooMany(acct)) return form('Too many attempts on this account. Try again in 15 minutes, or reset your password.', 429);
-  const u = db.prepare('SELECT * FROM users WHERE email=?').get(who);
-  if (!u) bcrypt.compareSync(String(req.body.password || ''), DUMMY_HASH);
-  if (!u || !bcrypt.compareSync(String(req.body.password || ''), u.hash)) { noteFail(req.ip); noteFail(acct); return form('Wrong email or password.', 401); }
-  if (!u.is_lecturer) return form('That account is not a lecturer account. Register as a lecturer to use this portal.', 403);
-  if (!u.verified) return res.status(403).send(notice('Verify your email', 'Your email is not verified yet. Check your inbox for the link, or request a new one.', resendForm(u.email, true), true));
-  fails.delete(acct);
-  startSession(res, u.id);
-  res.redirect('/lecturer');
-});
+app.get('/lecturer/login', (req, res) => res.redirect('/login?next=%2Flecturer'));
 
-app.get('/lecturer/signup', (req, res) => res.send(layout('Register', `<div class="auth"><h1>Register as a lecturer</h1>
-<p class="mut">For teaching staff only. You will confirm your email, then tell us where you teach.</p>
+app.get('/lecturer/signup', (req, res) => res.send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1>
+<p class="mut">For teaching staff only. Students should use the regular <a href="/signup">sign up</a> instead.</p>
 <form method="post" class="card">
 <input name="name" placeholder="Your name" required maxlength="80">
 <input name="email" type="email" placeholder="Email address" required>
 <input name="password" type="password" placeholder="Password (8+ characters)" required>
 <button>Create lecturer account</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
-<p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`, null, { lecturer: true, active: 'login' })));
+<p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`, null, { footer: true })));
 app.post('/lecturer/signup', async (req, res) => {
   if (limited('signup-ip:' + req.ip, 12, 3600e3)) return res.status(429).send('Too many sign-ups from this connection. Please try again later.');
   const name = String(req.body.name || '').trim().slice(0, 80);
   const email = String(req.body.email || '').trim().toLowerCase();
   const pw = String(req.body.password || '');
   const bad = m => res.status(400).send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1><p class="err">${esc(m)}</p>
-<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required><button>Create lecturer account</button></form></div>`, null, { lecturer: true }));
+<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required><button>Create lecturer account</button></form></div>`, null, { footer: true }));
   if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
   if (pw.length < 8) return bad('Password must be at least 8 characters.');
   if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');
@@ -3935,7 +3844,7 @@ app.post('/lecturer/signup', async (req, res) => {
     u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
   }
   if ((await sendSafely(req, u)) === 'fail') return bad("We couldn't send the verification email. Please try again in a minute.");
-  res.send(checkEmailPage(email, true));
+  res.send(checkEmailPage(email));
 });
 
 app.get('/login', (req, res) => res.send(authForm('login', '', safeNext(req.query.next))));
@@ -3953,49 +3862,45 @@ app.post('/login', (req, res) => {
   if (!u.verified) return res.status(403).send(notice('Verify your email', 'Your email is not verified yet. Check your inbox for the link, or request a new one.', resendForm(u.email)));
   fails.delete('acct:' + who);
   startSession(res, u.id);
-  res.redirect(u.is_lecturer ? '/lecturer' : (next || '/'));
+  res.redirect(next || '/');
 });
 
 app.get('/verify', (req, res) => {
   const token = String(req.query.token || '');
-  const u = token && db.prepare('SELECT id,is_lecturer FROM users WHERE verify_hash=? AND verify_expires>?').get(sha(token), Date.now());
+  const u = token && db.prepare('SELECT id FROM users WHERE verify_hash=? AND verify_expires>?').get(sha(token), Date.now());
   if (!u) return res.status(400).send(notice('Link invalid or expired', 'Request a new verification email below.', resendForm()));
   db.prepare('UPDATE users SET verified=1, verify_hash=NULL, verify_expires=NULL WHERE id=?').run(u.id);
-  res.send(u.is_lecturer ? notice('Email verified', 'Your lecturer account is active.', '<p><a class="btn" href="/lecturer/login">Log in</a></p>', true) : notice('Email verified', 'Your account is active.', '<p><a href="/login">Log in</a></p>'));
+  res.send(notice('Email verified', 'Your account is active.', '<p><a href="/login">Log in</a></p>'));
 });
 
 app.post('/resend', async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const u = db.prepare('SELECT * FROM users WHERE email=? AND verified=0').get(email);
   if (u) await sendSafely(req, u);
-  const L = req.body.portal === 'lecturer';
-  res.send(notice('Check your email', 'If that address has an unverified account, a new link is on its way.', resendForm(email, L), L));
+  res.send(notice('Check your email', 'If that address has an unverified account, a new link is on its way.', resendForm(email)));
 });
 
 // ---------- forgot password: 6-digit email code (same flow for every account, admin included) ----------
 app.get('/forgot', (req, res) => res.send(forgotForm()));
-app.get('/lecturer/forgot', (req, res) => res.send(forgotForm('', true)));
 app.post('/forgot', async (req, res) => {
-  const L = req.body.portal === 'lecturer';
   if (limited('forgot-ip:' + req.ip, 10, 15 * 60e3)) return res.status(429).send('Too many requests. Please try again in a few minutes.');
   const email = String(req.body.email || '').trim().toLowerCase();
-  if (limited('forgot-ip:' + req.ip, 8, 15 * 60e3)) return res.status(429).send(forgotForm('Too many requests. Try again in a few minutes.', L));
+  if (limited('forgot-ip:' + req.ip, 8, 15 * 60e3)) return res.status(429).send(forgotForm('Too many requests. Try again in a few minutes.'));
   const u = email && db.prepare('SELECT * FROM users WHERE email=?').get(email);
   if (u && !limited('forgot-em:' + email, 3, 15 * 60e3)) {
     const code = String(crypto.randomInt(100000, 1000000));
     db.prepare('UPDATE users SET reset_hash=?, reset_expires=?, reset_attempts=0 WHERE id=?').run(bcrypt.hashSync(code, 10), Date.now() + 600000, u.id);
     try { await sendResetCode(u.email, code); } catch (e) { console.error('Reset email failed:', e.message); }
   }
-  res.redirect('/reset?email=' + encodeURIComponent(email) + (L ? '&portal=lecturer' : '')); // identical whether or not the account exists
+  res.redirect('/reset?email=' + encodeURIComponent(email)); // identical whether or not the account exists
 });
 
-app.get('/reset', (req, res) => res.send(resetForm(String(req.query.email || ''), '', req.query.portal === 'lecturer')));
+app.get('/reset', (req, res) => res.send(resetForm(String(req.query.email || ''))));
 app.post('/reset', (req, res) => {
-  const L = req.body.portal === 'lecturer';
   const email = String(req.body.email || '').trim().toLowerCase();
   const code = String(req.body.code || '').trim(), pw = String(req.body.password || '');
-  const bad = m => res.status(400).send(resetForm(email, m, L));
-  if (limited('reset-ip:' + req.ip, 10, 15 * 60e3)) return res.status(429).send(resetForm(email, 'Too many attempts. Try again in a few minutes.', L));
+  const bad = m => res.status(400).send(resetForm(email, m));
+  if (limited('reset-ip:' + req.ip, 10, 15 * 60e3)) return res.status(429).send(resetForm(email, 'Too many attempts. Try again in a few minutes.'));
   if (pw.length < 8) return bad('Password must be at least 8 characters.');
   if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');
   const u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
@@ -4008,7 +3913,7 @@ app.post('/reset', (req, res) => {
   if (!bcrypt.compareSync(code, u.reset_hash)) return bad('Invalid or expired code.');
   db.prepare('UPDATE users SET hash=?, verified=1, reset_hash=NULL, reset_expires=NULL, reset_attempts=0 WHERE id=?').run(bcrypt.hashSync(pw, 12), u.id);
   db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
-  res.send(notice('Password updated', 'You can now log in with your new password.', `<p><a class="btn" href="${L ? '/lecturer/login' : '/login'}">Log in</a></p>`, L));
+  res.send(notice('Password updated', 'You can now log in with your new password.', '<p><a class="btn" href="/login">Log in</a></p>'));
 });
 
 // ---------- Continue with Google ----------
@@ -4047,7 +3952,7 @@ app.get('/auth/google/callback', async (req, res) => {
       db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
     }
     startSession(res, u.id);
-    res.redirect(u.is_lecturer ? '/lecturer' : '/');
+    res.redirect('/');
   } catch (e) {
     console.error('Google sign-in failed:', e.message);
     res.status(400).send(notice('Google sign-in failed', 'Please try again, or use your email and password.', '<p><a class="btn" href="/login">Back to log in</a></p>'));
@@ -4098,7 +4003,7 @@ app.post('/logout', (req, res) => {
   if (req.sid) db.prepare('DELETE FROM sessions WHERE id=?').run(sidKey(req.sid));
   res.setHeader('Clear-Site-Data', '"cache"'); // nothing from this account stays readable in the browser on a shared phone
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
-  res.redirect(req.user && req.user.is_lecturer ? '/lecturer/portal' : '/');
+  res.redirect('/');
 });
 
 // ---------- admin ----------
