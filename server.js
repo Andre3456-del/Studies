@@ -34,7 +34,7 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
   ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
-  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0']])
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -284,11 +284,43 @@ async function pushTo(sub, payload) {
     return r.status;
   } catch (e) { return 0; } finally { clearTimeout(timer); }
 }
+// ---------- the same alerts by email ----------
+// News, uploads, verifications, payments and the like also go to the person's email (chat messages and calls do not).
+// Sent one at a time, with a daily ceiling (MAIL_ALERTS_PER_DAY, default 80) so the email provider's free limit is never
+// burned through; sign-up links and reset codes are sent separately and are never held back by this.
+const MAIL_ALERT_TAGS = new Set(['news', 'upload', 'news-review', 'friend-request', 'friend-accept', 'position', 'lecturer', 'payment', 'sponsor', 'level']);
+const mailQueue = []; let mailBusy = false, mailDay = '', mailCount = 0;
+function emailAlso(ids, p) {
+  if (!MAIL_ALERT_TAGS.has(p.tag) || process.env.MAIL_ALERTS_OFF === '1') return;
+  const rows = db.prepare(`SELECT id,email,name FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND verified=1 AND email_notify=1`).all(...ids);
+  for (const u of rows) mailQueue.push({ u, p });
+  if (rows.length) setImmediate(pumpMail);
+}
+async function pumpMail() {
+  if (mailBusy) return; mailBusy = true;
+  const cap = Number(process.env.MAIL_ALERTS_PER_DAY || 80);
+  try {
+    while (mailQueue.length) {
+      const day = new Date().toISOString().slice(0, 10);
+      if (day !== mailDay) { mailDay = day; mailCount = 0; }
+      if (mailCount >= cap) { console.log(`Email alerts: daily limit of ${cap} reached, ${mailQueue.length} skipped.`); mailQueue.length = 0; break; }
+      const { u, p } = mailQueue.shift();
+      const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org', link = base + (p.url || '/');
+      const first = esc(String(u.name || '').trim().split(/\s+/)[0] || 'there');
+      const text = `Hi ${String(u.name || '').trim().split(/\s+/)[0] || 'there'},\n\n${p.title}${p.body ? '\n' + p.body : ''}\n\nOpen it: ${link}\n\nYou get this because email alerts are on for your Studies Hub account. Turn them off: ${base}/settings/notifications`;
+      const html = `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;color:#1b2430"><p style="margin:0 0 4px;color:#5b6675;font-size:13px">Studies Hub</p><h2 style="margin:0 0 8px">${esc(p.title)}</h2><p style="margin:0 0 6px">Hi ${first},</p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block">Open on Studies Hub</a></p><p style="color:#7a8593;font-size:12px;margin-top:24px">You get this because email alerts are on for your account. <a href="${esc(base)}/settings/notifications" style="color:#7a8593">Turn them off</a>.</p></div>`;
+      mailCount++;
+      try { await deliver(u.email, p.title, text, html); } catch (e) { console.error('Alert email failed:', e.message); }
+      await new Promise(r => setTimeout(r, 700));
+    }
+  } finally { mailBusy = false; }
+}
 // Send a notification to these people (all their devices). Never throws and is never awaited by callers.
 function notify(userIds, payload) {
   const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
   if (!ids.length) return Promise.resolve();
   const p = { icon: '/icon-192.png', ...payload, body: String(payload.body || '').slice(0, 140), title: String(payload.title || 'Studies Hub').slice(0, 80) };
+  try { emailAlso(ids, p); } catch (e) { console.error('Email alert failed:', e.message); }
   const subs = db.prepare(`SELECT * FROM push_subscriptions WHERE user_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
   return Promise.allSettled(subs.map(sub => pushTo(sub, p))).catch(() => {});
 }
@@ -3429,9 +3461,15 @@ app.post('/settings/appearance', (req, res) => {
   db.prepare('UPDATE users SET theme=? WHERE id=?').run(req.body.theme === 'light' ? 'light' : 'dark', req.user.id);
   res.redirect('/settings/appearance');
 });
+app.post('/settings/notifications', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  db.prepare('UPDATE users SET email_notify=? WHERE id=?').run(req.body.email === '0' ? 0 : 1, req.user.id);
+  res.redirect('/settings/notifications');
+});
 app.get('/settings/notifications', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/notifications');
   res.send(layout('Notifications', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Notifications</h1>
+${(() => { const on = (db.prepare('SELECT email_notify e FROM users WHERE id=?').get(req.user.id) || {}).e !== 0; return `<form method="post" action="/settings/notifications" class="card row" style="align-items:center"><div style="flex:1"><b>Email alerts</b><p class="mut" style="margin:2px 0 0">News, new uploads and updates also arrive in your email (not chat messages).</p></div><button name="email" value="${on ? '0' : '1'}">${on ? 'Turn off' : 'Turn on'}</button></form>`; })()}
 <div class="card"><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>`, req.user));
 });
 
