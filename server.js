@@ -292,7 +292,7 @@ const MAIL_ALERT_TAGS = new Set(['news', 'upload', 'news-review', 'friend-reques
 const mailQueue = []; let mailBusy = false, mailDay = '', mailCount = 0;
 function emailAlso(ids, p) {
   if (!MAIL_ALERT_TAGS.has(p.tag) || process.env.MAIL_ALERTS_OFF === '1') return;
-  const rows = db.prepare(`SELECT id,email,name FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND verified=1 AND email_notify=1`).all(...ids);
+  const rows = db.prepare(`SELECT id,email,name FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND verified=1`).all(...ids);
   for (const u of rows) mailQueue.push({ u, p });
   if (rows.length) setImmediate(pumpMail);
 }
@@ -307,8 +307,8 @@ async function pumpMail() {
       const { u, p } = mailQueue.shift();
       const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org', link = base + (p.url || '/');
       const first = esc(String(u.name || '').trim().split(/\s+/)[0] || 'there');
-      const text = `Hi ${String(u.name || '').trim().split(/\s+/)[0] || 'there'},\n\n${p.title}${p.body ? '\n' + p.body : ''}\n\nOpen it: ${link}\n\nYou get this because email alerts are on for your Studies Hub account. Turn them off: ${base}/settings/notifications`;
-      const html = emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(p.title)}</h2><p style="margin:0 0 6px">Hi ${first},</p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p style="margin:0 0 20px"><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open on Studies Hub</a></p><p style="color:#7a8593;font-size:12px;margin:0">You get this because email alerts are on for your account. <a href="${esc(base)}/settings/notifications" style="color:#7a8593">Turn them off</a>.</p>`, base);
+      const text = `Hi ${String(u.name || '').trim().split(/\s+/)[0] || 'there'},\n\n${p.title}${p.body ? '\n' + p.body : ''}\n\nOpen it: ${link}\n\nYou get this email because you have a Studies Hub account.`;
+      const html = emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(p.title)}</h2><p style="margin:0 0 6px">Hi ${first},</p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p style="margin:0 0 20px"><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open on Studies Hub</a></p><p style="color:#7a8593;font-size:12px;margin:0">You get this email because you have a Studies Hub account.</p>`, base);
       mailCount++;
       try { await deliver(u.email, p.title, text, html); } catch (e) { console.error('Alert email failed:', e.message); }
       await new Promise(r => setTimeout(r, 700));
@@ -322,6 +322,29 @@ function notifyLecturerAdmin(title, body, institution) {
     notify(ids, { title, body, url: '/lecturer/admin?tab=verify', tag: 'lecturer' });
   } catch (e) { console.error('Lecturer admin alert failed:', e.message); }
 }
+// ---------- site notices: tell everyone by email (and push) about an upgrade, and when we are back ----------
+const getSecret = k => (db.prepare('SELECT value FROM secrets WHERE key=?').get(k) || {}).value || null;
+const setSecret = (k, v) => v == null ? db.prepare('DELETE FROM secrets WHERE key=?').run(k) : db.prepare('INSERT INTO secrets(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v));
+const noticeQueue = []; let noticeBusy = false;
+async function pumpNotices() {
+  if (noticeBusy) return; noticeBusy = true;
+  try { while (noticeQueue.length) { const j = noticeQueue.shift(); try { await deliver(j.to, j.subject, j.text, j.html); } catch (e) { console.error('Notice email failed:', e.message); } await new Promise(r => setTimeout(r, 700)); } }
+  finally { noticeBusy = false; }
+}
+function emailEveryone(subject, heading, message) {
+  const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
+  const people = db.prepare('SELECT id,email,name FROM users WHERE verified=1').all();
+  for (const u of people) {
+    const first = String(u.name || '').trim().split(/\s+/)[0] || 'there';
+    noticeQueue.push({ to: u.email, subject, text: `Hi ${first},\n\n${message}\n\n${base}`, html: emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(heading)}</h2><p style="margin:0 0 8px">Hi ${esc(first)},</p><p style="margin:0 0 18px">${esc(message)}</p><p><a href="${esc(base)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open Studies Hub</a></p>`, base) });
+  }
+  notify(people.map(u => u.id), { title: heading, body: message, url: '/', tag: 'site-notice' });
+  setImmediate(pumpNotices);
+  return people.length;
+}
+const MAINT_START = 'Studies Hub is being upgraded right now. The site may be slow or unavailable for a few minutes. Please bear with us. We will email you again the moment we are back.';
+const MAINT_BACK = 'We are back in business. Thank you for your patience. Everything is running normally again.';
+function maintenanceBack() { setSecret('maintenance_since', null); return emailEveryone('Studies Hub is back', 'We are back', MAINT_BACK); }
 // Send a notification to these people (all their devices). Never throws and is never awaited by callers.
 function notify(userIds, payload) {
   const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
@@ -3495,15 +3518,9 @@ app.post('/settings/appearance', (req, res) => {
   db.prepare('UPDATE users SET theme=? WHERE id=?').run(req.body.theme === 'light' ? 'light' : 'dark', req.user.id);
   res.redirect('/settings/appearance');
 });
-app.post('/settings/notifications', (req, res) => {
-  if (!req.user) return res.sendStatus(401);
-  db.prepare('UPDATE users SET email_notify=? WHERE id=?').run(req.body.email === '0' ? 0 : 1, req.user.id);
-  res.redirect('/settings/notifications');
-});
 app.get('/settings/notifications', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/notifications');
   res.send(layout('Notifications', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Notifications</h1>
-${(() => { const on = (db.prepare('SELECT email_notify e FROM users WHERE id=?').get(req.user.id) || {}).e !== 0; return `<form method="post" action="/settings/notifications" class="card row" style="align-items:center"><div style="flex:1"><b>Email alerts</b><p class="mut" style="margin:2px 0 0">News, new uploads and updates also arrive in your email (not chat messages).</p></div><button name="email" value="${on ? '0' : '1'}">${on ? 'Turn off' : 'Turn on'}</button></form>`; })()}
 <div class="card"><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>`, req.user));
 });
 
@@ -4281,7 +4298,7 @@ ${replaceCtrl}
   if (T && T[0]) return res.send(layout('Admin', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>${esc(T[2])}</h1>${msgHtml}${T[4] || '<p class="mut">Nothing is waiting here right now.</p>'}`, req.user));
   const tiles = Object.entries(TABS).filter(([, t]) => t[0]).map(([k, t]) => tile('/admin?tab=' + k, t[1], t[2], t[3], t[5]))
     .concat(canPromote(me) ? [tile('/admin/levels', '🪜', 'Levels', 'Move students up a level', 0)] : [])
-    .concat(central_ ? [tile('/admin/team', '🧑‍💼', 'Admin team', 'Appoint admins by @username', 0), tile('/admin/structure', '🏛️', 'Site structure', 'Faculties, departments, institutions, courses', 0)] : []);
+    .concat(central_ ? [tile('/admin/team', '🧑‍💼', 'Admin team', 'Appoint admins by @username', 0), tile('/admin/structure', '🏛️', 'Site structure', 'Faculties, departments, institutions, courses', 0), tile('/admin/maintenance', '📣', 'Site notices', 'Tell everyone about an upgrade', 0)] : []);
   res.send(layout('Admin', `<h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${msgHtml}<div class="grid">${tiles.join('')}</div>
 <script>(function(){var h=location.hash.slice(1),m={upload:'pages',pages:'pages',news:'news','pending-news':'news',positions:'positions','verify-queue':'positions',lecturers:'lecturers',payments:'payments',sponsors:'payments',users:'users'};if(h&&m[h]&&location.search.indexOf('tab=')<0)location.replace('/admin?tab='+m[h]+'#'+h);else if(h==='levels')location.replace('/admin/levels')})()</script>`, req.user));
 });
@@ -4639,6 +4656,27 @@ app.post('/admin/users/:id/role', central, (req, res) => {
 const TEAM_ROLES = ROLES.filter(r => r !== 'user');
 const ROLE_JOB = { partial: 'Can upload plain HTML pages.', content: 'Can upload every kind of file (PDF, Word, video, CBT).', news: 'Can post news and review what students share.', support: 'Can help people who cannot log in.', observer: 'Can look but not change anything.', admin: 'Full admin: everything except the central admin\'s own powers.' };
 const teamBack = msg => '/admin/team?msg=' + encodeURIComponent(msg);
+app.get('/admin/maintenance', central, (req, res) => {
+  const since = getSecret('maintenance_since'), n = db.prepare('SELECT COUNT(*) n FROM users WHERE verified=1').get().n;
+  const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
+  res.send(layout('Site notices', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Site notices</h1>${msg}
+<p class="mut">Tell everyone by email (and a phone notification) when you are about to upgrade the site, and when it is back. ${n} verified member${n === 1 ? '' : 's'} will receive it. A website that is down cannot send email itself, so send the first notice <b>before</b> you start the upgrade. The "we are back" email then goes out <b>by itself</b> a few seconds after the site restarts.</p>
+<p class="mut">Your email service has a daily sending limit (Resend's free plan is about 100 a day). If you have more members than that, the rest will not be delivered until you upgrade the plan.</p>
+${since ? `<div class="card"><p style="margin:0 0 6px"><b>Upgrade notice sent</b> ${timeAgo(new Date(Number(since)).toISOString().slice(0, 19).replace('T', ' '))}.</p><p class="mut" style="margin:0 0 8px">When the site restarts, everyone is told it is back automatically. If you finished without a restart, send it yourself:</p>
+<form method="post" action="/admin/maintenance/end" onsubmit="return confirm('Email all ${n} members that the site is back?')"><button>Send "we are back" now</button></form></div>`
+ : `<form method="post" action="/admin/maintenance/start" class="card" onsubmit="return confirm('Email all ${n} members that the site is being upgraded?')"><label class="mut">Message (you can change it)</label><textarea name="note" rows="4" maxlength="400" style="width:100%">${esc(MAINT_START)}</textarea><button style="margin-top:8px">Send "we are upgrading" notice to everyone</button></form>`}`, req.user));
+});
+app.post('/admin/maintenance/start', central, (req, res) => {
+  const note = String(req.body.note || '').trim().slice(0, 400) || MAINT_START;
+  setSecret('maintenance_since', Date.now());
+  const n = emailEveryone('Studies Hub is being upgraded', 'We are upgrading the site', note);
+  console.log(`Audit: ${req.user.email} sent the upgrade notice to ${n} members`);
+  res.redirect('/admin/maintenance?msg=' + encodeURIComponent(`Notice is going out to ${n} members.`));
+});
+app.post('/admin/maintenance/end', central, (req, res) => {
+  const n = maintenanceBack();
+  res.redirect('/admin/maintenance?msg=' + encodeURIComponent(`"We are back" is going out to ${n} members.`));
+});
 app.get('/admin/team', central, (req, res) => {
   const staff = db.prepare("SELECT id,name,email,username,role FROM users WHERE role!='user' ORDER BY name").all();
   const roleOpts = (cur, withUser) => (withUser ? ['user'] : []).concat(TEAM_ROLES).map(r => `<option value="${r}"${cur === r ? ' selected' : ''}>${esc(ROLE_LABEL[r])}</option>`).join('');
@@ -4797,4 +4835,18 @@ app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Somet
 
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters });
 sweepRemnants();
+// If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.
+setTimeout(() => { try { if (getSecret('maintenance_since')) maintenanceBack(); } catch (e) { console.error('Back-online notice failed:', e.message); } }, 15000).unref();
+// If the site did not shut down cleanly last time (a crash), tell the central admin.
+try {
+  if (getSecret('run_state') === 'running') {
+    notifyAdminCrash();
+  }
+  setSecret('run_state', 'running');
+} catch (e) { console.error(e.message); }
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { setSecret('run_state', 'stopped'); } catch (e) { console.error('Shutdown note failed:', e.message); } process.exit(0); });
+function notifyAdminCrash() {
+  const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
+  deliver(ADMIN_EMAIL, 'Studies Hub restarted unexpectedly', 'The site stopped without shutting down cleanly and has started again. If it keeps happening, check the logs in Railway.', emailShell('<h2 style="margin:0 0 8px;font-size:20px">The site restarted unexpectedly</h2><p>It stopped without shutting down cleanly and has started again. If this keeps happening, check the logs in Railway.</p>', base)).catch(() => {});
+}
 app.listen(PORT, () => console.log(`Studies Hub running on http://localhost:${PORT}`));

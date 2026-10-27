@@ -246,9 +246,11 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 - **Lecturer portal** shows only lecturer uploads: your own and those of colleagues teaching the same course. Student and admin uploads are never shown to lecturers.
 - **Security**: safety headers and click-jacking protection on every page; forged requests from other websites are refused; sign-in keys are stored only as one-way fingerprints; wrong-password lockout per account and per connection; limits on sign-ups and reset requests; easy-to-guess passwords refused; uploaded web pages run in a sealed box and chat files can never run as pages.
 
-## Email alerts
+## Email alerts and site notices
 
-News, new uploads, verifications, payments and level changes are also emailed to the person (chat messages and calls are not). Each person can switch this off in Settings > Notifications. Sent from your `MAIL_FROM`/`EMAIL_FROM` address, one at a time, up to `MAIL_ALERTS_PER_DAY` (default 80) a day. Sign-up links and reset codes are separate and never held back.
+News, new uploads, verifications, payments and level changes are also emailed to people automatically (chat messages and calls are not); members cannot switch this off. Sent from `MAIL_FROM`/`EMAIL_FROM`, one at a time, up to `MAIL_ALERTS_PER_DAY` (default 80) a day. Sign-up links and reset codes are separate and never held back.
+
+**Site notices** (Admin > Site notices, central admin only): emails every verified member (and sends a phone notification) that the site is being upgraded. Send it *before* the upgrade, because a site that is down cannot email. When the site restarts afterwards, a "we are back" email goes out by itself after about 15 seconds. If the site stops without shutting down cleanly (a crash), the central admin is emailed when it starts again. These notices are not held back by the daily alert limit, but your email provider's own sending limit still applies.
 
 ## Lecturer portal, admin view
 
