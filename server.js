@@ -1317,13 +1317,11 @@ const navItems = (user, badge = 0, mode = '') => user ? (mode === 'lecturer-admi
 ] : user.is_lecturer ? [
   { href: '/lecturer', icon: '🎓', label: 'My courses' },
   { href: '/settings/profile', icon: '👤', label: 'Lecturer profile' },
-  ...(canLecturerAdmin(user) ? [{ href: '/lecturer/admin', icon: '🛠️', label: 'Lecturer admin' }] : []),
 ] : [
   { href: '/dashboard', icon: '📊', label: 'Dashboard' },
   { href: '/news', icon: '📰', label: 'News' },
   { href: '/chat', icon: '💬', label: 'Chat', badge },
   ...(can.anyAdmin(user) || canPromote(user) ? [{ href: '/admin', icon: '🛠️', label: 'Admin' }] : []),
-  ...(canLecturerAdmin(user) ? [{ href: '/lecturer/admin', icon: '🎓', label: 'Switch to lecturer portal' }] : []),
 ]) : [
   { href: '/', icon: '🏠', label: 'Home' },
   { href: '/lecturer/portal', icon: '🎓', label: 'Lecturer portal' },
@@ -3448,7 +3446,7 @@ const SETTINGS_PAGES = [
 ];
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = (canPromote(req.user) ? SETTINGS_PAGES.concat([['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']]) : SETTINGS_PAGES).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : []).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {

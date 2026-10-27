@@ -254,7 +254,7 @@ News, new uploads, verifications, payments and level changes are also emailed to
 
 ## Lecturer portal, admin view
 
-There is no second login. The central admin taps **Switch to lecturer portal** in the student menu and enters the lecturer portal in admin mode (a Back button returns to the student side). Tabs: Overview, Verify, Lecturers (open any lecturer's own view), Uploads (edit titles, delete), and, for the central admin only, Courses, Institutions and Lecturer admins. The central admin can appoint a **lecturer admin for one institution** (by @username or email); they get the same switch but see and manage only that institution's lecturers and uploads. New-lecturer alerts go to the central admin and that institution's lecturer admins.
+There is no second login. The central admin taps **Switch to lecturer portal** in Settings and enters the lecturer portal in admin mode (a Back button returns to the student side). Tabs: Overview, Verify, Lecturers (open any lecturer's own view), Uploads (edit titles, delete), and, for the central admin only, Courses, Institutions and Lecturer admins. The central admin can appoint a **lecturer admin for one institution** (by @username or email); they get the same switch but see and manage only that institution's lecturers and uploads. New-lecturer alerts go to the central admin and that institution's lecturer admins.
 
 ## Semesters
 
