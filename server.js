@@ -34,7 +34,7 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
   ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
-  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT']])
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT'], ['virtual', 'INTEGER NOT NULL DEFAULT 0']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -779,7 +779,7 @@ function canSeeNewsItem(item, viewer) {
   return true;
 }
 // Members finish their details (username, university, department, level) before anything else; staff only need a username.
-const profileComplete = u => u.is_lecturer
+const profileComplete = u => u.role === 'uniadmin' ? !!u.username && !!u.name : u.is_lecturer
   ? !!u.name && !!u.university && !!u.lecturer_status
   : !!u.username && !!u.name && (u.role !== 'user' || (!!u.department && !!u.level && !!u.university));
 let adminTab = '';
@@ -1316,11 +1316,17 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 `;
 
 const canLecturerAdmin = u => !!u && (isCentral(u) || (!!u.lp_inst && u.uni_role !== 'full'));
-const navItems = (user, badge = 0, mode = '') => user ? (mode === 'lecturer-admin' ? [
+const navItems = (user, badge = 0, mode = '') => user ? (user.role === 'uniadmin' && mode !== 'lecturer-admin' ? [
+  { href: '/uni', icon: '🏫', label: 'University home' },
+  { href: '/uni?tab=students', icon: '🎓', label: 'Students' },
+  { href: '/uni?tab=lecturers', icon: '👨‍🏫', label: 'Lecturers' },
+  { href: '/uni?tab=levels', icon: '📈', label: 'Level promotion' },
+  { href: '/settings', icon: '⚙️', label: 'Settings' },
+] : mode === 'lecturer-admin' ? [
   { href: '/lecturer/admin', icon: '🛠️', label: 'Lecturer admin' },
   { href: '/lecturer/admin?tab=lecturers', icon: '🎓', label: 'Lecturers' },
   { href: '/lecturer/admin?tab=uploads', icon: '📄', label: 'Uploads' },
-  { href: '/dashboard', icon: '⬅️', label: 'Back to student portal' },
+  { href: '/dashboard', icon: '⬅️', label: user.role === 'uniadmin' ? 'Back to university home' : 'Back to student portal' },
 ] : user.is_lecturer ? [
   { href: '/lecturer', icon: '🎓', label: 'My courses' },
   { href: '/settings/profile', icon: '👤', label: 'Lecturer profile' },
@@ -2137,7 +2143,7 @@ app.get('/chat', (req, res) => {
     const q = String(req.query.q || '').trim();
     let results = '';
     if (q) {
-      const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND is_lecturer=0 AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
+      const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND is_lecturer=0 AND role!='uniadmin' AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
         .all(me, '%' + cleanUsername(q) + '%', '%' + q.toLowerCase() + '%');
       results = rows.length ? rows.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? atLink(u.username) : ''}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')
         : '<p class="mut">No one found. Try their exact @username.</p>';
@@ -3455,7 +3461,7 @@ const SETTINGS_PAGES = [
 ];
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : []).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : []).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -4144,6 +4150,7 @@ app.post('/account/name', (req, res) => {
 
 app.get('/dashboard', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/dashboard');
+  if (req.user.role === 'uniadmin') return res.redirect('/uni');
   res.send(layout('Dashboard', dashboardBody(req), req.user));
 });
 
@@ -4232,7 +4239,7 @@ app.get('/admin', adminish, (req, res) => {
 <h3>Verified positions (${verified.length})</h3>${verified.map(v => `<p class="mut">${esc(v.name)}${v.username ? ' @' + esc(v.username) : ''} -- <b>${esc(v.title || '')}</b> (${esc(v.department || '')}${v.level ? ', ' + v.level + ' level' : ''})</p>`).join('') || '<p class="mut">None yet.</p>'}`;
   })() : '';
   const usersSection = cs ? (() => {
-    const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen,title,username,position_status FROM users WHERE is_lecturer=0 ORDER BY id DESC').all();
+    const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen,title,username,position_status FROM users WHERE is_lecturer=0 AND virtual=0 ORDER BY id DESC').all();
     const post = (u, action, label, extra = '', confirmMsg = '') => `<form method="post" action="/admin/users/${u.id}/${action}"${confirmMsg ? ` onsubmit="return confirm('${confirmMsg}')"` : ''}>${extra}<button class="link">${label}</button></form>`;
     const rows = users.map(u => {
       const protectedTarget = u.role === 'admin' && !cf; // login-help admins can't touch full admins
@@ -4685,7 +4692,7 @@ app.post('/admin/maintenance/end', central, (req, res) => {
   res.redirect('/admin/maintenance?msg=' + encodeURIComponent(`"We are back" is going out to ${n} members.`));
 });
 app.get('/admin/team', central, (req, res) => {
-  const staff = db.prepare("SELECT id,name,email,username,role FROM users WHERE role!='user' ORDER BY name").all();
+  const staff = db.prepare("SELECT id,name,email,username,role FROM users WHERE role!='user' AND virtual=0 ORDER BY name").all();
   const roleOpts = (cur, withUser) => (withUser ? ['user'] : []).concat(TEAM_ROLES).map(r => `<option value="${r}"${cur === r ? ' selected' : ''}>${esc(ROLE_LABEL[r])}</option>`).join('');
   const rows = staff.map(u => u.email === ADMIN_EMAIL
     ? `<div class="card"><b>${esc(u.name)}</b> ${u.username ? `<span class="mut">${atLink(u.username)}</span>` : ''}<br><span class="mut">Central admin</span></div>`
@@ -4840,7 +4847,7 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl });
+const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.

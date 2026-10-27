@@ -28,7 +28,7 @@ function registerLecturerAdmin(app, d) {
     const tabs = TABS.filter(t => !t[2] || central);
     const tab = tabs.some(t => t[0] === req.query.tab) ? req.query.tab : 'overview';
     const pend = lecturerRows(req, "AND u.lecturer_status='pending'").length;
-    const nav = `<p style="margin:0 0 6px"><a class="btn ghost" href="/dashboard" style="display:inline-block">&larr; Back to student portal</a></p><p class="mut" style="margin:6px 0">Lecturer portal &middot; admin view${central ? '' : ' &middot; ' + esc(req.scope)}</p>
+    const nav = `<p style="margin:0 0 6px"><a class="btn ghost" href="/dashboard" style="display:inline-block">&larr; Back to ${req.user.role === 'uniadmin' ? 'university home' : 'student portal'}</a></p><p class="mut" style="margin:6px 0">Lecturer portal &middot; admin view${central ? '' : ' &middot; ' + esc(req.scope)}</p>
 <div class="row" style="justify-content:flex-start;gap:6px;margin:8px 0">${tabs.map(([k, l]) => `<a class="${k === tab ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/lecturer/admin?tab=${k}">${l}${k === 'verify' && pend ? ' (' + pend + ')' : ''}</a>`).join('')}</div>`;
     if (tab === 'students') return res.redirect('/uni?tab=students');
     const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
