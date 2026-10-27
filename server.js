@@ -122,7 +122,7 @@ db.prepare("UPDATE users SET verified=1 WHERE role='admin'").run();
 db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
 
 // Admin account: email defaults to the owner's address; password comes from ADMIN_PASSWORD
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'donryscott28@gmail.com').toLowerCase();
+let ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'studieshub.org@gmail.com').toLowerCase();
 const existingAdmin = db.prepare("SELECT id,email FROM users WHERE role='admin'").get();
 if (!existingAdmin) {
   const generated = !process.env.ADMIN_PASSWORD;
@@ -131,8 +131,14 @@ if (!existingAdmin) {
   console.log(`Admin account created: ${ADMIN_EMAIL}` + (generated ? `  password: ${pass}  (set ADMIN_PASSWORD to choose your own)` : ''));
 } else {
   if (existingAdmin.email !== ADMIN_EMAIL) {
-    db.prepare('UPDATE users SET email=? WHERE id=?').run(ADMIN_EMAIL, existingAdmin.id);
-    console.log(`Admin email updated to ${ADMIN_EMAIL}`);
+    if (db.prepare('SELECT 1 FROM users WHERE email=? AND id!=?').get(ADMIN_EMAIL, existingAdmin.id)) {
+      // Someone already registered with that address: do not crash and do not touch their account. Keep the admin on its current email until that account is removed.
+      console.log(`WARNING: ${ADMIN_EMAIL} is already used by another account, so the admin email was NOT changed (still ${existingAdmin.email}). Remove that account in Admin > Users, then restart.`);
+      ADMIN_EMAIL = existingAdmin.email;
+    } else {
+      db.prepare('UPDATE users SET email=? WHERE id=?').run(ADMIN_EMAIL, existingAdmin.id);
+      console.log(`Admin email updated to ${ADMIN_EMAIL}`);
+    }
   }
   // Keep the admin password in sync with ADMIN_PASSWORD on every start, so setting it
   // (or changing it) in Variables always takes effect -- no need to reset the database.
@@ -1476,7 +1482,7 @@ app.get('/browse', (req, res) => {
 // checked by a lawyer for your jurisdiction (e.g. Nigeria's NDPA) before you rely on it.
 app.get('/privacy', (req, res) => {
   const updated = new Date().toISOString().slice(0, 10);
-  const contactEmail = (process.env.CONTACT_EMAIL || 'donryscott28@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim();
+  const contactEmail = (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim();
   const emailProviders = [
     process.env.GOOGLE_REFRESH_TOKEN ? 'Google (Gmail)' : null,
     process.env.RESEND_API_KEY ? 'Resend' : null,
@@ -1562,7 +1568,7 @@ ${process.env.GOOGLE_REFRESH_TOKEN ? `<p>When Studies Hub uses the Gmail API wit
 // Terms & Conditions -- separate public page; uses the existing layout and styling.
 app.get('/terms', (req, res) => {
   const updated = new Date().toISOString().slice(0, 10);
-  const contactEmail = (process.env.CONTACT_EMAIL || 'donryscott28@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim();
+  const contactEmail = (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim();
   const body = `<main class="auth privacy-policy" style="max-width:860px;width:100%;margin:24px auto;padding:clamp(18px,4vw,36px);border:1px solid var(--line);border-radius:22px;background:var(--card);box-shadow:0 12px 40px rgba(0,0,0,.12)"><style>.privacy-policy{line-height:1.7}.privacy-policy h1{font-size:clamp(28px,5vw,38px);line-height:1.15;margin:8px 0}.privacy-policy h2{font-size:19px;margin:28px 0 8px;padding-top:18px;border-top:1px solid var(--line)}.privacy-policy p{line-height:1.75}.privacy-policy li{margin:9px 0;padding-left:3px}.privacy-policy ul{padding-left:22px}.privacy-policy a{overflow-wrap:anywhere}</style><header style="padding:4px 0 18px;border-bottom:1px solid var(--line);margin-bottom:18px"><p class="privacy-kicker">STUDIES HUB · TERMS</p><h1>Terms &amp; Conditions</h1><p class="mut" style="margin:0">Last updated ${updated}</p></header>
 <p>These Terms &amp; Conditions govern your access to and use of Studies Hub at studieshub.org. By creating an account or using the service, you agree to these terms. If you do not agree, do not use the service.</p>
 <h2>1. About Studies Hub</h2><p>Studies Hub is an educational platform for students and lecturers to access, share and discuss learning materials, practice CBT-style exercises, publish approved news, and communicate with other members.</p>

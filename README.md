@@ -11,7 +11,7 @@ A study hub for a university: sign up, get sorted into your department and level
 - **Pages:** upload HTML files, PDFs, Word documents, YouTube videos or CBT (quiz) HTML in `/admin`. Each page lives at `/p/<name>`, open to everyone, members-only, or sorted to a department/level.
 - **Pay-to-view is CBT-only:** a full admin can mark a **CBT upload only** as "Payment to view" (₦100 by default, `PRICE_NGN` to change it). Nothing else can be paid content. There's no payment gateway — the visitor sees your bank transfer details, sends the money, and taps "I have made this payment," which creates a pending claim for a full admin to approve by hand in `/admin`.
 - **Accounts:** email + password sign-up with a verification link, plus **Continue with Google**.
-- **Admin roles:** `donryscott28@gmail.com` is the permanent central admin, and the only account that can create or change admins (dropdown in `/admin` → Users). Six roles: **User**; **Partial admin** (upload/manage plain HTML pages); **Files admin** (upload/manage every kind of file); **News admin** (post news, approve or reject what members submit); **Login-help admin** (verify someone by hand, resend a verification link, email a password-reset code, sign someone out everywhere — never sees the code, can't touch full admins, can't remove users or change roles); **Full admin** (everything, including payments, positions and departments). Only a full admin verifies a claimed position or edits the department list.
+- **Admin roles:** `studieshub.org@gmail.com` is the permanent central admin, and the only account that can create or change admins (dropdown in `/admin` → Users). Six roles: **User**; **Partial admin** (upload/manage plain HTML pages); **Files admin** (upload/manage every kind of file); **News admin** (post news, approve or reject what members submit); **Login-help admin** (verify someone by hand, resend a verification link, email a password-reset code, sign someone out everywhere — never sees the code, can't touch full admins, can't remove users or change roles); **Full admin** (everything, including payments, positions and departments). Only a full admin verifies a claimed position or edits the department list.
 - **Who's online:** in `/admin` and in Chat, a green dot means active in the last two minutes.
 - **Forgot password:** a 6-digit code emailed to the user (valid 10 minutes, 5 tries).
 - **Email:** sent through Gmail with the Gmail API over HTTPS (works on Railway). Resend, Brevo or SMTP also work.
@@ -76,7 +76,7 @@ npm install
 ADMIN_PASSWORD='a-long-password' npm start
 ```
 
-Open http://localhost:3000. Log in at `/login` as `donryscott28@gmail.com` with whatever `ADMIN_PASSWORD` you set — set your own real password there, never write it into `server.js`. `ADMIN_PASSWORD` re-applies on every start, so changing it (on Railway: edit the Variable and redeploy) always takes effect, even for an account created earlier.
+Open http://localhost:3000. Log in at `/login` as `studieshub.org@gmail.com` with whatever `ADMIN_PASSWORD` you set — set your own real password there, never write it into `server.js`. `ADMIN_PASSWORD` re-applies on every start, so changing it (on Railway: edit the Variable and redeploy) always takes effect, even for an account created earlier.
 Without email settings, verification links and reset codes print in the terminal instead of being emailed, and `/admin` has a "verify now" button.
 On an Android phone the same works in Termux (`pkg install nodejs unzip`, unzip this folder, `npm install`, `npm start`).
 
@@ -103,12 +103,12 @@ Railway blocks SMTP on Free, Trial and Hobby plans; that is why email goes out o
 ## Google sign-in and Gmail sending
 
 1. In console.cloud.google.com, create a project and enable the **Gmail API**.
-2. OAuth consent screen: External, add donryscott28@gmail.com as a test user. Before you go live, click "Publish app": in Testing mode, refresh tokens can expire after 7 days.
+2. OAuth consent screen: External, add studieshub.org@gmail.com as a test user. Before you go live, click "Publish app": in Testing mode, refresh tokens can expire after 7 days.
 3. Credentials > Create OAuth client ID > Web application. Authorized redirect URIs:
    `https://YOUR-DOMAIN/auth/google/callback` and `https://developers.google.com/oauthplayground`
 4. Put the client ID and secret in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-5. Get the refresh token: open developers.google.com/oauthplayground, click the gear, tick "Use your own OAuth credentials", paste the ID and secret. In step 1 enter the scope `https://www.googleapis.com/auth/gmail.send`, authorize with donryscott28@gmail.com, click "Exchange authorization code for tokens", and copy the refresh token into `GOOGLE_REFRESH_TOKEN`.
-6. Set `EMAIL_FROM=donryscott28@gmail.com`.
+5. Get the refresh token: open developers.google.com/oauthplayground, click the gear, tick "Use your own OAuth credentials", paste the ID and secret. In step 1 enter the scope `https://www.googleapis.com/auth/gmail.send`, authorize with studieshub.org@gmail.com, click "Exchange authorization code for tokens", and copy the refresh token into `GOOGLE_REFRESH_TOKEN`.
+6. Set `EMAIL_FROM=studieshub.org@gmail.com`.
 
 Each part turns on only when its variables are set. No Google variables means no Google button, and email falls back to Resend, Brevo, SMTP, or the console.
 
