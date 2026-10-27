@@ -641,14 +641,14 @@ function broadcastNews(newsId, exceptId) {
   if (!n) return;
   let ids;
   if (!n.scope_type) {
-    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ?').all(exceptId || 0).map(r => r.id);
+    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND id != ?').all(exceptId || 0).map(r => r.id);
   } else if (n.scope_type === 'own') {
-    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ? AND department=? AND level=?').all(exceptId || 0, n.scope_department, n.scope_level).map(r => r.id);
+    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND id != ? AND department=? AND level=?').all(exceptId || 0, n.scope_department, n.scope_level).map(r => r.id);
   } else if (n.scope_type === 'department') {
-    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND id != ? AND department=?').all(exceptId || 0, n.scope_department).map(r => r.id);
+    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND id != ? AND department=?').all(exceptId || 0, n.scope_department).map(r => r.id);
   } else {
     const depts = db.prepare('SELECT name FROM departments WHERE faculty=?').all(n.scope_faculty).map(d => d.name);
-    ids = depts.length ? db.prepare(`SELECT id FROM users WHERE verified=1 AND id != ? AND department IN (${depts.map(() => '?').join(',')})`).all(exceptId || 0, ...depts).map(r => r.id) : [];
+    ids = depts.length ? db.prepare(`SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND id != ? AND department IN (${depts.map(() => '?').join(',')})`).all(exceptId || 0, ...depts).map(r => r.id) : [];
   }
   notify(ids, { title: 'New on Studies Hub', body: n.title, url: '/news/' + newsId, tag: 'news' });
 }
@@ -2107,7 +2107,7 @@ app.get('/chat', (req, res) => {
     const q = String(req.query.q || '').trim();
     let results = '';
     if (q) {
-      const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
+      const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND is_lecturer=0 AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
         .all(me, '%' + cleanUsername(q) + '%', '%' + q.toLowerCase() + '%');
       results = rows.length ? rows.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? atLink(u.username) : ''}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')
         : '<p class="mut">No one found. Try their exact @username.</p>';
@@ -4197,7 +4197,7 @@ app.get('/admin', adminish, (req, res) => {
   })() : '';
   const observerSection = me.role === 'observer' ? (() => {
     const counts = {
-      users: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user'").get().n,
+      users: db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND is_lecturer=0").get().n,
       pendingPositions: db.prepare("SELECT COUNT(*) n FROM users WHERE position_status='pending'").get().n,
       pendingNews: db.prepare("SELECT COUNT(*) n FROM news WHERE status IN ('pending','pending_approver')").get().n,
       pages: db.prepare('SELECT COUNT(*) n FROM pages').get().n,
@@ -4208,7 +4208,7 @@ app.get('/admin', adminish, (req, res) => {
 <h3>Verified positions (${verified.length})</h3>${verified.map(v => `<p class="mut">${esc(v.name)}${v.username ? ' @' + esc(v.username) : ''} -- <b>${esc(v.title || '')}</b> (${esc(v.department || '')}${v.level ? ', ' + v.level + ' level' : ''})</p>`).join('') || '<p class="mut">None yet.</p>'}`;
   })() : '';
   const usersSection = cs ? (() => {
-    const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen,title,username,position_status FROM users ORDER BY id DESC').all();
+    const users = db.prepare('SELECT id,name,email,role,verified,created_at,last_seen,title,username,position_status FROM users WHERE is_lecturer=0 ORDER BY id DESC').all();
     const post = (u, action, label, extra = '', confirmMsg = '') => `<form method="post" action="/admin/users/${u.id}/${action}"${confirmMsg ? ` onsubmit="return confirm('${confirmMsg}')"` : ''}>${extra}<button class="link">${label}</button></form>`;
     const rows = users.map(u => {
       const protectedTarget = u.role === 'admin' && !cf; // login-help admins can't touch full admins
@@ -4426,7 +4426,7 @@ function promotionTargets(dept, fromLevel) {
 }
 app.get('/admin/levels', promoter, (req, res) => {
   const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
-  const counts = LEVELS.map(l => `${l} level: <b>${db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND level=?").get(l).n}</b>`).join(' &middot; ');
+  const counts = LEVELS.map(l => `${l} level: <b>${db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND is_lecturer=0 AND level=?").get(l).n}</b>`).join(' &middot; ');
   const depts = db.prepare("SELECT DISTINCT department d FROM users WHERE role='user' AND department IS NOT NULL ORDER BY department").all().map(r => r.d);
   const log = db.prepare("SELECT l.*, u.name FROM level_log l LEFT JOIN users u ON u.id=l.by_user ORDER BY l.id DESC LIMIT 8").all();
   const helpers = isCentral(req.user) ? db.prepare("SELECT id,name,username,email FROM users WHERE can_promote=1 ORDER BY name").all() : [];
