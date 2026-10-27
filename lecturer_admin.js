@@ -3,8 +3,9 @@
 // taps a switch in their normal menu and enters the lecturer portal in admin mode, looking and working like the lecturer portal,
 // with a Back button to the student side. The central admin sees every institution; an institution's lecturer admin sees only theirs.
 function registerLecturerAdmin(app, d) {
-  const { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername } = d;
-  const scopeOf = u => !u ? null : isCentral(u) ? 'all' : (u.lp_inst || null);
+  const { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, uni } = d;
+  const log = (req, text) => uni.logAdmin(req, req.scope === 'all' ? null : req.scope, text);
+  const scopeOf = u => !u ? null : isCentral(u) ? 'all' : (u.lp_inst && u.uni_role !== 'full' ? u.lp_inst : null);
   const need = (req, res, next) => {
     if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl || '/lecturer/admin'));
     const sc = scopeOf(req.user);
@@ -21,7 +22,7 @@ function registerLecturerAdmin(app, d) {
   const statusPill = s => s === 'approved' ? '<span class="pill">Verified</span>' : s === 'pending' ? '<span class="pill pending">Waiting</span>' : s === 'rejected' ? '<span class="err">Rejected</span>' : '<span class="pill">Not finished</span>';
   const lecturerRows = (req, extra = '') => { const [w, a] = scopeSql(req); return db.prepare(`SELECT u.id,u.name,u.email,u.university,u.lecturer_reg_no,u.lecturer_status,u.created_at,u.last_seen,(SELECT COUNT(*) FROM pages p WHERE p.author_id=u.id) up,(SELECT group_concat(c.name,', ') FROM lecturer_courses lc JOIN courses c ON c.id=lc.course_id WHERE lc.lecturer_id=u.id) courses FROM users u WHERE u.is_lecturer=1 ${w} ${extra} ORDER BY u.id DESC`).all(...a); };
 
-  const TABS = [['overview', 'Overview'], ['verify', 'Verify'], ['lecturers', 'Lecturers'], ['uploads', 'Uploads'], ['courses', 'Courses', 1], ['institutions', 'Institutions', 1], ['admins', 'Lecturer admins', 1]];
+  const TABS = [['overview', 'Overview'], ['verify', 'Verify'], ['lecturers', 'Lecturers'], ['students', 'Students'], ['uploads', 'Uploads'], ['courses', 'Courses', 1], ['institutions', 'Institutions', 1], ['admins', 'University admins', 1]];
   app.get('/lecturer/admin', need, (req, res) => {
     const central = req.scope === 'all';
     const tabs = TABS.filter(t => !t[2] || central);
@@ -29,6 +30,7 @@ function registerLecturerAdmin(app, d) {
     const pend = lecturerRows(req, "AND u.lecturer_status='pending'").length;
     const nav = `<p style="margin:0 0 6px"><a class="btn ghost" href="/dashboard" style="display:inline-block">&larr; Back to student portal</a></p><p class="mut" style="margin:6px 0">Lecturer portal &middot; admin view${central ? '' : ' &middot; ' + esc(req.scope)}</p>
 <div class="row" style="justify-content:flex-start;gap:6px;margin:8px 0">${tabs.map(([k, l]) => `<a class="${k === tab ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/lecturer/admin?tab=${k}">${l}${k === 'verify' && pend ? ' (' + pend + ')' : ''}</a>`).join('')}</div>`;
+    if (tab === 'students') return res.redirect('/uni?tab=students');
     const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
     let body = '';
     if (tab === 'overview') {
@@ -59,11 +61,7 @@ function registerLecturerAdmin(app, d) {
       const inst = db.prepare('SELECT i.id,i.name,(SELECT COUNT(*) FROM users u WHERE u.university=i.name AND u.is_lecturer=1) c FROM institutions i ORDER BY i.name').all();
       body = `<h1>Institutions (${inst.length})</h1><p class="mut">The list lecturers choose from when they register.</p><form class="card row" method="post" action="/lecturer/admin/institution/add"><input name="name" placeholder="New institution" required maxlength="120" style="flex:1;min-width:200px"><button>Add</button></form>` + inst.map(i => `<div class="card"><form method="post" action="/lecturer/admin/institution/${i.id}/save" class="row" style="gap:6px"><input name="name" value="${esc(i.name)}" maxlength="120" required style="flex:1;min-width:200px"><button class="ghost">Save</button></form><div class="row"><span class="mut">${i.c} lecturer${i.c === 1 ? '' : 's'}</span><form method="post" action="/lecturer/admin/institution/${i.id}/delete" style="margin:0" onsubmit="return confirm('Remove from the list? Existing lecturers keep their entry.')"><button class="link">Remove</button></form></div></div>`).join('');
     } else {
-      const insts = db.prepare('SELECT name FROM institutions ORDER BY name').all().map(r => r.name);
-      const admins = db.prepare('SELECT id,name,username,email,lp_inst FROM users WHERE lp_inst IS NOT NULL ORDER BY lp_inst,name').all();
-      body = `<h1>Lecturer admins</h1><p class="mut">A lecturer admin handles what you handle here, but only for one institution: verifying that institution's lecturers and managing their uploads. They get a switch in their menu, just like you.</p>
-<form method="post" action="/lecturer/admin/admins/add" class="card"><input name="who" placeholder="@username or email of the person" required><select name="institution" required><option value="">Which institution?</option>${insts.map(i => `<option value="${esc(i)}">${esc(i)}</option>`).join('')}</select><button>Make lecturer admin</button></form>` +
-        (admins.map(a => `<div class="card row"><span><b>${esc(a.name)}</b> <span class="mut">${a.username ? '@' + esc(a.username) : esc(a.email)}</span><br>${esc(a.lp_inst)}</span><form method="post" action="/lecturer/admin/admins/${a.id}/remove" style="margin:0"><button class="link">Remove</button></form></div>`).join('') || '<p class="mut">No lecturer admins yet.</p>');
+      body = uni.panel(req);
     }
     send(req, res, 'Lecturer admin', nav + msg + body);
   });
@@ -88,16 +86,18 @@ function registerLecturerAdmin(app, d) {
     const t = lecturer(req, req.params.id); if (!t) return res.redirect(to('verify', 'Not found.'));
     db.prepare("UPDATE users SET lecturer_status='approved' WHERE id=?").run(t.id);
     notify([t.id], { title: 'You are verified', body: 'You can now upload for your courses.', url: '/lecturer', tag: 'lecturer' });
+    log(req, `Verified lecturer ${t.name}`);
     res.redirect(to('verify', `${t.name} is verified.`));
   });
   app.post('/lecturer/admin/lecturer/:id/reject', need, (req, res) => {
     const t = lecturer(req, req.params.id); if (!t) return res.redirect(to('verify', 'Not found.'));
     db.prepare("UPDATE users SET lecturer_status='rejected' WHERE id=?").run(t.id);
+    log(req, `Marked lecturer ${t.name} as not verified`);
     res.redirect(to('lecturers', `${t.name} was marked not verified.`));
   });
   app.post('/lecturer/admin/lecturer/:id/remove', need, (req, res) => {
     const t = lecturer(req, req.params.id); if (!t) return res.redirect(to('lecturers', 'Not found.'));
-    purgeUser(t.id);
+    purgeUser(t.id); log(req, `Removed lecturer ${t.name}`);
     res.redirect(to('lecturers', `${t.name} was removed completely.`));
   });
   const ownUpload = (req, id) => { const p = db.prepare('SELECT p.id,u.university FROM pages p JOIN users u ON u.id=p.author_id WHERE p.id=? AND u.is_lecturer=1').get(Number(id)); return p && inScope(req, p.university) ? p : null; };
@@ -108,7 +108,7 @@ function registerLecturerAdmin(app, d) {
   });
   app.post('/lecturer/admin/upload/:id/delete', need, (req, res) => {
     const p = ownUpload(req, req.params.id); if (!p) return res.redirect(to('uploads', 'Not found.'));
-    db.prepare('DELETE FROM purchases WHERE page_id=?').run(p.id); db.prepare('DELETE FROM pages WHERE id=?').run(p.id);
+    db.prepare('DELETE FROM purchases WHERE page_id=?').run(p.id); db.prepare('DELETE FROM pages WHERE id=?').run(p.id); log(req, 'Deleted a lecturer upload');
     res.redirect(req.get('referer') || to('uploads', 'Upload deleted.'));
   });
   // central admin only
@@ -142,16 +142,5 @@ function registerLecturerAdmin(app, d) {
     res.redirect(to('institutions', `Saved ${n}.`));
   });
   app.post('/lecturer/admin/institution/:id/delete', need, central, (req, res) => { db.prepare('DELETE FROM institutions WHERE id=?').run(Number(req.params.id)); res.redirect(to('institutions', 'Removed from the list.')); });
-  app.post('/lecturer/admin/admins/add', need, central, (req, res) => {
-    const who = String(req.body.who || '').trim(), inst = clean(req.body.institution, 120);
-    const u = db.prepare('SELECT id,name,role FROM users WHERE lower(username)=? OR lower(email)=?').get(cleanUsername(who), who.toLowerCase());
-    if (!u) return res.redirect(to('admins', 'No member found with that username or email.'));
-    if (!db.prepare('SELECT 1 FROM institutions WHERE name=?').get(inst)) return res.redirect(to('admins', 'Pick an institution from the list.'));
-    if (u.role === 'admin') return res.redirect(to('admins', 'The central admin already covers every institution.'));
-    db.prepare('UPDATE users SET lp_inst=? WHERE id=?').run(inst, u.id);
-    notify([u.id], { title: 'You are a lecturer admin', body: `You now manage the lecturer portal for ${inst}. Find the switch in your menu.`, url: '/lecturer/admin', tag: 'lecturer' });
-    res.redirect(to('admins', `${u.name} is now lecturer admin for ${inst}.`));
-  });
-  app.post('/lecturer/admin/admins/:id/remove', need, central, (req, res) => { db.prepare('UPDATE users SET lp_inst=NULL WHERE id=?').run(Number(req.params.id)); res.redirect(to('admins', 'Removed.')); });
 }
 module.exports = { registerLecturerAdmin };

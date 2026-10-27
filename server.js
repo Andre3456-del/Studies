@@ -34,7 +34,7 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
   ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
-  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT']])
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -324,7 +324,7 @@ async function pumpMail() {
 // Things that happen on the lecturer platform go to the central admin and to that institution's lecturer admin(s).
 function notifyLecturerAdmin(title, body, institution) {
   try {
-    const ids = [...fullAdminIds(), ...(institution ? db.prepare('SELECT id FROM users WHERE lp_inst=?').all(institution).map(r => r.id) : [])];
+    const ids = [...fullAdminIds(), ...(institution ? db.prepare("SELECT id FROM users WHERE lp_inst=? AND (uni_role IS NULL OR uni_role!='full')").all(institution).map(r => r.id) : [])];
     notify(ids, { title, body, url: '/lecturer/admin?tab=verify', tag: 'lecturer' });
   } catch (e) { console.error('Lecturer admin alert failed:', e.message); }
 }
@@ -631,7 +631,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c && /^[0-9a-f]{48,64}$/.test(c.slice(4)) ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.lp_inst,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
+    ? db.prepare('SELECT u.id,u.lp_inst,u.uni_role,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -646,6 +646,7 @@ app.use((req, res, next) => {
 // LiveKit calling module; credentials stay in server-side environment variables.
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
 const { registerLecturerAdmin } = require('./lecturer_admin');
+const { registerUniversityAdmin } = require('./university_admin');
 // ---------- semesters (semester.js): first and second semester uploads never mix ----------
 const SEM = require('./semester');
 SEM.ensureSchema(db);
@@ -1314,7 +1315,7 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .sender-name{font-size:12px;font-weight:700;color:var(--blue);margin-bottom:2px}
 `;
 
-const canLecturerAdmin = u => !!u && (isCentral(u) || !!u.lp_inst);
+const canLecturerAdmin = u => !!u && (isCentral(u) || (!!u.lp_inst && u.uni_role !== 'full'));
 const navItems = (user, badge = 0, mode = '') => user ? (mode === 'lecturer-admin' ? [
   { href: '/lecturer/admin', icon: '🛠️', label: 'Lecturer admin' },
   { href: '/lecturer/admin?tab=lecturers', icon: '🎓', label: 'Lecturers' },
@@ -3452,7 +3453,7 @@ const SETTINGS_PAGES = [
 ];
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : []).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : []).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -4302,7 +4303,7 @@ ${replaceCtrl}
   if (T && T[0]) return res.send(layout('Admin', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>${esc(T[2])}</h1>${msgHtml}${T[4] || '<p class="mut">Nothing is waiting here right now.</p>'}`, req.user));
   const tiles = Object.entries(TABS).filter(([, t]) => t[0]).map(([k, t]) => tile('/admin?tab=' + k, t[1], t[2], t[3], t[5]))
     .concat(canPromote(me) ? [tile('/admin/levels', '🪜', 'Levels', 'Move students up a level', 0)] : [])
-    .concat(central_ ? [tile('/admin/team', '🧑‍💼', 'Admin team', 'Appoint admins by @username', 0), tile('/admin/structure', '🏛️', 'Site structure', 'Faculties, departments, institutions, courses', 0), tile('/admin/maintenance', '📣', 'Site notices', 'Tell everyone about an upgrade', 0)] : []);
+    .concat(central_ ? [tile('/admin/team', '🧑‍💼', 'Admin team', 'Appoint admins by @username', 0), tile('/admin/structure', '🏛️', 'Site structure', 'Faculties, departments, institutions, courses', 0), tile('/admin/maintenance', '📣', 'Site notices', 'Tell everyone about an upgrade', 0), tile('/lecturer/admin?tab=admins', '🏫', 'University admins', 'Invite admins for one university by email', 0)] : []);
   res.send(layout('Admin', `<h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${msgHtml}<div class="grid">${tiles.join('')}</div>
 <script>(function(){var h=location.hash.slice(1),m={upload:'pages',pages:'pages',news:'news','pending-news':'news',positions:'positions','verify-queue':'positions',lecturers:'lecturers',payments:'payments',sponsors:'payments',users:'users'};if(h&&m[h]&&location.search.indexOf('tab=')<0)location.replace('/admin?tab='+m[h]+'#'+h);else if(h==='levels')location.replace('/admin/levels')})()</script>`, req.user));
 });
@@ -4837,7 +4838,8 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters });
+const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl });
+registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.
 setTimeout(() => { try { if (getSecret('maintenance_since')) maintenanceBack(); } catch (e) { console.error('Back-online notice failed:', e.message); } }, 15000).unref();

@@ -252,9 +252,14 @@ News, new uploads, verifications, payments and level changes are also emailed to
 
 **Site notices** (Admin > Site notices, central admin only): emails every verified member (and sends a phone notification) that the site is being upgraded. Send it *before* the upgrade, because a site that is down cannot email. When the site restarts afterwards, a "we are back" email goes out by itself after about 15 seconds. If the site stops without shutting down cleanly (a crash), the central admin is emailed when it starts again. These notices are not held back by the daily alert limit, but your email provider's own sending limit still applies.
 
-## Lecturer portal, admin view
+## University admins (invited by email)
 
-There is no second login. The central admin taps **Switch to lecturer portal** in Settings and enters the lecturer portal in admin mode (a Back button returns to the student side). Tabs: Overview, Verify, Lecturers (open any lecturer's own view), Uploads (edit titles, delete), and, for the central admin only, Courses, Institutions and Lecturer admins. The central admin can appoint a **lecturer admin for one institution** (by @username or email); they get the same switch but see and manage only that institution's lecturers and uploads. New-lecturer alerts go to the central admin and that institution's lecturer admins.
+The site owner (the central admin, `ADMIN_EMAIL`) invites people **by email**, even if they have no account: Admin > University admins. The email link lets them set a password (if new) and join. Two kinds, each limited to one institution and always below the owner:
+
+- **University central admin** - runs that university's lecturer side (verify and remove its lecturers, manage their uploads; sees the Switch to lecturer portal row in Settings) and can look over and remove that university's students.
+- **University full admin** - runs that university's student side (Settings > University admin): student list, remove students, move that university's students up a level.
+
+The owner sees everything they do (Admin > University admins > What they have been doing), gets the same verification alerts (and may act or not), and can remove their access at any time. The owner also gets a Switch to lecturer portal row in Settings (admin view of every institution, with a Back button).
 
 ## Semesters
 
