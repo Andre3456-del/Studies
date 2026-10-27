@@ -315,6 +315,14 @@ async function pumpMail() {
     }
   } finally { mailBusy = false; }
 }
+// Things that happen on the lecturer platform go to the lecturer platform's own admin, by email, not to the student-side admin.
+function notifyLecturerAdmin(title, body) {
+  try {
+    const a = db.prepare('SELECT email FROM lp_admin ORDER BY id LIMIT 1').get(); if (!a) return;
+    const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org', link = base + '/lecturer/admin?tab=verify';
+    deliver(a.email, title, `${title}\n${body}\n\nOpen the lecturer control room: ${link}`, emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(title)}</h2><p style="margin:0 0 16px">${esc(body)}</p><p><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open the control room</a></p>`, base)).catch(e => console.error('Lecturer admin alert failed:', e.message));
+  } catch (e) { console.error('Lecturer admin alert failed:', e.message); }
+}
 // Send a notification to these people (all their devices). Never throws and is never awaited by callers.
 function notify(userIds, payload) {
   const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
@@ -609,6 +617,7 @@ app.use((req, res, next) => {
 
 // LiveKit calling module; credentials stay in server-side environment variables.
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
+const { registerLecturerAdmin } = require('./lecturer_admin');
 registerCalling(app, { db, crypto, notify, logCall: (callerId, calleeId, kind, state, secs) => {
   // A line in the 1-to-1 chat: "Video call - 47 sec", "Missed video call", "Declined".
   const enc = encryptMsg(JSON.stringify({ k: kind, s: state, d: secs || 0 }));
@@ -3276,12 +3285,12 @@ app.post('/lecturer/welcome', (req, res) => {
   const ins = db.prepare('INSERT OR IGNORE INTO lecturer_courses(lecturer_id,course_id) VALUES(?,?)');
   allCourseIds.forEach(cid => ins.run(req.user.id, cid));
   const courseNames = db.prepare(`SELECT name FROM courses WHERE id IN (${allCourseIds.map(() => '?').join(',')})`).all(...allCourseIds).map(c => c.name).join(', ');
-  notify(fullAdminIds(), { title: 'Lecturer to verify', body: `${name} (${university}) -- ${courseNames}`, url: '/admin#lecturers', tag: 'lecturer' });
+  notifyLecturerAdmin('Lecturer to verify', `${name} (${university}) -- ${courseNames}`);
   res.redirect('/lecturer');
 });
 app.get('/lecturer', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/lecturer');
-  if (!req.user.is_lecturer) return res.redirect(isCentral(req.user) ? '/admin/structure#courses' : '/dashboard');
+  if (!req.user.is_lecturer) return res.redirect(isCentral(req.user) ? '/lecturer/admin' : '/dashboard');
   if (!profileComplete(req.user)) return res.redirect('/lecturer/welcome');
   if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user));
   if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
@@ -4242,7 +4251,7 @@ ${replaceCtrl}
     pages: [cp, '⬆️', 'Uploads & pages', 'Upload files and manage what you posted', pagesSection, 0],
     news: [cn, '📢', 'News', 'Post news and review what students share', newsSection, pendingNews.length],
     positions: [cf || !!me.position_can_verify, '🎖️', 'Positions & departments', 'Verify positions and claims', `${delegatedVerifySection}${positionsSection}`, cf ? count("SELECT COUNT(*) n FROM users WHERE position_status='pending'") : 0],
-    lecturers: [cf, '🎓', 'Lecturers', 'Verify lecturer accounts', lecturersSection, cf ? count("SELECT COUNT(*) n FROM users WHERE is_lecturer=1 AND lecturer_status='pending'") : 0],
+    lecturers: [false, '🎓', 'Lecturers', 'Verify lecturer accounts', lecturersSection, cf ? count("SELECT COUNT(*) n FROM users WHERE is_lecturer=1 AND lecturer_status='pending'") : 0],
     payments: [cf, '💳', 'Payments & sponsors', 'Payment claims and sponsor posts', `${paymentsSection}${sponsorsSection}`, cf ? count("SELECT COUNT(*) n FROM purchases WHERE status='pending'") + count("SELECT COUNT(*) n FROM sponsor_posts WHERE status='pending_payment'") : 0],
     users: [cs, '👥', cf ? 'Users' : 'Login help', cf ? 'Everyone who registered' : 'Help people who cannot log in', usersSection, 0],
     overview: [me.role === 'observer', '👁️', 'Overview', 'Read-only look at the site', observerSection, 0],
@@ -4665,11 +4674,6 @@ ${depts.filter(d => d.faculty === f).map(d => `<div style="margin-top:10px;paddi
 <p class="mut" style="margin-top:0">Changing a name here changes it for everyone it is attached to.</p>
 <details id="faculties" class="card" open><summary style="cursor:pointer;font-weight:600">Faculties &amp; departments (${depts.length})</summary>
 <form class="card row" method="post" action="/admin/structure/department/add" style="gap:6px;margin-top:10px"><input name="name" placeholder="New department" required maxlength="120" style="flex:2;min-width:160px"><input name="faculty" list="facList" placeholder="Faculty" required maxlength="80" style="flex:1;min-width:130px"><button>Add</button></form>${deptHtml}</details>
-<details id="institutions" class="card"><summary style="cursor:pointer;font-weight:600">Institutions (${instRows.length})</summary>
-<form class="card row" method="post" action="/admin/structure/institution/add" style="gap:6px;margin-top:10px"><input name="name" placeholder="New institution" required maxlength="120" style="flex:1;min-width:200px"><button>Add</button></form>${instHtml}</details>
-<details id="courses" class="card"><summary style="cursor:pointer;font-weight:600">Lecturer courses (${courses.length})</summary>
-<p class="mut">These are the courses lecturers pick and upload under. If something is not really a course, rename it, delete it, or merge it into the right one.</p>
-<form class="card row" method="post" action="/admin/structure/course/add" style="gap:6px"><input name="name" placeholder="New course" required maxlength="120" style="flex:1;min-width:180px"><button>Add</button></form>${courseHtml || '<p class="mut">No courses yet.</p>'}</details>
 <script>(function(){var h=location.hash.slice(1),d=h&&document.getElementById(h);if(d&&d.tagName==='DETAILS'){d.open=true;d.scrollIntoView()}})()</script>`, req.user));
 });
 app.post('/admin/structure/faculty/rename', central, (req, res) => {
@@ -4752,5 +4756,6 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
+registerLecturerAdmin(app, { db, bcrypt, crypto, esc, sidKey, tooMany, noteFail, fails, DUMMY_HASH, purgeUser, notify, weakPw, adminEmail: ADMIN_EMAIL, renameValue });
 sweepRemnants();
 app.listen(PORT, () => console.log(`Studies Hub running on http://localhost:${PORT}`));

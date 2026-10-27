@@ -250,6 +250,10 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 
 News, new uploads, verifications, payments and level changes are also emailed to the person (chat messages and calls are not). Each person can switch this off in Settings > Notifications. Sent from your `MAIL_FROM`/`EMAIL_FROM` address, one at a time, up to `MAIL_ALERTS_PER_DAY` (default 80) a day. Sign-up links and reset codes are separate and never held back.
 
+## Lecturer platform control room
+
+The central admin has a separate login for the lecturer platform at `/lecturer/admin/login` (same email is fine; the password is its own, set with `LECTURER_ADMIN_PASSWORD`). It has its own sign-in cookie that is only sent to `/lecturer/admin`. Tabs: Overview, Verify lecturers, Lecturers (verify, unverify, remove completely), Courses, Institutions, Uploads, Account. New-lecturer alerts are emailed to it. The student-side Admin no longer has lecturer verification, lecturer courses or institutions.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.
