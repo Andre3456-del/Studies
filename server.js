@@ -1610,7 +1610,7 @@ const timeAgo = iso => {
 };
 // home = true: just the news cards, nothing else -- no heading, no share form -- so the front page is only news.
 // home = false (the /news section): heading, the "Share something" form for logged-in members, then the cards.
-const ADSENSE_CLIENT = 'ca-pub-4280454885902185';
+const ADSENSE_CLIENT = 'ca-pub-1092156984936466';
 // The home page <head> carries the AdSense snippet (what AdSense's site check looks for) plus Google's matching account meta tag.
 const ADSENSE_HEAD = `<meta name="google-adsense-account" content="${ADSENSE_CLIENT}"><script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}"
      crossorigin="anonymous"></script>`;
