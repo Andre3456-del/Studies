@@ -618,6 +618,15 @@ app.use((req, res, next) => {
 // LiveKit calling module; credentials stay in server-side environment variables.
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
 const { registerLecturerAdmin } = require('./lecturer_admin');
+// ---------- semesters (semester.js): first and second semester uploads never mix ----------
+const SEM = require('./semester');
+SEM.ensureSchema(db);
+SEM.addSemesterColumn(db, 'pages', 'title');
+// Reads the semester from the course code in each new upload's title (GST 121 -> second semester); no code = shows in both.
+function stampSemesters() {
+  const rows = db.prepare("SELECT id,title FROM pages WHERE semester IS NULL AND title GLOB '*[0-9][0-9][0-9]*'").all(), set = db.prepare('UPDATE pages SET semester=? WHERE id=?');
+  for (const r of rows) { const sm = SEM.parseCourseCode(r.title).semester; if (sm) set.run(sm, r.id); }
+}
 registerCalling(app, { db, crypto, notify, logCall: (callerId, calleeId, kind, state, secs) => {
   // A line in the 1-to-1 chat: "Video call - 47 sec", "Missed video call", "Declined".
   const enc = encryptMsg(JSON.stringify({ k: kind, s: state, d: secs || 0 }));
@@ -645,6 +654,8 @@ function broadcastNews(newsId, exceptId) {
   notify(ids, { title: 'New on Studies Hub', body: n.title, url: '/news/' + newsId, tag: 'news' });
 }
 function announceUpload(page) {
+  stampSemesters();
+  if (!SEM.visibleInSemester(SEM.parseCourseCode(page.title).semester, SEM.getCurrent(db))) return; // not this semester's material: no alert
   const ids = audienceFor(page);
   const where = [deptListOf(page).join(', '), page.level ? page.level + ' level' : ''].filter(Boolean).join(' · ');
   notify(ids, { title: page.paid ? 'New CBT (pay to view)' : 'New upload', body: `${page.title}${where ? ' — ' + where : ''}`, url: '/p/' + page.slug, tag: 'upload' });
@@ -700,6 +711,7 @@ function sortedFor(page, user) {
     if (page.author_id != null && page.author_id === user.id) return true;
     return page.course_id != null && user.lecturer_status === 'approved' && !!db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(user.id, page.course_id);
   }
+  if (!SEM.visibleInSemester(page.semester, SEM.getCurrent(db))) return false; // the other semester's uploads stay hidden until that semester starts
   if (page.dept == null && page.level == null) return true;
   if (!user) return false;
   if (page.dept != null && !deptListOf(page).includes(user.department)) return false;
@@ -1426,7 +1438,7 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD })));
 
 app.get('/browse', (req, res) => {
-  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level,author_id,course_id FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
+  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level,author_id,course_id,semester FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
   const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
   res.send(layout('All pages', `<h1>All pages</h1>${grid}`, req.user));
 });
@@ -3361,6 +3373,7 @@ app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
   } else {
     db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
   }
+  db.prepare('UPDATE pages SET semester=NULL WHERE id=?').run(p.id); stampSemesters();
   res.redirect('/lecturer?msg=' + encodeURIComponent('Saved.'));
 });
 app.post('/lecturer/pages/:id/delete', (req, res) => {
@@ -4045,7 +4058,7 @@ app.post('/api/chat', async (req, res) => {
     .slice(-10).map(m => ({ role: m.role, content: m.content.slice(0, 1000) }));
   while (msgs.length && msgs[0].role !== 'user') msgs.shift();
   if (!msgs.length || msgs[msgs.length - 1].role !== 'user') return res.status(400).json({ error: 'Send a question first.' });
-  const pages = db.prepare('SELECT slug,title,dept,level,author_id,course_id FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, req.user)).slice(0, 50);
+  const pages = db.prepare('SELECT slug,title,dept,level,author_id,course_id,semester FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, req.user)).slice(0, 50);
   const system = `You are the assistant for Studies Hub, a website that hosts study pages. Answer clearly and briefly in plain language, and say so when you are not sure. Pages currently on the site: ${pages.map(p => `${p.title} (/p/${p.slug})`).join(', ') || 'none yet'}. Do not invent pages or features that are not listed.`;
   try { res.json({ reply: await askAI(msgs, system) }); }
   catch (e) { console.error('AI error:', e.message); res.status(502).json({ error: 'The assistant could not answer right now. Please try again.' }); }
@@ -4075,7 +4088,7 @@ function previewTile(p) {
 // "Available" = free to view plus anything they've paid for; "Locked" = pay-to-view CBT they haven't unlocked yet.
 function dashboardBody(req) {
   const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?'), staff = can.pages(u);
-  const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
+  const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
   const isLocked = p => !!p.paid && !staff && !hasPurchased(u.id, p.id);
   const locked = rows.filter(isLocked), available = rows.filter(p => !isLocked(p));
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
@@ -4083,7 +4096,7 @@ function dashboardBody(req) {
   const forYou = [u.department, u.level ? u.level + ' level' : ''].filter(Boolean).join(' · ');
   const subtitle = isCentral(u) ? 'You are the central admin.' : u.role !== 'user' ? `You are a ${esc(ROLE_LABEL[u.role] || 'admin')}.` : (forYou ? esc(forYou) : 'Uploads for you, at a glance.');
   const grid = list => `<div class="pv-grid">${list.map(previewTile).join('')}</div>`;
-  return `${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="dash-top">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:52px;height:52px" alt="">` : `<span class="avatar">${initial}</span>`}<div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}${u.username ? ` &middot; @${esc(u.username)}` : ''}</p></div></div>
+  return `<p class="mut" style="margin:8px 0 0">${SEM.semesterName(SEM.getCurrent(db))}</p>${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="dash-top">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:52px;height:52px" alt="">` : `<span class="avatar">${initial}</span>`}<div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}${u.username ? ` &middot; @${esc(u.username)}` : ''}</p></div></div>
 <p style="margin:14px 0 0">${pill}${posPill} <span class="mut">&middot; member since ${esc(String(u.created_at).slice(0, 10))}</span></p></div>
 <h2 class="sec">${rows.length} upload${rows.length === 1 ? '' : 's'} for you</h2>
 <div class="box"><h2>Available to you <span class="count">${available.length}</span></h2><p class="hint">Free to view, plus anything you have paid for.</p>${available.length ? grid(available) : '<p class="mut">Nothing available yet.</p>'}</div>
@@ -4418,6 +4431,8 @@ app.get('/admin/levels', promoter, (req, res) => {
 <label class="mut">Which level moves up</label><select name="level"><option value="">Every level (100&rarr;200, 200&rarr;300 ...)</option>${LEVELS.slice(0, -1).map(l => `<option value="${l}">Only ${l} level &rarr; ${l + 100}</option>`).join('')}</select>
 <button style="margin-top:10px">Move students up one level</button></form>
 <p class="hint">Students already at ${TOP_LEVEL} level stay where they are. This cannot be undone, so check the choice above before you press the button.</p></div>
+${isCentral(req.user) ? (() => { const cur = SEM.getCurrent(db); return `<h3>Semester</h3><div class="card"><p style="margin:0 0 6px">Now showing: <b>${SEM.semesterName(cur)}</b></p><p class="mut" style="margin:0 0 8px">Students only see uploads for the current semester. The course code decides it: the middle digit of a code like GST 1<b>2</b>1 is the semester. An upload with no course code shows in both.</p>
+<form method="post" action="/admin/semester/advance" onsubmit="return confirm('${cur === 1 ? 'Open second semester? First semester uploads will be hidden from students.' : 'End the session? Second semester uploads will be hidden, first semester opens again, and EVERY student moves up one level. This cannot be undone.'}')"><button>${cur === 1 ? 'Move everyone to second semester' : 'Start new session: first semester + move everyone up a level'}</button></form></div>`; })() : ''}
 ${isCentral(req.user) ? `<h3>People allowed to promote students</h3><p class="mut" style="margin-top:0">Only you (the central admin) can add or remove them.</p>
 ${helpers.length ? helpers.map(h => `<div class="card row" style="align-items:center"><span style="flex:1"><b>${esc(h.name)}</b> <span class="mut">${h.username ? '@' + esc(h.username) : esc(h.email)}</span></span><form method="post" action="/admin/levels/promoters/${h.id}/remove"><button class="link">Remove</button></form></div>`).join('') : '<p class="mut">Nobody else yet.</p>'}
 <form method="post" action="/admin/levels/promoters/add" class="card row" style="align-items:center"><input name="who" placeholder="@username or email of the person" required style="flex:1"><button>Allow</button></form>` : ''}
@@ -4432,6 +4447,23 @@ app.post('/admin/levels/advance', promoter, (req, res) => {
   db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, dept, from, info.changes);
   if (ids.length) notify(ids, { title: 'You moved up a level', body: 'Your level has been updated by the school admin.', url: '/dashboard', tag: 'level' });
   res.redirect('/admin/levels?msg=' + encodeURIComponent(`${info.changes} student${info.changes === 1 ? '' : 's'} moved up a level.`));
+});
+app.post('/admin/semester/advance', central, (req, res) => {
+  const from = SEM.getCurrent(db);
+  let moved = 0;
+  const r = SEM.advance(db, () => { // end of second semester: everyone moves up one level
+    const t = promotionTargets(null, null);
+    const info = db.prepare(`UPDATE users SET level = level + 100 WHERE ${t.where}`).run(...t.args);
+    moved = info.changes;
+    db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, null, null, moved);
+    return moved;
+  });
+  const everyone = db.prepare("SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND role!='admin'").all().map(x => x.id);
+  notify(everyone, r.levelsPromoted
+    ? { title: 'A new session has begun', body: 'First semester is open and you have moved up a level.', url: '/dashboard', tag: 'semester' }
+    : { title: 'Second semester is open', body: 'Second semester uploads are now available.', url: '/dashboard', tag: 'semester' });
+  console.log(`Audit: ${req.user.email} moved the site from ${SEM.semesterName(from)} to ${SEM.semesterName(r.to)}${r.levelsPromoted ? ' and promoted ' + moved + ' students' : ''}`);
+  res.redirect('/admin/levels?msg=' + encodeURIComponent(r.levelsPromoted ? `New session started: first semester is open and ${moved} student${moved === 1 ? '' : 's'} moved up a level.` : 'Second semester is now open. First semester uploads are hidden.'));
 });
 app.post('/admin/levels/promoters/add', central, (req, res) => {
   const who = String(req.body.who || '').trim();

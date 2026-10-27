@@ -254,6 +254,10 @@ News, new uploads, verifications, payments and level changes are also emailed to
 
 The central admin has a separate login for the lecturer platform at `/lecturer/admin/login` (same email is fine; the password is its own, set with `LECTURER_ADMIN_PASSWORD`). It has its own sign-in cookie that is only sent to `/lecturer/admin`. Tabs: Overview, Verify lecturers, Lecturers (verify, unverify, remove completely), Courses, Institutions, Uploads, Account. New-lecturer alerts are emailed to it. The student-side Admin no longer has lecturer verification, lecturer courses or institutions.
 
+## Semesters
+
+First and second semester uploads never mix. The course code in an upload's title decides it: in a code like GST 121 the first digit is the level and the second is the semester (1 or 2). Uploads with no course code show in both. The central admin switches the site's semester in Admin > Level promotion: from first to second only changes the semester; from second it starts a new session (first semester again) and moves every student up one level. Logic lives in `semester.js`.
+
 ## Other email options
 
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.
