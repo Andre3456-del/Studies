@@ -34,7 +34,7 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
   ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
-  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1']])
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -315,12 +315,11 @@ async function pumpMail() {
     }
   } finally { mailBusy = false; }
 }
-// Things that happen on the lecturer platform go to the lecturer platform's own admin, by email, not to the student-side admin.
-function notifyLecturerAdmin(title, body) {
+// Things that happen on the lecturer platform go to the central admin and to that institution's lecturer admin(s).
+function notifyLecturerAdmin(title, body, institution) {
   try {
-    const a = db.prepare('SELECT email FROM lp_admin ORDER BY id LIMIT 1').get(); if (!a) return;
-    const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org', link = base + '/lecturer/admin?tab=verify';
-    deliver(a.email, title, `${title}\n${body}\n\nOpen the lecturer control room: ${link}`, emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(title)}</h2><p style="margin:0 0 16px">${esc(body)}</p><p><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open the control room</a></p>`, base)).catch(e => console.error('Lecturer admin alert failed:', e.message));
+    const ids = [...fullAdminIds(), ...(institution ? db.prepare('SELECT id FROM users WHERE lp_inst=?').all(institution).map(r => r.id) : [])];
+    notify(ids, { title, body, url: '/lecturer/admin?tab=verify', tag: 'lecturer' });
   } catch (e) { console.error('Lecturer admin alert failed:', e.message); }
 }
 // Send a notification to these people (all their devices). Never throws and is never awaited by callers.
@@ -603,7 +602,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c && /^[0-9a-f]{48,64}$/.test(c.slice(4)) ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
+    ? db.prepare('SELECT u.id,u.lp_inst,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -1286,14 +1285,22 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .sender-name{font-size:12px;font-weight:700;color:var(--blue);margin-bottom:2px}
 `;
 
-const navItems = (user, badge = 0) => user ? (user.is_lecturer ? [
+const canLecturerAdmin = u => !!u && (isCentral(u) || !!u.lp_inst);
+const navItems = (user, badge = 0, mode = '') => user ? (mode === 'lecturer-admin' ? [
+  { href: '/lecturer/admin', icon: '🛠️', label: 'Lecturer admin' },
+  { href: '/lecturer/admin?tab=lecturers', icon: '🎓', label: 'Lecturers' },
+  { href: '/lecturer/admin?tab=uploads', icon: '📄', label: 'Uploads' },
+  { href: '/dashboard', icon: '⬅️', label: 'Back to student portal' },
+] : user.is_lecturer ? [
   { href: '/lecturer', icon: '🎓', label: 'My courses' },
   { href: '/settings/profile', icon: '👤', label: 'Lecturer profile' },
+  ...(canLecturerAdmin(user) ? [{ href: '/lecturer/admin', icon: '🛠️', label: 'Lecturer admin' }] : []),
 ] : [
   { href: '/dashboard', icon: '📊', label: 'Dashboard' },
   { href: '/news', icon: '📰', label: 'News' },
   { href: '/chat', icon: '💬', label: 'Chat', badge },
   ...(can.anyAdmin(user) || canPromote(user) ? [{ href: '/admin', icon: '🛠️', label: 'Admin' }] : []),
+  ...(canLecturerAdmin(user) ? [{ href: '/lecturer/admin', icon: '🎓', label: 'Switch to lecturer portal' }] : []),
 ]) : [
   { href: '/', icon: '🏠', label: 'Home' },
   { href: '/lecturer/portal', icon: '🎓', label: 'Lecturer portal' },
@@ -1337,7 +1344,7 @@ const layout = (title, body, user, opts = {}) => {
     ? (user.avatar_mime ? `<img src="/avatar/${user.id}" class="drawer-av-img" alt="">` : `<span class="avatar" style="width:40px;height:40px;font-size:15px">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)
     : '';
   const badge = user ? chatBadge(user.id) : 0;
-  const drawerNav = navItems(user, badge).map(i => `<a class="drawer-item" href="${i.href}"><span>${i.icon}</span>${esc(i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('');
+  const drawerNav = navItems(user, badge, opts.mode).map(i => `<a class="drawer-item" href="${i.href}"><span>${i.icon}</span>${esc(i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('');
   const drawerBottom = user
     ? `<a class="drawer-item" href="/settings"><span>⚙️</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item" style="width:100%;text-align:left;background:none;color:inherit;box-shadow:none;font:inherit;border:0;cursor:pointer"><span>🚪</span>Log out</button></form>`
     : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
@@ -3297,12 +3304,12 @@ app.post('/lecturer/welcome', (req, res) => {
   const ins = db.prepare('INSERT OR IGNORE INTO lecturer_courses(lecturer_id,course_id) VALUES(?,?)');
   allCourseIds.forEach(cid => ins.run(req.user.id, cid));
   const courseNames = db.prepare(`SELECT name FROM courses WHERE id IN (${allCourseIds.map(() => '?').join(',')})`).all(...allCourseIds).map(c => c.name).join(', ');
-  notifyLecturerAdmin('Lecturer to verify', `${name} (${university}) -- ${courseNames}`);
+  notifyLecturerAdmin('Lecturer to verify', `${name} (${university}) -- ${courseNames}`, university);
   res.redirect('/lecturer');
 });
 app.get('/lecturer', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/lecturer');
-  if (!req.user.is_lecturer) return res.redirect(isCentral(req.user) ? '/lecturer/admin' : '/dashboard');
+  if (!req.user.is_lecturer) return res.redirect(canLecturerAdmin(req.user) ? '/lecturer/admin' : '/dashboard');
   if (!profileComplete(req.user)) return res.redirect('/lecturer/welcome');
   if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user));
   if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
@@ -4788,6 +4795,6 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-registerLecturerAdmin(app, { db, bcrypt, crypto, esc, sidKey, tooMany, noteFail, fails, DUMMY_HASH, purgeUser, notify, weakPw, adminEmail: ADMIN_EMAIL, renameValue });
+registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters });
 sweepRemnants();
 app.listen(PORT, () => console.log(`Studies Hub running on http://localhost:${PORT}`));

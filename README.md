@@ -250,9 +250,9 @@ When someone claims a payment, it shows up under "Payment claims waiting for you
 
 News, new uploads, verifications, payments and level changes are also emailed to the person (chat messages and calls are not). Each person can switch this off in Settings > Notifications. Sent from your `MAIL_FROM`/`EMAIL_FROM` address, one at a time, up to `MAIL_ALERTS_PER_DAY` (default 80) a day. Sign-up links and reset codes are separate and never held back.
 
-## Lecturer platform control room
+## Lecturer portal, admin view
 
-The central admin has a separate login for the lecturer platform at `/lecturer/admin/login` (same email is fine; the password is its own, set with `LECTURER_ADMIN_PASSWORD`). It has its own sign-in cookie that is only sent to `/lecturer/admin`. Tabs: Overview, Verify lecturers, Lecturers (verify, unverify, remove completely), Courses, Institutions, Uploads, Account. New-lecturer alerts are emailed to it. The student-side Admin no longer has lecturer verification, lecturer courses or institutions.
+There is no second login. The central admin taps **Switch to lecturer portal** in the student menu and enters the lecturer portal in admin mode (a Back button returns to the student side). Tabs: Overview, Verify, Lecturers (open any lecturer's own view), Uploads (edit titles, delete), and, for the central admin only, Courses, Institutions and Lecturer admins. The central admin can appoint a **lecturer admin for one institution** (by @username or email); they get the same switch but see and manage only that institution's lecturers and uploads. New-lecturer alerts go to the central admin and that institution's lecturer admins.
 
 ## Semesters
 
