@@ -34,12 +34,13 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
   ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
-  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT'], ['virtual', 'INTEGER NOT NULL DEFAULT 0']])
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT'], ['virtual', 'INTEGER NOT NULL DEFAULT 0'], ['sub_role', 'TEXT'], ['sub_inst', 'TEXT']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
 for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['admin_id', 'INTEGER'], ['video_id', 'TEXT'], ['dept', 'TEXT'], ['level', 'INTEGER'], ['author_id', 'INTEGER'], ['course_id', 'INTEGER']])
   if (!pageCols.includes(c)) db.exec(`ALTER TABLE pages ADD COLUMN ${c} ${def}`);
+if (!pageCols.includes('university')) db.exec('ALTER TABLE pages ADD COLUMN university TEXT');
 db.exec('CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL, body_enc BLOB NOT NULL, iv BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
 db.exec('CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id)');
@@ -64,7 +65,7 @@ if (!newsCols.includes('image_mime')) db.exec('ALTER TABLE news ADD COLUMN image
 // exactly as before). 'own' restricts to one department+level; 'faculty' restricts to every department sharing
 // that faculty. approver_id/status support a post that needs one specific person's sign-off instead of the
 // general news queue -- their approval publishes it directly.
-for (const [c, def] of [['scope_type', 'TEXT'], ['scope_department', 'TEXT'], ['scope_level', 'INTEGER'], ['scope_faculty', 'TEXT'], ['approver_id', 'INTEGER'], ['approver_status', 'TEXT']])
+for (const [c, def] of [['scope_type', 'TEXT'], ['scope_department', 'TEXT'], ['scope_level', 'INTEGER'], ['scope_faculty', 'TEXT'], ['approver_id', 'INTEGER'], ['approver_status', 'TEXT'], ['scope_university', 'TEXT']])
   if (!newsCols.includes(c)) db.exec(`ALTER TABLE news ADD COLUMN ${c} ${def}`);
 // Paid promotional posts from businesses/services -- shown in News, separately from regular submissions.
 db.exec(`CREATE TABLE IF NOT EXISTS sponsor_posts(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, contact TEXT, image_data BLOB, image_mime TEXT, reference TEXT UNIQUE NOT NULL, amount_kobo INTEGER NOT NULL, duration_days INTEGER NOT NULL DEFAULT 30, status TEXT NOT NULL DEFAULT 'pending_payment', created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT)`);
@@ -631,7 +632,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c && /^[0-9a-f]{48,64}$/.test(c.slice(4)) ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.lp_inst,u.uni_role,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
+    ? db.prepare('SELECT u.id,u.lp_inst,u.uni_role,u.sub_role,u.sub_inst,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -672,6 +673,8 @@ function broadcastNews(newsId, exceptId) {
   let ids;
   if (!n.scope_type) {
     ids = db.prepare('SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND id != ?').all(exceptId || 0).map(r => r.id);
+  } else if (n.scope_type === 'university') {
+    ids = db.prepare('SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND id != ? AND university=?').all(exceptId || 0, n.scope_university).map(r => r.id);
   } else if (n.scope_type === 'own') {
     ids = db.prepare('SELECT id FROM users WHERE verified=1 AND is_lecturer=0 AND id != ? AND department=? AND level=?').all(exceptId || 0, n.scope_department, n.scope_level).map(r => r.id);
   } else if (n.scope_type === 'department') {
@@ -734,6 +737,7 @@ function departmentCheckboxes(selectedList) {
 // An upload is either general (no department, no level), or aimed at one or more departments and/or one level.
 function sortedFor(page, user) {
   if (can.pages(user)) return true;
+  if (page.university && (!user || user.university !== page.university)) return false; // a university's own upload stays inside that university
   // A lecturer sees only lecturer uploads: their own and those of colleagues teaching the same course. Anything a
   // student (or the admin acting as a student) uploads is never shown in the lecturer portal.
   if (user && user.is_lecturer) {
@@ -750,6 +754,7 @@ function sortedFor(page, user) {
 // Everyone who should be told about a new upload.
 function audienceFor(page) {
   const where = ["role='user'", 'verified=1', 'is_lecturer=0'], args = [];
+  if (page.university) { where.push('university=?'); args.push(page.university); }
   const list = page.dept != null ? deptListOf(page) : [];
   if (list.length) { where.push(`department IN (${list.map(() => '?').join(',')})`); args.push(...list); }
   if (page.level != null) { where.push('level=?'); args.push(page.level); }
@@ -773,6 +778,7 @@ function newsReachFor(user) {
 function canSeeNewsItem(item, viewer) {
   if (!item.scope_type) return true; // unrestricted: every post made before this feature, and every school-wide one, stays visible to all
   if (!viewer) return false; // department/faculty-scoped posts need a known department -- only logged-in students have one
+  if (item.scope_type === 'university') return viewer.role === 'admin' || (!!item.scope_university && viewer.university === item.scope_university);
   if (item.scope_type === 'own') return viewer.department === item.scope_department && Number(viewer.level) === Number(item.scope_level);
   if (item.scope_type === 'department') return viewer.department === item.scope_department;
   if (item.scope_type === 'faculty') return !!item.scope_faculty && facultyOf(viewer.department) === item.scope_faculty;
@@ -1321,6 +1327,9 @@ const navItems = (user, badge = 0, mode = '') => user ? (user.role === 'uniadmin
   { href: '/uni?tab=students', icon: '🎓', label: 'Students' },
   { href: '/uni?tab=lecturers', icon: '👨‍🏫', label: 'Lecturers' },
   { href: '/uni?tab=positions', icon: '🎖️', label: 'Positions' },
+  { href: '/uni/news', icon: '📰', label: 'University news' },
+  { href: '/uni/uploads', icon: '📤', label: 'University uploads' },
+  { href: '/uni/support', icon: '🛟', label: 'Login help' },
   { href: '/uni?tab=levels', icon: '📈', label: 'Level promotion' },
   { href: '/settings', icon: '⚙️', label: 'Settings' },
 ] : mode === 'lecturer-admin' ? [
@@ -1480,7 +1489,7 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD })));
 
 app.get('/browse', (req, res) => {
-  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level,author_id,course_id,semester FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
+  const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level,author_id,course_id,semester,university FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
   const grid = pages.length ? `<div class="grid">${pages.map(pageCard).join('')}</div>` : '<p class="mut">Nothing published yet. Check back soon.</p>';
   res.send(layout('All pages', `<h1>All pages</h1>${grid}`, req.user));
 });
@@ -3474,7 +3483,7 @@ const SETTINGS_PAGES = [
 ];
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : []).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], req.user.sub_inst && req.user.sub_role === 'news' ? [['/uni/news', '📰', 'University news', 'Post news to everyone in ' + req.user.sub_inst]] : [], req.user.sub_inst && req.user.sub_role === 'uploads' ? [['/uni/uploads', '📤', 'University uploads', 'Upload files for everyone in ' + req.user.sub_inst]] : [], req.user.sub_inst && req.user.sub_role === 'support' ? [['/uni/support', '🛟', 'Login help', 'Help students of ' + req.user.sub_inst + ' who cannot sign in']] : []).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -4108,7 +4117,7 @@ app.post('/api/chat', async (req, res) => {
     .slice(-10).map(m => ({ role: m.role, content: m.content.slice(0, 1000) }));
   while (msgs.length && msgs[0].role !== 'user') msgs.shift();
   if (!msgs.length || msgs[msgs.length - 1].role !== 'user') return res.status(400).json({ error: 'Send a question first.' });
-  const pages = db.prepare('SELECT slug,title,dept,level,author_id,course_id,semester FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, req.user)).slice(0, 50);
+  const pages = db.prepare('SELECT slug,title,dept,level,author_id,course_id,semester,university FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, req.user)).slice(0, 50);
   const system = `You are the assistant for Studies Hub, a website that hosts study pages. Answer clearly and briefly in plain language, and say so when you are not sure. Pages currently on the site: ${pages.map(p => `${p.title} (/p/${p.slug})`).join(', ') || 'none yet'}. Do not invent pages or features that are not listed.`;
   try { res.json({ reply: await askAI(msgs, system) }); }
   catch (e) { console.error('AI error:', e.message); res.status(502).json({ error: 'The assistant could not answer right now. Please try again.' }); }
@@ -4138,7 +4147,7 @@ function previewTile(p) {
 // "Available" = free to view plus anything they've paid for; "Locked" = pay-to-view CBT they haven't unlocked yet.
 function dashboardBody(req) {
   const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?'), staff = can.pages(u);
-  const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
+  const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester,university FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
   const isLocked = p => !!p.paid && !staff && !hasPurchased(u.id, p.id);
   const locked = rows.filter(isLocked), available = rows.filter(p => !isLocked(p));
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
@@ -4864,7 +4873,7 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken });
+const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.

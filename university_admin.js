@@ -4,7 +4,7 @@
 //   - "University full admin": runs that university's student side (e.g. the Student Union).
 // Each works only inside one institution, always below the owner, and the owner can see what they do.
 function registerUniversityAdmin(app, d) {
-  const { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken } = d;
+  const { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited } = d;
   db.exec("CREATE TABLE IF NOT EXISTS admin_invites(id INTEGER PRIMARY KEY, email TEXT NOT NULL, kind TEXT NOT NULL, institution TEXT NOT NULL, token_hash TEXT NOT NULL, expires INTEGER NOT NULL, created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, accepted_at TEXT);" +
           "CREATE TABLE IF NOT EXISTS admin_log(id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP, actor INTEGER, actor_name TEXT, institution TEXT, action TEXT NOT NULL);");
   if (!db.prepare('PRAGMA table_info(admin_invites)').all().some(c => c.name === 'user_id')) db.exec('ALTER TABLE admin_invites ADD COLUMN user_id INTEGER');
@@ -38,6 +38,7 @@ function registerUniversityAdmin(app, d) {
     }
     for (const o of db.prepare('SELECT id,user_id FROM admin_invites WHERE institution=? AND kind=? AND accepted_at IS NULL AND id!=?').all(inst, kind, inviteId)) { dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(o.id); }
   };
+  const SUB = { news: ['News admin (posts news to the whole university)', 'University news'], uploads: ['Uploads admin (posts files to the whole university)', 'University uploads'], support: ['Login help admin (helps students with sign-in problems)', 'Login help'] };
   const LABEL = { central: 'University central admin', full: 'University full admin' };
   const clean = (v, n) => String(v || '').trim().replace(/\s+/g, ' ').slice(0, n);
   const owner = (req, res, next) => req.user && isCentral(req.user) ? next() : res.redirect('/dashboard');
@@ -200,6 +201,9 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
 <form method="post" action="/uni/handover" onsubmit="return confirm('When this person accepts, YOU lose access and your account is deleted. Continue?')" style="margin-top:8px"><input type="hidden" name="kind" value="central"><input name="email" type="email" placeholder="New central admin's email (must be a new email)" required><button>Hand over to a new central admin</button></form></div>
 <div class="card"><b>Full admin</b> (a student with extra powers, e.g. the Student Union)<br><span class="mut">${seat('full').map(h => esc(h.name) + ' &middot; ' + esc(h.email)).join(', ') || 'none'}</span>
 <form method="post" action="/uni/handover" style="margin-top:8px"><input type="hidden" name="kind" value="full"><input name="email" type="email" placeholder="Email of the new full admin's student account" required><button>${seat('full').length ? 'Change the full admin' : 'Appoint a full admin'}</button></form></div>
+<h3>Your own admins</h3><p class="mut">Appoint students of ${esc(inst)} to help. What a news admin or uploads admin posts reaches only ${esc(inst)}. Each person has one job.</p>
+<form method="post" action="/uni/appoint" class="card"><input name="who" placeholder="Their @username or email" required><select name="role">${Object.entries(SUB).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select><button>Appoint</button></form>
+${db.prepare("SELECT id,name,username,sub_role FROM users WHERE sub_inst=? AND sub_role IS NOT NULL ORDER BY name").all(inst).map(a => `<div class="card row"><span><b>${esc(a.name)}</b> <span class="mut">@${esc(a.username || '')}</span><br><span class="mut">${esc((SUB[a.sub_role] || [a.sub_role])[0])}</span></span><form method="post" action="/uni/appoint/${a.id}/remove" style="margin:0"><button class="link">Remove</button></form></div>`).join('') || '<p class="mut">None appointed yet.</p>'}
 ${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="card row"><span><b>${esc(w.email)}</b><br><span class="mut">${LABEL[w.kind]}</span></span><form method="post" action="/uni/invite/${w.id}/cancel" style="margin:0"><button class="link">Cancel</button></form></div>`).join('') : ''}`;
     } else if (tab === 'lecturers') {
       const rows = db.prepare("SELECT id,name,email,lecturer_reg_no,lecturer_status,created_at FROM users WHERE is_lecturer=1 AND university=? ORDER BY lecturer_status='pending' DESC, id DESC LIMIT 200").all(req.scope);
@@ -272,6 +276,112 @@ ${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="
     logAdmin(req, req.scope, `Rejected ${t.name}'s position claim (${t.position})`);
     to('Rejected.');
   });
+  // ----- appointing the university's own admins (central admin only) -----
+  app.post('/uni/appoint', ctl, (req, res) => {
+    const to = m => res.redirect('/uni?tab=admins&msg=' + encodeURIComponent(m));
+    const who = clean(req.body.who, 120).toLowerCase().replace(/^@+/, ''), role = SUB[req.body.role] ? req.body.role : null;
+    if (!role) return to('Pick a job for them.');
+    const t = db.prepare("SELECT id,name,sub_role FROM users WHERE (lower(username)=? OR lower(email)=?) AND role='user' AND is_lecturer=0 AND virtual=0 AND university=?").get(who, who, req.scope);
+    if (!t) return to(`No student of ${req.scope} found with that username or email.`);
+    db.prepare('UPDATE users SET sub_role=?, sub_inst=? WHERE id=?').run(role, req.scope, t.id);
+    notify([t.id], { title: 'You are now a ' + SUB[role][1] + ' admin', body: `${req.scope} appointed you. Find it in Settings.`, url: '/settings', tag: 'lecturer' });
+    logAdmin(req, req.scope, `Appointed ${t.name} as ${SUB[role][1]} admin`);
+    to(`${t.name} is now ${SUB[role][0].split(' (')[0]}.`);
+  });
+  app.post('/uni/appoint/:id/remove', ctl, (req, res) => {
+    const t = db.prepare('SELECT id,name FROM users WHERE id=? AND sub_inst=?').get(Number(req.params.id), req.scope);
+    if (t) { db.prepare('UPDATE users SET sub_role=NULL, sub_inst=NULL WHERE id=?').run(t.id); logAdmin(req, req.scope, `Removed ${t.name} as an admin`); }
+    res.redirect('/uni?tab=admins&msg=' + encodeURIComponent('Removed.'));
+  });
+  // The jobs: who may do each one, and for which university. The central admin does all of them; an appointed student does just theirs.
+  const power = kind => (req, res, next) => {
+    if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
+    if (isController(req)) { req.inst = req.user.lp_inst; req.boss = true; return next(); }
+    if (req.user.sub_role === kind && req.user.sub_inst && req.user.role === 'user') { req.inst = req.user.sub_inst; req.boss = false; return next(); }
+    res.redirect('/dashboard');
+  };
+  const desk = (req, title, body) => layout(title, `<p class="mut"><a href="${isController(req) ? '/uni' : '/settings'}">&larr; ${isController(req) ? 'University home' : 'Settings'}</a></p><h1>${esc(title)}</h1><p class="mut" style="margin-top:0">${esc(req.inst)}</p>${req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : ''}${body}`, req.user, { mode: 'uni' });
+
+  // News: goes live at once and reaches only this university (home page and alerts included).
+  app.get('/uni/news', power('news'), (req, res) => {
+    const rows = db.prepare("SELECT id,title,created_at,author_id FROM news WHERE scope_type='university' AND scope_university=? ORDER BY id DESC LIMIT 100").all(req.inst);
+    res.send(desk(req, 'University news', `<form method="post" action="/uni/news" enctype="multipart/form-data" class="card"><p class="mut" style="margin:0 0 6px">This goes live straight away and reaches everyone in ${esc(req.inst)}, and nobody outside it.</p><input name="title" placeholder="Headline" required maxlength="140"><textarea name="body" required maxlength="20000" placeholder="What do you want to tell the university?" style="width:100%;min-height:120px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><input type="file" name="image" accept="image/*"><button style="margin-top:8px">Post to ${esc(req.inst)}</button></form>
+<h3>Posted</h3>${rows.map(n => `<div class="card row"><span><a href="/news/${n.id}"><b>${esc(n.title)}</b></a><br><span class="mut">${timeStr(n.created_at)}</span></span>${req.boss || n.author_id === req.user.id ? `<form method="post" action="/uni/news/${n.id}/delete" style="margin:0" onsubmit="return confirm('Delete this news?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
+  });
+  app.post('/uni/news', power('news'), upload.single('image'), (req, res) => {
+    const to = m => res.redirect('/uni/news?msg=' + encodeURIComponent(m));
+    const title = clean(req.body.title, 140), body = String(req.body.body || '').trim().slice(0, 20000);
+    if (!title || !body) return to('Enter a headline and the news.');
+    if (req.file && !/^image\/(png|jpe?g|gif|webp)$/.test(req.file.mimetype)) return to('That file is not a picture.');
+    const id = Number(db.prepare("INSERT INTO news(title,body,image_data,image_mime,author_id,status,scope_type,scope_university) VALUES(?,?,?,?,?,'approved','university',?)").run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id, req.inst).lastInsertRowid);
+    broadcastNews(id, req.user.id);
+    logAdmin(req, req.inst, `Posted news: ${title}`);
+    to('Posted to ' + req.inst + '.');
+  });
+  app.post('/uni/news/:id/delete', power('news'), (req, res) => {
+    const n = db.prepare("SELECT id,title,author_id FROM news WHERE id=? AND scope_type='university' AND scope_university=?").get(Number(req.params.id), req.inst);
+    if (n && (req.boss || n.author_id === req.user.id)) { db.prepare('DELETE FROM news WHERE id=?').run(n.id); logAdmin(req, req.inst, `Deleted news: ${n.title}`); }
+    res.redirect('/uni/news?msg=' + encodeURIComponent('Deleted.'));
+  });
+
+  // Uploads: files and videos for everyone in this university (optionally one department or level).
+  app.get('/uni/uploads', power('uploads'), (req, res) => {
+    const rows = db.prepare('SELECT id,slug,title,kind,created_at,dept,level,admin_id FROM pages WHERE university=? ORDER BY id DESC LIMIT 100').all(req.inst);
+    res.send(desk(req, 'University uploads', `<form method="post" action="/uni/uploads" enctype="multipart/form-data" class="card"><p class="mut" style="margin:0 0 6px">Only people in ${esc(req.inst)} can see and get alerted about these.</p><input name="title" placeholder="Title (e.g. GST 101 past questions)" required maxlength="140">
+<select name="kind"><option value="pdf">PDF</option><option value="doc">Word / PowerPoint document</option><option value="video">YouTube video</option></select><input type="file" name="file"><input name="video_url" placeholder="YouTube link (for a video)">
+<select name="department"><option value="">Every department</option>${departmentNames().map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select><select name="level"><option value="">Every level</option>${LEVELS.map(l => `<option value="${l}">${l} level</option>`).join('')}</select><button style="margin-top:8px">Upload</button></form>
+<h3>Uploaded</h3>${rows.map(p => `<div class="card row"><span><a href="/p/${esc(p.slug)}"><b>${esc(p.title)}</b></a><br><span class="mut">${esc(p.kind)} &middot; ${esc(p.dept || 'all departments')} &middot; ${p.level ? p.level + ' level' : 'all levels'} &middot; ${timeStr(p.created_at)}</span></span>${req.boss || p.admin_id === req.user.id ? `<form method="post" action="/uni/uploads/${p.id}/delete" style="margin:0" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
+  });
+  app.post('/uni/uploads', power('uploads'), upload.single('file'), (req, res) => {
+    const to = m => res.redirect('/uni/uploads?msg=' + encodeURIComponent(m));
+    const kind = ['pdf', 'doc', 'video'].includes(req.body.kind) ? req.body.kind : 'pdf', title = clean(req.body.title, 140);
+    const dept = departmentNames().includes(req.body.department) ? req.body.department : null, level = LEVELS.includes(Number(req.body.level)) ? Number(req.body.level) : null;
+    if (!title) return to('Enter a title.');
+    let slug;
+    if (kind === 'video') {
+      const vid = youtubeId(req.body.video_url); if (!vid) return to('Enter a valid YouTube link.');
+      slug = uniqueSlug(slugify(title));
+      db.prepare("INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id,university) VALUES(?,?,'',1,'video',0,NULL,?,?,?,?,?)").run(slug, title, vid, dept, level, req.user.id, req.inst);
+    } else {
+      if (!req.file) return to('Choose a file first.');
+      if (kind === 'pdf' && req.file.mimetype !== 'application/pdf') return to('That is not a PDF file.');
+      slug = uniqueSlug(slugify(title));
+      db.prepare("INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id,university) VALUES(?,?,'',1,?,0,NULL,?,?,?,?,?,?,?)").run(slug, title, kind, req.file.buffer, req.file.mimetype, req.file.originalname, dept, level, req.user.id, req.inst);
+    }
+    announceUpload({ title, slug, paid: 0, dept, level, university: req.inst });
+    logAdmin(req, req.inst, `Uploaded ${title}`);
+    to('Uploaded for ' + req.inst + '.');
+  });
+  app.post('/uni/uploads/:id/delete', power('uploads'), (req, res) => {
+    const p = db.prepare('SELECT id,title,admin_id FROM pages WHERE id=? AND university=?').get(Number(req.params.id), req.inst);
+    if (p && (req.boss || p.admin_id === req.user.id)) { db.prepare('DELETE FROM pages WHERE id=?').run(p.id); logAdmin(req, req.inst, `Deleted upload ${p.title}`); }
+    res.redirect('/uni/uploads?msg=' + encodeURIComponent('Deleted.'));
+  });
+
+  // Login help: students of this university only.
+  const helpTarget = (req, id) => db.prepare("SELECT * FROM users WHERE id=? AND role='user' AND is_lecturer=0 AND virtual=0 AND university=? AND id!=?").get(id, req.inst, req.user.id);
+  app.get('/uni/support', power('support'), (req, res) => {
+    const q = clean(req.query.q, 60).toLowerCase();
+    const rows = q ? db.prepare("SELECT id,name,username,email,verified FROM users WHERE role='user' AND is_lecturer=0 AND virtual=0 AND university=? AND (lower(name) LIKE ? OR lower(username) LIKE ? OR lower(email) LIKE ?) LIMIT 30").all(req.inst, '%' + q + '%', '%' + q + '%', '%' + q + '%') : [];
+    const f = (id, act, label, extra = '') => `<form method="post" action="/uni/support/${id}/${act}" style="margin:0"><button class="link"${extra}>${label}</button></form>`;
+    res.send(desk(req, 'Login help', `<p class="mut">Find a student of ${esc(req.inst)} who cannot sign in. A reset code goes only to their own inbox: you never see it.</p><form method="get" class="row" style="gap:6px"><input name="q" value="${esc(q)}" placeholder="Name, @username or email" style="flex:1"><button class="ghost">Search</button></form>` +
+      (rows.map(u => `<div class="card"><b>${esc(u.name)}</b> <span class="mut">@${esc(u.username || '')} &middot; ${esc(u.email)} &middot; ${u.verified ? 'email verified' : 'email NOT verified'}</span><div class="row" style="justify-content:flex-start;gap:12px;margin-top:6px;flex-wrap:wrap">${u.verified ? '' : f(u.id, 'verify', 'Mark email verified') + f(u.id, 'resend', 'Resend verification link')}${f(u.id, 'reset', 'Email a reset code')}${f(u.id, 'signout', 'Sign out everywhere')}</div></div>`).join('') || (q ? '<p class="mut">Nobody found.</p>' : ''))));
+  });
+  const supportAct = (act, fn) => app.post('/uni/support/:id/' + act, power('support'), async (req, res) => {
+    const t = helpTarget(req, Number(req.params.id)), to = m => res.redirect('/uni/support?q=' + encodeURIComponent(req.body.q || (t && t.email) || '') + '&msg=' + encodeURIComponent(m));
+    if (!t) return to('That student is not in your university.');
+    const msg = await fn(req, t); logAdmin(req, req.inst, `Login help for ${t.name}: ${act}`); to(msg);
+  });
+  supportAct('verify', (req, t) => { db.prepare('UPDATE users SET verified=1, verify_hash=NULL, verify_expires=NULL WHERE id=?').run(t.id); return 'Email marked as verified.'; });
+  supportAct('resend', async (req, t) => { if (t.verified) return 'Already verified.'; const r = await sendSafely(req, t); return r === 'sent' ? `Verification link sent to ${t.email}.` : r === 'wait' ? 'A link was sent a moment ago. Wait a minute and try again.' : 'The email could not be sent.'; });
+  supportAct('reset', async (req, t) => {
+    if (limited('help-reset:' + t.id, 3, 15 * 60e3)) return 'Too many codes sent to this person. Try again in a few minutes.';
+    const code = String(crypto.randomInt(100000, 1000000));
+    db.prepare('UPDATE users SET reset_hash=?, reset_expires=?, reset_attempts=0 WHERE id=?').run(bcrypt.hashSync(code, 10), Date.now() + 600000, t.id);
+    try { await sendResetCode(t.email, code); } catch (e) { console.error('Reset email failed:', e.message); }
+    return `A reset code was emailed to ${t.email}.`;
+  });
+  supportAct('signout', (req, t) => { db.prepare('DELETE FROM sessions WHERE user_id=?').run(t.id); return `${t.name} was signed out everywhere.`; });
   return { panel, logAdmin };
 }
 module.exports = { registerUniversityAdmin };

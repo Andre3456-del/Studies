@@ -270,6 +270,8 @@ They register and use the site as a normal student. The invite goes to their stu
 
 **One seat each, and handover.** Each university has exactly one central admin and one full admin. A central admin (and you) can type a new email under `/uni` > Admins to hand a seat over. Nothing changes until the new person accepts; then the old holder loses the seat automatically (a central admin's account is deleted, a full admin just becomes a normal student again).
 
+**Their own admins.** A central admin can appoint students of their university (`/uni` > Admins) as a **news admin**, **uploads admin** or **login help admin** (one job each; removable any time). The central admin can do all three jobs too (University news / uploads / Login help in the menu). News posts go live at once and are visible, and alerted, **only inside that university** (not on the public home page, not to other universities); uploads (PDF, Word/PowerPoint, YouTube) likewise, optionally limited to a department or level. Login help can verify, resend the verification link, email a reset code (never shown to the helper) and sign out - for students of that university only. Appointed students see their tool in Settings.
+
 The owner sees everything they do (Admin > University admins > What they have been doing), gets the same verification alerts, and can remove access at any time (a central admin's account is deleted; a full admin simply loses the extra abilities).
 
 ## Semesters
