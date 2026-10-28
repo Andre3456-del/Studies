@@ -34,7 +34,7 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
   ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
-  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT'], ['virtual', 'INTEGER NOT NULL DEFAULT 0'], ['sub_role', 'TEXT'], ['sub_inst', 'TEXT'], ['sub_perms', 'TEXT'], ['sub_title', 'TEXT'], ['sub_by', 'INTEGER']])
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT'], ['virtual', 'INTEGER NOT NULL DEFAULT 0'], ['sub_role', 'TEXT'], ['sub_inst', 'TEXT'], ['sub_perms', 'TEXT'], ['sub_title', 'TEXT'], ['sub_by', 'INTEGER'], ['graduated', 'INTEGER NOT NULL DEFAULT 0'], ['graduated_at', 'TEXT']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -76,7 +76,7 @@ if (!sponsorCols.includes('duration_days')) db.exec("ALTER TABLE sponsor_posts A
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(lower(username))');
 db.exec(`
 CREATE TABLE IF NOT EXISTS level_log(id INTEGER PRIMARY KEY, by_user INTEGER NOT NULL, department TEXT, from_level INTEGER, moved INTEGER NOT NULL, at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, faculty TEXT NOT NULL DEFAULT 'Other');
+CREATE TABLE IF NOT EXISTS departments(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, faculty TEXT NOT NULL DEFAULT 'Other', max_level INTEGER NOT NULL DEFAULT 500);
 CREATE TABLE IF NOT EXISTS friendships(id INTEGER PRIMARY KEY, requester_id INTEGER NOT NULL, addressee_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(requester_id, addressee_id));
 CREATE TABLE IF NOT EXISTS groups(id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_by INTEGER NOT NULL, avatar_data BLOB, avatar_mime TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS group_members(group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'member', added_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(group_id, user_id));
@@ -90,6 +90,7 @@ CREATE INDEX IF NOT EXISTS friendships_addr ON friendships(addressee_id, status)
 CREATE INDEX IF NOT EXISTS gm_user ON group_members(user_id);
 CREATE INDEX IF NOT EXISTS push_user ON push_subscriptions(user_id);
 `);
+if (!db.prepare('PRAGMA table_info(departments)').all().some(c => c.name === 'max_level')) db.exec('ALTER TABLE departments ADD COLUMN max_level INTEGER NOT NULL DEFAULT 500');
 const msgCols2 = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
 for (const [c, def] of [['group_id', 'INTEGER'], ['edited_at', 'TEXT'], ['deleted_at', 'TEXT'], ['deleted_by', 'INTEGER'], ['reply_to_id', 'INTEGER'], ['delivered_at', 'TEXT'], ['forwarded', 'INTEGER NOT NULL DEFAULT 0']])
   if (!msgCols2.includes(c)) db.exec(`ALTER TABLE messages ADD COLUMN ${c} ${def}`);
@@ -634,7 +635,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c && /^[0-9a-f]{48,64}$/.test(c.slice(4)) ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.lp_inst,u.uni_role,u.sub_role,u.sub_inst,u.sub_perms,u.sub_title,u.sub_by,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
+    ? db.prepare('SELECT u.id,u.graduated,u.lp_inst,u.uni_role,u.sub_role,u.sub_inst,u.sub_perms,u.sub_title,u.sub_by,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -722,6 +723,11 @@ function levelFromText(text) {
   return m ? Number(m[1]) * 100 : null;
 }
 const departmentNames = () => db.prepare('SELECT name FROM departments ORDER BY name').all().map(r => r.name);
+// Nobody goes past their department's last level (500 by default, 400 for some): the site owner sets it per department or faculty.
+const DEFAULT_LAST_LEVEL = 500;
+const maxLevelFor = dept => { const r = dept ? db.prepare('SELECT max_level FROM departments WHERE name=?').get(dept) : null; return r ? r.max_level : DEFAULT_LAST_LEVEL; };
+const LAST_LEVEL_SQL = "COALESCE((SELECT d.max_level FROM departments d WHERE d.name=users.department), 500)";
+const facultyNames = () => db.prepare('SELECT DISTINCT faculty FROM departments ORDER BY faculty').all().map(r => r.faculty);
 function departmentOptions(selected) {
   const rows = db.prepare('SELECT name,faculty FROM departments ORDER BY faculty,name').all(), groups = {};
   for (const r of rows) (groups[r.faculty] = groups[r.faculty] || []).push(r.name);
@@ -734,7 +740,7 @@ function departmentCheckboxes(selectedList) {
   const rows = db.prepare('SELECT name,faculty FROM departments ORDER BY faculty,name').all(), groups = {};
   for (const r of rows) (groups[r.faculty] = groups[r.faculty] || []).push(r.name);
   const box = n => `<label class="row" style="justify-content:flex-start;gap:8px"><input type="checkbox" name="dept" value="${esc(n)}" style="width:auto"${selectedList.includes(n) ? ' checked' : ''}>${esc(n)}</label>`;
-  return Object.keys(groups).map(f => `<p class="chat-label">${esc(f)}</p>${groups[f].map(box).join('')}`).join('');
+  return `<div class="dbox"><input type="search" placeholder="Search departments..." oninput="var q=this.value.toLowerCase();[].forEach.call(this.parentNode.querySelectorAll('label.row'),function(l){l.style.display=l.textContent.toLowerCase().indexOf(q)>-1?'':'none'})" style="margin:4px 0">` + Object.keys(groups).map(f => `<p class="chat-label">${esc(f)}</p>${groups[f].map(box).join('')}`).join('') + '</div>';
 }
 // An upload is either general (no department, no level), or aimed at one or more departments and/or one level.
 function sortedFor(page, user) {
@@ -1077,7 +1083,25 @@ const central = (req, res, next) => isCentral(req.user) ? next() : res.sendStatu
 const canPromote = u => !!u && (isCentral(u) || !!u.can_promote);
 const promoter = (req, res, next) => canPromote(req.user) ? next() : req.method === 'GET' ? res.redirect('/login?next=/admin/levels') : res.sendStatus(403);
 
-const FEEDBACK_CSS = `.fbmin{display:flex;align-items:center;gap:10px;justify-content:space-between;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 0 12px;cursor:pointer}.fbmin b{font-size:15px}
+const SEARCHSEL_JS = String.raw`(function(){
+var NAMES=/^(department|faculty|institution|university|dept_filter)$/;
+function snap(s){var o=[];[].forEach.call(s.children,function(c){if(c.tagName==='OPTGROUP'){[].forEach.call(c.children,function(x){o.push({g:c.label,v:x.value,t:x.textContent})})}else o.push({g:'',v:c.value,t:c.textContent,b:c.value===''})});return o}
+function fill(s,list,sel){s._busy=1;s.innerHTML='';var gm={};list.forEach(function(it){var p=s;if(it.g){p=gm[it.g];if(!p){p=document.createElement('optgroup');p.label=it.g;s.appendChild(p);gm[it.g]=p}}var o=document.createElement('option');o.value=it.v;o.textContent=it.t;if(it.v===sel)o.selected=true;p.appendChild(o)});s._busy=0;if(s._obs)s._obs.takeRecords()}
+function enhance(s){
+ if(s._ss||s.multiple)return;s._ss=1;
+ var box=document.createElement('input');box.type='search';box.className='ss-in';box.placeholder='Type to search...';box.autocomplete='off';box.setAttribute('aria-label','Search the list');
+ s.parentNode.insertBefore(box,s);
+ var master=snap(s);
+ function vis(){box.style.display=master.length>7?'':'none'}
+ vis();
+ box.addEventListener('input',function(){var q=box.value.trim().toLowerCase(),cur=s.value;fill(s,master.filter(function(it){return it.b||it.v===cur||it.t.toLowerCase().indexOf(q)>-1}),cur);if(q){var first=null;[].forEach.call(s.options,function(o){if(!first&&o.value&&o.textContent.toLowerCase().indexOf(q)>-1)first=o})}});
+ s._obs=new MutationObserver(function(){if(s._busy)return;master=snap(s);box.value='';vis()});s._obs.observe(s,{childList:true,subtree:true});
+}
+function run(){[].forEach.call(document.querySelectorAll('select'),function(s){if(NAMES.test(s.name||'')||s.hasAttribute('data-search'))enhance(s)})}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run);else run();
+})();`;
+const FEEDBACK_CSS = `.ss-in{margin:4px 0!important}
+.fbmin{display:flex;align-items:center;gap:10px;justify-content:space-between;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 0 12px;cursor:pointer}.fbmin b{font-size:15px}
 .fbsheet{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}.fbbox{background:var(--bg);color:var(--fg);width:min(520px,100%);max-height:92vh;overflow:auto;border:1px solid var(--line);border-radius:18px 18px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom,0px))}
 .fbbox h3{margin:0 0 4px}.fbbox textarea{width:100%;min-height:70px;font:inherit;padding:10px 12px;margin:4px 0 10px;color:var(--fg);background:rgba(8,10,22,.5);border:1px solid var(--line);border-radius:10px}.fbbox label.q{display:block;font-weight:600;margin-top:6px}
 .fbstars{display:flex;gap:6px;margin:6px 0 10px}.fbstars button{font-size:26px;padding:6px 10px;background:transparent;border:1px solid var(--line);color:var(--fg);box-shadow:none;border-radius:12px;min-width:50px;min-height:50px}.fbstars button.on{border-color:var(--blue);background:rgba(56,176,248,.2)}
@@ -1514,6 +1538,7 @@ document.addEventListener('contextmenu',function(e){var a=pageLink(e.target);if(
 ` : ''}
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
+${user ? `<script>${SEARCHSEL_JS}</script>` : ''}
 ${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
 </body></html>`;
 };
@@ -1803,9 +1828,9 @@ app.get('/@:username', (req, res) => {
 });
 app.get('/u/:id', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
-  const u = db.prepare('SELECT id,name,title,position_auto_role,avatar_mime,username,department,university,level,last_seen,hide_active FROM users WHERE id=?').get(Number(req.params.id));
+  const u = db.prepare('SELECT id,name,title,position_auto_role,avatar_mime,username,department,university,level,graduated,last_seen,hide_active FROM users WHERE id=?').get(Number(req.params.id));
   if (!u) return res.status(404).send(layout('Not found', '<h2>Member not found</h2>', req.user));
-  const facts = [['University', u.university], ['Department', u.department], ['Level', u.level ? u.level + ' level' : null]].filter(r => r[1])
+  const facts = [['University', u.university], ['Department', u.department], ['Level', u.level ? u.level + ' level' : null], ['Status', u.graduated ? '🎓 Graduate' : null]].filter(r => r[1])
     .map(r => `<tr><td class="mut">${r[0]}</td><td>${esc(String(r[1]))}</td></tr>`).join('');
   const posts = db.prepare("SELECT id,title,created_at FROM news WHERE author_id=? AND status='approved' ORDER BY id DESC LIMIT 5").all(u.id);
   const me = u.id === req.user.id, areFriends = !me && friendStatus(req.user.id, u.id) === 'friends';
@@ -3320,29 +3345,42 @@ app.get('/avatar/:id', (req, res) => {
   res.send(Buffer.from(row.avatar_data));
 });
 
-const levelOptions = (sel, blank) => `<option value="">${blank}</option>${LEVELS.map(l => `<option value="${l}"${Number(sel) === l ? ' selected' : ''}>${l} level</option>`).join('')}`;
+const levelOptions = (sel, blank, dept) => { const top = maxLevelFor(dept); return `<option value="">${blank}</option>${LEVELS.filter(l => l <= top || Number(sel) === l).map(l => `<option value="${l}"${Number(sel) === l ? ' selected' : ''}>${l} level</option>`).join('')}`; };
 // Once someone has signed up, their username, university, department and level are permanent -- only their name, picture and position can change.
 // (A level only moves when the central admin, or someone they appointed, promotes students.) A field is locked as soon as it has a value.
 const lockedOf = u => ({ username: !!(u && u.username), university: !!(u && u.university), department: !!(u && u.department), level: !!(u && u.level) });
 const lockedRow = (label, value) => `<label class="mut">${label}</label><div class="locked-field"><span>${esc(String(value))}</span></div>`;
 function profileFields(v, student, lk = {}) {
   const lockedBlock = lk.username || lk.university || lk.department || lk.level;
+  const rows = db.prepare('SELECT name,faculty,max_level FROM departments ORDER BY faculty,name').all();
+  const map = {}; for (const r of rows) (map[r.faculty] = map[r.faculty] || []).push([r.name, r.max_level]);
+  const curFac = v.department ? (facultyOf(v.department) || '') : '';
+  const facOpts = `<option value="">Choose your faculty...</option>${Object.keys(map).map(f => `<option value="${esc(f)}"${f === curFac ? ' selected' : ''}>${esc(f)}</option>`).join('')}`;
+  const depOpts = curFac && map[curFac] ? `<option value="">Choose your department...</option>${map[curFac].map(([n]) => `<option value="${esc(n)}"${n === v.department ? ' selected' : ''}>${esc(n)}</option>`).join('')}` : `<option value="">Choose your faculty first...</option>`;
+  const script = `<script>(function(){var M=${JSON.stringify(map).replace(/</g, '\\u003c')},F=document.getElementById('facSel'),D=document.getElementById('deptSel'),L=document.getElementById('lvlSel');if(!F||!D)return;var LV=${JSON.stringify(LEVELS)};
+function opts(sel,list,blank,cur){sel.innerHTML='';var o=document.createElement('option');o.value='';o.textContent=blank;sel.appendChild(o);list.forEach(function(x){var e=document.createElement('option');e.value=x[0];e.textContent=x[1];if(String(x[0])===String(cur))e.selected=true;sel.appendChild(e)})}
+function top(){var f=M[F.value]||[];for(var i=0;i<f.length;i++)if(f[i][0]===D.value)return f[i][1];return 0}
+function lv(){if(!L)return;var t=top(),cur=L.value;opts(L,LV.filter(function(l){return l<=t}).map(function(l){return[l,l+' level']}),t?'Choose your level...':'Choose your department first...',cur)}
+F.addEventListener('change',function(){var f=M[F.value]||[];opts(D,f.map(function(d){return[d[0],d[0]]}),F.value?'Choose your department...':'Choose your faculty first...','');lv()});
+D.addEventListener('change',lv);
+})()</script>`;
   return `<label class="mut">Your name</label><input name="name" value="${esc(v.name || '')}" maxlength="80" required>
 ${lk.username ? lockedRow('Username', '@' + v.username) : `<label class="mut">Username</label><input name="username" id="unameInput" value="${esc(v.username || '')}" maxlength="21" placeholder="@yourname" autocapitalize="none" autocomplete="off" required>
 <p class="hint" id="unameHint">3 to 20 characters: letters, numbers, dots or underscores. Nobody else can have the same one, and friends will find you with it. <b>You cannot change it later.</b></p>`}
-${lk.university ? lockedRow('University', v.university) : `<label class="mut">University</label><input name="university" value="${esc(v.university || 'University of Uyo')}" maxlength="120"${student ? ' required' : ''}>`}
-${lk.department ? lockedRow('Department / course of study', v.department) : `<label class="mut">Department / course of study</label><select name="department"${student ? ' required' : ''}><option value="">Choose your department...</option>${departmentOptions(v.department)}</select>`}
-${lk.level ? lockedRow('Level', v.level + ' level') : `<label class="mut">Level</label><select name="level"${student ? ' required' : ''}>${levelOptions(v.level, 'Choose your level...')}</select>`}
+${lk.department ? lockedRow('Faculty', curFac || '-') + lockedRow('Department / course of study', v.department) : `<label class="mut">Faculty</label><select name="faculty" id="facSel"${student ? ' required' : ''}>${facOpts}</select>
+<label class="mut">Department / course of study</label><select name="department" id="deptSel"${student ? ' required' : ''}>${depOpts}</select>`}
+${lk.level ? lockedRow('Level', v.level + ' level' + (v.graduated ? ' - Graduate' : '')) : `<label class="mut">Level</label><select name="level" id="lvlSel"${student ? ' required' : ''}>${levelOptions(v.level, v.department ? 'Choose your level...' : 'Choose your department first...', v.department)}</select>`}
 <p class="hint">${lockedBlock ? 'These are fixed once you have signed up. Your level moves up only when the school admin promotes students; if something is wrong, ask an admin.' : 'Your department and level decide which uploads you see. <b>You cannot change them later</b>, so choose carefully.'}</p>
+${lk.university ? lockedRow('University', v.university) : `<label class="mut">University</label><input name="university" value="${esc(v.university || 'University of Uyo')}" maxlength="120"${student ? ' required' : ''}>`}
 <label class="mut">Position held in school (optional)</label><input name="position" value="${esc(v.position || '')}" maxlength="60" placeholder="e.g. Director of Socials">
-<p class="hint">If you add one, school authorities check it first. Once verified it shows beside your name.</p>`;
+<p class="hint">If you add one, school authorities check it first. Once verified it shows beside your name.</p>${lk.department ? '' : script}`;
 }
 const UNAME_JS = `(function(){var i=document.getElementById('unameInput'),h=document.getElementById('unameHint'),t=null;if(!i)return;
 i.addEventListener('input',function(){clearTimeout(t);var v=i.value;t=setTimeout(function(){if(!v.replace(/^@+/,'').length)return;fetch('/api/username/check?u='+encodeURIComponent(v)).then(function(r){return r.json()}).then(function(j){h.textContent=j.message;h.className='hint '+(j.ok?'ok':'err')}).catch(function(){})},350)})})();`;
 function readProfile(user, body) {
   const trim = (v, n) => String(v || '').trim().slice(0, n);
   const student = user.role === 'user', lk = lockedOf(user);
-  const d = { name: trim(body.name, 80) || user.name, username: cleanUsername(body.username), university: trim(body.university, 120) || null, department: trim(body.department, 120) || null, level: LEVELS.includes(Number(body.level)) ? Number(body.level) : null, position: trim(body.position, 60) || null };
+  const d = { name: trim(body.name, 80) || user.name, username: cleanUsername(body.username), university: trim(body.university, 120) || null, department: trim(body.department, 120) || null, level: LEVELS.includes(Number(body.level)) && Number(body.level) <= maxLevelFor(trim(body.department, 120) || null) ? Number(body.level) : null, position: trim(body.position, 60) || null };
   // Locked fields can never be changed by the person: whatever was sent is thrown away and the saved value is kept.
   if (lk.username) d.username = user.username;
   if (lk.university) d.university = user.university;
@@ -4260,7 +4298,7 @@ function dashboardBody(req) {
   const locked = rows.filter(isLocked), available = rows.filter(p => !isLocked(p));
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
   const posPill = u.position_status === 'pending' ? ` <span class="pill pending">Position waiting for verification: ${esc(u.position)}</span>` : u.title ? ` <span class="pill">${esc(u.title)}</span>` : '';
-  const forYou = [u.department, u.level ? u.level + ' level' : ''].filter(Boolean).join(' · ');
+  const forYou = [u.department, u.level ? u.level + ' level' : '', u.graduated ? '🎓 Graduate' : ''].filter(Boolean).join(' · ');
   const subtitle = isCentral(u) ? 'You are the central admin.' : u.role !== 'user' ? `You are a ${esc(ROLE_LABEL[u.role] || 'admin')}.` : (forYou ? esc(forYou) : 'Uploads for you, at a glance.');
   const grid = list => `<div class="pv-grid">${list.map(previewTile).join('')}</div>`;
   return `<p class="mut" style="margin:8px 0 0">${SEM.semesterName(SEM.getCurrent(db))}</p>${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="dash-top">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:52px;height:52px" alt="">` : `<span class="avatar">${initial}</span>`}<div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}${u.username ? ` &middot; @${esc(u.username)}` : ''}</p></div></div>
@@ -4304,7 +4342,7 @@ app.get('/admin', adminish, (req, res) => {
   const levelSection = canPromote(me) ? `<h3 id="levels">Levels</h3><p class="mut" style="margin-top:0">Move students up to the next level (everyone, or one department or level) and choose who else may do it.</p><p><a class="btn" href="/admin/levels">Open level promotion</a></p>` : '';
   const positionsSection = cf ? (() => {
     const pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' ORDER BY id").all();
-    const depts = db.prepare('SELECT id,name,faculty FROM departments ORDER BY faculty,name').all();
+    const depts = db.prepare('SELECT id,name,faculty,max_level FROM departments ORDER BY faculty,name').all();
     const facs = [...new Set(depts.map(d => d.faculty))];
     const approvers = db.prepare("SELECT id,name,title FROM users WHERE position_status='approved' AND position_auto_role='news' ORDER BY name").all();
     const approverOpts = `<option value="">No extra approval needed</option>${approvers.map(a => `<option value="${a.id}">${esc(a.name)}${a.title ? ' -- ' + esc(a.title) : ''}</option>`).join('')}`;
@@ -4322,8 +4360,9 @@ app.get('/admin', adminish, (req, res) => {
 <form method="post" action="/admin/positions/${p.id}/reject" style="margin-top:4px"><button class="link">Reject instead</button></form>
 </div>`).join('') || '<p class="mut">No positions waiting.</p>'}
 <h3 id="departments">Departments (${depts.length})</h3><p class="mut" style="margin-top:0">This list feeds sign-up and the upload form. Add anything that is missing.</p>
-<form class="card" method="post" action="/admin/departments/add"><input name="name" placeholder="Department or programme name" required maxlength="120"><input name="faculty" list="facList" placeholder="Faculty (e.g. Science)" maxlength="80"><datalist id="facList">${facs.map(f => `<option value="${esc(f)}">`).join('')}</datalist><button>Add department</button></form>
-<details class="card"><summary style="cursor:pointer">Show all departments</summary>${facs.map(f => `<p class="chat-label">${esc(f)}</p>${depts.filter(d => d.faculty === f).map(d => `<form method="post" action="/admin/departments/${d.id}/delete" class="row" onsubmit="return confirm('Remove this department from the list?')"><span>${esc(d.name)}</span><button class="link">Remove</button></form>`).join('')}`).join('')}</details>`;
+<form class="card" method="post" action="/admin/departments/add"><input name="name" placeholder="Department or programme name" required maxlength="120"><input name="faculty" list="facList" placeholder="Faculty (e.g. Science)" maxlength="80"><datalist id="facList">${facs.map(f => `<option value="${esc(f)}">`).join('')}</datalist><label class="mut">Last level</label><select name="max_level">${[300, 400, 500, 600].map(l => `<option value="${l}"${l === 500 ? ' selected' : ''}>${l} level</option>`).join('')}</select><button>Add department</button></form>
+<form class="card" method="post" action="/admin/faculties/maxlevel" onsubmit="return confirm('Set the last level for every department in this faculty?')"><b>Set the last level for a whole faculty</b><br><select name="faculty" required><option value="">Choose a faculty...</option>${facs.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('')}</select><select name="max_level">${[300, 400, 500, 600].map(l => `<option value="${l}">${l} level</option>`).join('')}</select><button>Apply to the faculty</button><p class="mut" style="margin:6px 0 0">Students at the last level are flagged as graduates when you promote.</p></form>
+<details class="card"><summary style="cursor:pointer">Show all departments</summary>${facs.map(f => `<p class="chat-label">${esc(f)}</p>${depts.filter(d => d.faculty === f).map(d => `<div class="row" style="gap:8px"><span style="flex:1">${esc(d.name)}</span><form method="post" action="/admin/departments/${d.id}/maxlevel" style="margin:0"><select name="max_level" onchange="this.form.submit()" title="Last level">${[300, 400, 500, 600].map(l => `<option value="${l}"${l === d.max_level ? ' selected' : ''}>${l} level</option>`).join('')}</select></form><form method="post" action="/admin/departments/${d.id}/delete" style="margin:0" onsubmit="return confirm('Remove this department from the list?')"><button class="link">Remove</button></form></div>`).join('')}`).join('')}</details>`;
   })() : '';
   const delegatedVerifySection = me.position_can_verify ? (() => {
     let pend;
@@ -4574,8 +4613,20 @@ app.post('/admin/positions/:id/reject', admin, (req, res) => {
 app.post('/admin/departments/add', admin, (req, res) => {
   const name = String(req.body.name || '').trim().slice(0, 120), faculty = String(req.body.faculty || '').trim().slice(0, 80) || 'Other';
   if (!name) return res.redirect(back('Enter a department name.'));
-  db.prepare('INSERT OR IGNORE INTO departments(name,faculty) VALUES(?,?)').run(name, faculty);
+  const ml = [300, 400, 500, 600].includes(Number(req.body.max_level)) ? Number(req.body.max_level) : 500;
+  db.prepare('INSERT OR IGNORE INTO departments(name,faculty,max_level) VALUES(?,?,?)').run(name, faculty, ml);
   res.redirect(back(`Added ${name}.`));
+});
+app.post('/admin/departments/:id/maxlevel', admin, (req, res) => {
+  const ml = [300, 400, 500, 600].includes(Number(req.body.max_level)) ? Number(req.body.max_level) : null;
+  if (ml) db.prepare('UPDATE departments SET max_level=? WHERE id=?').run(ml, Number(req.params.id));
+  res.redirect(back(ml ? `Last level set to ${ml}.` : 'Pick a last level.'));
+});
+app.post('/admin/faculties/maxlevel', admin, (req, res) => {
+  const ml = [300, 400, 500, 600].includes(Number(req.body.max_level)) ? Number(req.body.max_level) : null, f = String(req.body.faculty || '').trim();
+  if (!ml || !f) return res.redirect(back('Choose a faculty and a last level.'));
+  const n = db.prepare('UPDATE departments SET max_level=? WHERE faculty=?').run(ml, f).changes;
+  res.redirect(back(`Last level for ${f} is now ${ml} (${n} department${n === 1 ? '' : 's'}).`));
 });
 app.post('/admin/departments/:id/delete', admin, (req, res) => {
   db.prepare('DELETE FROM departments WHERE id=?').run(req.params.id);
@@ -4583,15 +4634,32 @@ app.post('/admin/departments/:id/delete', admin, (req, res) => {
 });
 // ---------- Levels: only the central admin and the people they appoint can move students up ----------
 const TOP_LEVEL = LEVELS[LEVELS.length - 1];
+// Moves students up one level; anyone already at their department's last level is flagged as a graduate instead.
+// `where`/`args` select the students (they must already exclude graduates). Returns who moved and who graduated.
+function promoteStudents(where, args) {
+  const base = `${where} AND graduated=0 AND level IS NOT NULL`;
+  const gradIds = db.prepare(`SELECT id FROM users WHERE ${base} AND level >= ${LAST_LEVEL_SQL}`).all(...args).map(r => r.id);
+  const moveIds = db.prepare(`SELECT id FROM users WHERE ${base} AND level < ${LAST_LEVEL_SQL}`).all(...args).map(r => r.id);
+  let own = true; try { db.exec('BEGIN'); } catch (_) { own = false; } // the semester switch already runs inside its own transaction
+  try {
+    db.prepare(`UPDATE users SET graduated=1, graduated_at=datetime('now') WHERE ${base} AND level >= ${LAST_LEVEL_SQL}`).run(...args);
+    db.prepare(`UPDATE users SET level = level + 100 WHERE ${base} AND level < ${LAST_LEVEL_SQL}`).run(...args);
+    if (own) db.exec('COMMIT');
+  } catch (e) { if (own) { try { db.exec('ROLLBACK'); } catch (_) {} } throw e; }
+  if (moveIds.length) notify(moveIds, { title: 'You moved up a level', body: 'Your level has been updated by your school admin.', url: '/dashboard', tag: 'level' });
+  if (gradIds.length) notify(gradIds, { title: 'Congratulations, graduate! 🎓', body: 'You have finished your last level. You are now flagged as a graduate on Studies Hub.', url: '/dashboard', tag: 'level' });
+  return { moved: moveIds.length, graduated: gradIds.length };
+}
+const promoMsg = r => `${r.moved} student${r.moved === 1 ? '' : 's'} moved up a level` + (r.graduated ? ` and ${r.graduated} graduated 🎓` : '') + '.';
 function promotionTargets(dept, fromLevel) {
-  const where = ["role='user'", 'level IS NOT NULL', `level < ${TOP_LEVEL}`], args = [];
+  const where = ["role='user'", 'is_lecturer=0', 'graduated=0', 'level IS NOT NULL'], args = [];
   if (dept) { where.push('department=?'); args.push(dept); }
   if (fromLevel) { where.push('level=?'); args.push(fromLevel); }
   return { where: where.join(' AND '), args };
 }
 app.get('/admin/levels', promoter, (req, res) => {
   const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
-  const counts = LEVELS.map(l => `${l} level: <b>${db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND is_lecturer=0 AND level=?").get(l).n}</b>`).join(' &middot; ');
+  const counts = LEVELS.map(l => `${l} level: <b>${db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND is_lecturer=0 AND graduated=0 AND level=?").get(l).n}</b>`).join(' &middot; ') + ` &middot; graduates: <b>${db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND is_lecturer=0 AND graduated=1").get().n}</b>`;
   const depts = db.prepare("SELECT DISTINCT department d FROM users WHERE role='user' AND department IS NOT NULL ORDER BY department").all().map(r => r.d);
   const log = db.prepare("SELECT l.*, u.name FROM level_log l LEFT JOIN users u ON u.id=l.by_user ORDER BY l.id DESC LIMIT 8").all();
   const helpers = isCentral(req.user) ? db.prepare("SELECT id,name,username,email FROM users WHERE can_promote=1 ORDER BY name").all() : [];
@@ -4600,9 +4668,9 @@ app.get('/admin/levels', promoter, (req, res) => {
 <div class="card"><p class="mut" style="margin:0 0 8px">${counts}</p>
 <form method="post" action="/admin/levels/advance" id="advForm">
 <label class="mut">Department</label><select name="department"><option value="">Every department</option>${depts.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select>
-<label class="mut">Which level moves up</label><select name="level"><option value="">Every level (100&rarr;200, 200&rarr;300 ...)</option>${LEVELS.slice(0, -1).map(l => `<option value="${l}">Only ${l} level &rarr; ${l + 100}</option>`).join('')}</select>
+<label class="mut">Which level moves up</label><select name="level"><option value="">Every level (100&rarr;200, 200&rarr;300 ...)</option>${LEVELS.map(l => `<option value="${l}">Only ${l} level &rarr; ${l + 100 <= 500 ? l + 100 : 'graduates'}</option>`).join('')}</select>
 <button style="margin-top:10px">Move students up one level</button></form>
-<p class="hint">Students already at ${TOP_LEVEL} level stay where they are. This cannot be undone, so check the choice above before you press the button.</p></div>
+<p class="hint">A student already at their department's last level (500, or 400 where you set it so) is flagged as a <b>graduate</b> instead of moving up. This cannot be undone, so check the choice above before you press the button.</p></div>
 ${isCentral(req.user) ? (() => { const cur = SEM.getCurrent(db); return `<h3>Semester</h3><div class="card"><p style="margin:0 0 6px">Now showing: <b>${SEM.semesterName(cur)}</b></p><p class="mut" style="margin:0 0 8px">Students only see uploads for the current semester. The course code decides it: the middle digit of a code like GST 1<b>2</b>1 is the semester. An upload with no course code shows in both.</p>
 <form method="post" action="/admin/semester/advance" onsubmit="return confirm('${cur === 1 ? 'Open second semester? First semester uploads will be hidden from students.' : 'End the session? Second semester uploads will be hidden, first semester opens again, and EVERY student moves up one level. This cannot be undone.'}')"><button>${cur === 1 ? 'Move everyone to second semester' : 'Start new session: first semester + move everyone up a level'}</button></form></div>`; })() : ''}
 ${isCentral(req.user) ? `<h3>People allowed to promote students</h3><p class="mut" style="margin-top:0">Only you (the central admin) can add or remove them.</p>
@@ -4612,21 +4680,19 @@ ${helpers.length ? helpers.map(h => `<div class="card row" style="align-items:ce
 <script>document.getElementById('advForm').addEventListener('submit',function(e){var f=e.target,d=f.department.value||'every department',l=f.level.value?f.level.value+' level':'every level';if(!confirm('Move '+l+' in '+d+' up one level? This cannot be undone.'))e.preventDefault()})</script>`, req.user));
 });
 app.post('/admin/levels/advance', promoter, (req, res) => {
-  const dept = String(req.body.department || '').trim() || null, from = LEVELS.includes(Number(req.body.level)) && Number(req.body.level) < TOP_LEVEL ? Number(req.body.level) : null;
+  const dept = String(req.body.department || '').trim() || null, from = LEVELS.includes(Number(req.body.level)) ? Number(req.body.level) : null;
   const t = promotionTargets(dept, from);
-  const ids = db.prepare(`SELECT id FROM users WHERE ${t.where}`).all(...t.args).map(r => r.id);
-  const info = db.prepare(`UPDATE users SET level = level + 100 WHERE ${t.where}`).run(...t.args);
-  db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, dept, from, info.changes);
-  if (ids.length) notify(ids, { title: 'You moved up a level', body: 'Your level has been updated by the school admin.', url: '/dashboard', tag: 'level' });
-  res.redirect('/admin/levels?msg=' + encodeURIComponent(`${info.changes} student${info.changes === 1 ? '' : 's'} moved up a level.`));
+  const r = promoteStudents(t.where, t.args);
+  db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, dept, from, r.moved + r.graduated);
+  res.redirect('/admin/levels?msg=' + encodeURIComponent(promoMsg(r)));
 });
 app.post('/admin/semester/advance', central, (req, res) => {
   const from = SEM.getCurrent(db);
-  let moved = 0;
+  let moved = 0, grads = 0;
   const r = SEM.advance(db, () => { // end of second semester: everyone moves up one level
     const t = promotionTargets(null, null);
-    const info = db.prepare(`UPDATE users SET level = level + 100 WHERE ${t.where}`).run(...t.args);
-    moved = info.changes;
+    const pr = promoteStudents(t.where, t.args);
+    moved = pr.moved + pr.graduated; grads = pr.graduated;
     db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, null, null, moved);
     return moved;
   });
@@ -4635,7 +4701,7 @@ app.post('/admin/semester/advance', central, (req, res) => {
     ? { title: 'A new session has begun', body: 'First semester is open and you have moved up a level.', url: '/dashboard', tag: 'semester' }
     : { title: 'Second semester is open', body: 'Second semester uploads are now available.', url: '/dashboard', tag: 'semester' });
   console.log(`Audit: ${req.user.email} moved the site from ${SEM.semesterName(from)} to ${SEM.semesterName(r.to)}${r.levelsPromoted ? ' and promoted ' + moved + ' students' : ''}`);
-  res.redirect('/admin/levels?msg=' + encodeURIComponent(r.levelsPromoted ? `New session started: first semester is open and ${moved} student${moved === 1 ? '' : 's'} moved up a level.` : 'Second semester is now open. First semester uploads are hidden.'));
+  res.redirect('/admin/levels?msg=' + encodeURIComponent(r.levelsPromoted ? `New session started: first semester is open and ${moved - grads} student${moved - grads === 1 ? '' : 's'} moved up a level` + (grads ? ` and ${grads} graduated 🎓.` : '.') : 'Second semester is now open. First semester uploads are hidden.'));
 });
 app.post('/admin/levels/promoters/add', central, (req, res) => {
   const who = String(req.body.who || '').trim();
@@ -4981,7 +5047,7 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
+const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.

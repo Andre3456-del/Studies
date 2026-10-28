@@ -291,3 +291,10 @@ After someone has opened at least three different parts of the site (dashboard, 
 ## Header and chat
 
 The three-line menu and logo bar now stays at the top of every page: it tucks away when you scroll down and returns as soon as you scroll up a little. Inside a conversation the site bar is replaced by the chat's own header (back arrow, name), and the chat buttons are bigger.
+
+## Faculty-first sign-up, last levels and graduates
+
+- **Sign-up/profile order:** name, username, **faculty**, **department**, **level**, then university, position and the rest. Choosing a faculty fills the Department dropdown with only that faculty's departments; choosing a department fills Level with only the levels that department has.
+- **Last level:** 500 by default. In Admin > Positions & departments > Departments you can set a different last level (300-600) for one department, or for a whole faculty at once (for example 400 for Architecture). Sign-up refuses a level above the department's last level.
+- **Graduates:** when you press **Move students up one level** (or end the session, or a university controller promotes their students), a student already at their department's last level is flagged as a **graduate** instead (`users.graduated`, level kept). They are told, and they show as "Graduate" on their dashboard and profile. Graduates are skipped by later promotions. What graduates can do on the site is not decided yet; the flag is ready for it.
+- **Searchable dropdowns:** every faculty / department / university dropdown (control panel and sign-up) gets a "Type to search..." box that narrows the list as you type; tapping the arrow still shows everything. The department checkbox lists for uploads have a search box too.

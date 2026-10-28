@@ -4,7 +4,7 @@
 //   - "University full admin": runs that university's student side (e.g. the Student Union).
 // Each works only inside one institution, always below the owner, and the owner can see what they do.
 function registerUniversityAdmin(app, d) {
-  const { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited } = d;
+  const { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited } = d;
   db.exec("CREATE TABLE IF NOT EXISTS admin_invites(id INTEGER PRIMARY KEY, email TEXT NOT NULL, kind TEXT NOT NULL, institution TEXT NOT NULL, token_hash TEXT NOT NULL, expires INTEGER NOT NULL, created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, accepted_at TEXT);" +
           "CREATE TABLE IF NOT EXISTS admin_log(id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP, actor INTEGER, actor_name TEXT, institution TEXT, action TEXT NOT NULL);");
   if (!db.prepare('PRAGMA table_info(admin_invites)').all().some(c => c.name === 'user_id')) db.exec('ALTER TABLE admin_invites ADD COLUMN user_id INTEGER');
@@ -232,11 +232,11 @@ ${boss ? `<h3>What your admins have been doing</h3>${log.map(l => `<p class="mut
       body = `<form method="get" class="row" style="gap:6px"><input type="hidden" name="tab" value="students"><input name="q" value="${esc(q)}" placeholder="Search name, @username or email" style="flex:1"><button class="ghost">Search</button></form><p class="mut">${rows.length} shown</p>` +
         rows.map(u => `<div class="card row"><span><b>${esc(u.name)}</b> <span class="mut">${u.username ? '@' + esc(u.username) : ''}</span><br><span class="mut">${esc(u.email)} &middot; ${esc(u.department || 'no department')} &middot; ${u.level ? u.level + ' level' : 'no level'}${all ? ' &middot; ' + esc(u.university || '') : ''}</span></span><form method="post" action="/uni/student/${u.id}/remove" style="margin:0" onsubmit="return confirm('Remove this student completely? Chats, friends and sign-ins are all deleted.')"><button class="link">Remove</button></form></div>`).join('') || '<p class="mut">No students found.</p>';
     } else {
-      const counts = LEVELS.map(l => `${l}: <b>${db.prepare(`SELECT COUNT(*) n FROM users WHERE ${studentWhere(req).join(' AND ')} AND level=?`).get(...sArgs(req), l).n}</b>`).join(' &middot; ');
+      const counts = LEVELS.map(l => `${l}: <b>${db.prepare(`SELECT COUNT(*) n FROM users WHERE ${studentWhere(req).join(' AND ')} AND graduated=0 AND level=?`).get(...sArgs(req), l).n}</b>`).join(' &middot; ') + ` &middot; graduates: <b>${db.prepare(`SELECT COUNT(*) n FROM users WHERE ${studentWhere(req).join(' AND ')} AND graduated=1`).get(...sArgs(req)).n}</b>`;
       const depts = db.prepare(`SELECT DISTINCT department d FROM users WHERE ${studentWhere(req).join(' AND ')} AND department IS NOT NULL AND department!='' ORDER BY department`).all(...sArgs(req)).map(r => r.d);
-      body = `<p class="mut">Students cannot change their own level. A level only moves when you do it here, and it only affects ${esc(req.scope)}.</p><div class="card"><p class="mut" style="margin:0 0 8px">${counts}</p>
+      body = `<p class="mut">Students cannot change their own level. A level only moves when you do it here, and it only affects ${esc(req.scope)}. A student already at their department's last level is flagged as a graduate instead.</p><div class="card"><p class="mut" style="margin:0 0 8px">${counts}</p>
 <form method="post" action="/uni/levels/advance" onsubmit="return confirm('Move these students up one level? This cannot be undone.')"><label class="mut">Department</label><select name="department"><option value="">Every department</option>${depts.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select>
-<label class="mut">Which level moves up</label><select name="level"><option value="">Every level</option>${LEVELS.slice(0, -1).map(l => `<option value="${l}">Only ${l} level &rarr; ${l + 100}</option>`).join('')}</select><button style="margin-top:10px">Move students up one level</button></form></div>`;
+<label class="mut">Which level moves up</label><select name="level"><option value="">Every level</option>${LEVELS.map(l => `<option value="${l}">Only ${l} level &rarr; ${l + 100 <= 500 ? l + 100 : 'graduates'}</option>`).join('')}</select><button style="margin-top:10px">Move students up one level</button></form></div>`;
     }
     res.send(layout(all ? 'Students' : req.scope, head + body, req.user, { mode: all ? '' : 'uni' }));
   });
@@ -248,16 +248,14 @@ ${boss ? `<h3>What your admins have been doing</h3>${log.map(l => `<p class="mut
   });
   app.post('/uni/levels/advance', need, (req, res) => {
     if (req.scope === 'all') return res.redirect('/admin/levels');
-    const dept = clean(req.body.department, 120) || null, from = LEVELS.includes(Number(req.body.level)) && Number(req.body.level) < TOP_LEVEL ? Number(req.body.level) : null;
-    const where = studentWhere(req).concat('level IS NOT NULL', `level < ${TOP_LEVEL}`), args = sArgs(req);
+    const dept = clean(req.body.department, 120) || null, from = LEVELS.includes(Number(req.body.level)) ? Number(req.body.level) : null;
+    const where = studentWhere(req).concat('graduated=0'), args = sArgs(req);
     if (dept) { where.push('department=?'); args.push(dept); }
     if (from) { where.push('level=?'); args.push(from); }
-    const ids = db.prepare(`SELECT id FROM users WHERE ${where.join(' AND ')}`).all(...args).map(r => r.id);
-    const info = db.prepare(`UPDATE users SET level = level + 100 WHERE ${where.join(' AND ')}`).run(...args);
-    db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, dept, from, info.changes);
-    if (ids.length) notify(ids, { title: 'You moved up a level', body: 'Your level has been updated by your school admin.', url: '/dashboard', tag: 'level' });
-    logAdmin(req, req.scope, `Moved ${info.changes} student${info.changes === 1 ? '' : 's'} up a level${dept ? ' in ' + dept : ''}`);
-    res.redirect('/uni?tab=levels&msg=' + encodeURIComponent(`${info.changes} student${info.changes === 1 ? '' : 's'} moved up a level.`));
+    const r = promoteStudents(where.join(' AND '), args);
+    db.prepare('INSERT INTO level_log(by_user,department,from_level,moved) VALUES(?,?,?,?)').run(req.user.id, dept, from, r.moved + r.graduated);
+    logAdmin(req, req.scope, `${promoMsg(r).replace(/\.$/, '')}${dept ? ' in ' + dept : ''}`);
+    res.redirect('/uni?tab=levels&msg=' + encodeURIComponent(promoMsg(r)));
   });
   const ctl = (req, res, next) => { if (!req.user) return res.redirect('/login?next=/uni'); req.scope = scopeOf(req); return isController(req) ? next() : res.redirect('/uni'); };
   app.post('/uni/handover', ctl, async (req, res) => {
