@@ -38,7 +38,12 @@ function registerUniversityAdmin(app, d) {
     }
     for (const o of db.prepare('SELECT id,user_id FROM admin_invites WHERE institution=? AND kind=? AND accepted_at IS NULL AND id!=?').all(inst, kind, inviteId)) { dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(o.id); }
   };
-  const SUB = { news: ['News admin (posts news to the whole university)', 'University news'], uploads: ['Uploads admin (posts files to the whole university)', 'University uploads'], support: ['Login help admin (helps students with sign-in problems)', 'Login help'] };
+  // What an appointed admin can be allowed to do. The title is anything the appointer wants to call them.
+  const PERMS = { news: ['Post news', 'University news', '📰'], uploads: ['Upload files and videos', 'University uploads', '📤'], support: ['Help with login problems', 'Login help', '🛟'] };
+  const PRESETS = { 'News admin': ['news'], 'Uploads admin': ['uploads'], 'Login help admin': ['support'], 'Public relations officer': ['news'], 'Information officer': ['news', 'uploads'], 'Academic officer': ['uploads'], 'Welfare officer': ['news', 'support'], 'Media team': ['news', 'uploads'] };
+  const permsOf = u => u && u.sub_inst && u.role === 'user' ? String(u.sub_perms || '').split(',').filter(p => PERMS[p]) : [];
+  // earlier single-job appointments become title + permission
+  db.prepare("UPDATE users SET sub_perms=sub_role, sub_title=CASE sub_role WHEN 'news' THEN 'News admin' WHEN 'uploads' THEN 'Uploads admin' ELSE 'Login help admin' END WHERE sub_role IS NOT NULL AND sub_perms IS NULL").run();
   const LABEL = { central: 'University central admin', full: 'University full admin' };
   const clean = (v, n) => String(v || '').trim().replace(/\s+/g, ' ').slice(0, n);
   const owner = (req, res, next) => req.user && isCentral(req.user) ? next() : res.redirect('/dashboard');
@@ -71,9 +76,10 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
     if (!isCentral(req.user) && (req.user.lp_inst !== inst || req.user.uni_role === 'full')) return to('You can only do this for your own university.');
     if (!/^\S+@\S+\.\S+$/.test(email)) return to('Enter a valid email address.');
     if (!db.prepare('SELECT 1 FROM institutions WHERE name=?').get(inst)) return to('Pick an institution from the list.');
-    const have = db.prepare('SELECT id,role,is_lecturer,lp_inst FROM users WHERE email=?').get(email);
+    const have = db.prepare('SELECT id,role,is_lecturer,lp_inst,university FROM users WHERE email=?').get(email);
     if (kind === 'central' && have) return to('That email already has a Studies Hub account. A university central admin gets a dedicated account, so use a different email address.');
     if (kind === 'full' && have && (have.role !== 'user' || have.is_lecturer || have.lp_inst)) return to('A full admin must be a normal student account. That email belongs to someone else on the site (a lecturer or an admin).');
+    if (kind === 'full' && have && have.university && have.university !== inst) return to(`That student belongs to ${have.university}. A full admin must be a student of ${inst}.`);
     const holder = db.prepare("SELECT id FROM users WHERE lp_inst=? AND COALESCE(uni_role,'central')=? AND virtual=0").get(inst, kind);
     const token = crypto.randomBytes(32).toString('hex');
     for (const o of db.prepare('SELECT id,user_id FROM admin_invites WHERE email=? AND accepted_at IS NULL').all(email)) { dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(o.id); }
@@ -123,6 +129,7 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
     if (user) {
       if (!req.user || req.user.id !== user.id) return res.redirect('/login?next=' + encodeURIComponent('/invite/' + req.params.token));
       if (user.role !== 'user' || user.is_lecturer) return res.redirect('/');
+      if (user.university && user.university !== inv.institution) return res.status(400).send(page(req, 'Not your university', `<p class="err">This seat is for a student of ${esc(inv.institution)}, and your account belongs to ${esc(user.university)}.</p>`));
     } else {
       const name = clean(req.body.name, 80), pw = String(req.body.password || '');
       const bad = m => res.status(400).send(page(req, 'Accept the invitation', fullNewForm(name, m)));
@@ -170,13 +177,15 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
   const need = (req, res, next) => { if (!req.user) return res.redirect('/login?next=/uni'); req.scope = scopeOf(req); return req.scope ? next() : res.redirect('/dashboard'); };
   const studentWhere = req => req.scope === 'all' ? ["role='user'", 'is_lecturer=0', 'virtual=0'] : ["role='user'", 'is_lecturer=0', 'virtual=0', 'university=?'];
   const sArgs = req => req.scope === 'all' ? [] : [req.scope];
+  const isFull = req => !!req.user && req.user.role === 'user' && req.user.uni_role === 'full' && !!req.user.lp_inst;
+  const isAdminOf = req => isController(req) || isFull(req);
   const isController = req => !!req.user && req.user.role === 'uniadmin' && req.user.uni_role !== 'full' && !!req.user.lp_inst;
   const pendingPos = req => req.scope === 'all' ? 0 : db.prepare("SELECT COUNT(*) n FROM users WHERE position_status='pending' AND university=? AND id!=?").get(req.scope, req.user.id).n;
   app.get('/uni', need, (req, res) => {
-    const all = req.scope === 'all', tab = all ? 'students' : ['students', 'lecturers', 'levels', 'positions'].concat(isController(req) ? ['admins'] : []).includes(req.query.tab) ? req.query.tab : 'overview';
+    const all = req.scope === 'all', tab = all ? 'students' : ['students', 'lecturers', 'levels', 'positions'].concat(isAdminOf(req) ? ['admins'] : []).includes(req.query.tab) ? req.query.tab : 'overview';
     const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
     const head = `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>${all ? 'Students (all universities)' : esc(req.scope)}</h1><p class="mut" style="margin-top:0">${all ? '' : (LABEL[req.user.uni_role] || LABEL.central) + ' &middot; everyone registered here and all their affairs'}</p>${msg}
-<div class="row" style="justify-content:flex-start;gap:6px;margin:8px 0;flex-wrap:wrap">${(all ? [['students', 'Students']] : [['overview', 'Overview'], ['students', 'Students'], ['lecturers', 'Lecturers'], ['positions', 'Positions' + (pendingPos(req) ? ' (' + pendingPos(req) + ')' : '')], ['levels', 'Level promotion']].concat(isController(req) ? [['admins', 'Admins']] : [])).map(([k, l]) => `<a class="${tab === k ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=${k}">${l}</a>`).join('')}</div>`;
+<div class="row" style="justify-content:flex-start;gap:6px;margin:8px 0;flex-wrap:wrap">${(all ? [['students', 'Students']] : [['overview', 'Overview'], ['students', 'Students'], ['lecturers', 'Lecturers'], ['positions', 'Positions' + (pendingPos(req) ? ' (' + pendingPos(req) + ')' : '')], ['levels', 'Level promotion']].concat(isAdminOf(req) ? [['admins', 'Admins']] : [])).map(([k, l]) => `<a class="${tab === k ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=${k}">${l}</a>`).join('')}</div>`;
     let body = '';
     if (tab === 'overview') {
       const c = sql => db.prepare(sql).get(req.scope).n;
@@ -185,7 +194,7 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
       const log = db.prepare('SELECT * FROM admin_log WHERE institution=? ORDER BY id DESC LIMIT 8').all(req.scope);
       const tile = (n, l, h) => `<a class="card" href="${h}" style="text-decoration:none;color:inherit;margin:0;flex:1;min-width:120px;text-align:center"><div style="font-size:26px;font-weight:700">${n}</div><div class="mut">${l}</div></a>`;
       body = `<div class="row" style="gap:8px;flex-wrap:wrap;justify-content:flex-start">${tile(stu, 'Students', '/uni?tab=students')}${tile(lecs, 'Lecturers', '/uni?tab=lecturers')}${tile(pend, 'Lecturers waiting', '/uni?tab=lecturers')}${tile(pendingPos(req), 'Positions to verify', '/uni?tab=positions')}</div>
-<div class="card"><p class="mut" style="margin:0">Students by level &middot; ${lv}</p></div><h3>Recent activity</h3>${log.map(l => `<p class="mut" style="margin:4px 0">${timeStr(l.at)} &middot; <b>${esc(l.actor_name || '')}</b>: ${esc(l.action)}</p>`).join('') || '<p class="mut">Nothing yet.</p>'}`;
+<div class="row" style="gap:8px;flex-wrap:wrap;justify-content:flex-start;margin:8px 0"><a class="btn ghost" style="margin:0" href="/uni/news">📰 University news</a><a class="btn ghost" style="margin:0" href="/uni/uploads">📤 University uploads</a><a class="btn ghost" style="margin:0" href="/uni/support">🛟 Login help</a></div><div class="card"><p class="mut" style="margin:0">Students by level &middot; ${lv}</p></div><h3>Recent activity</h3>${log.map(l => `<p class="mut" style="margin:4px 0">${timeStr(l.at)} &middot; <b>${esc(l.actor_name || '')}</b>: ${esc(l.action)}</p>`).join('') || '<p class="mut">Nothing yet.</p>'}`;
     } else if (tab === 'positions') {
       const rows = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' AND university=? AND id!=? ORDER BY id").all(req.scope, req.user.id);
       const held = db.prepare("SELECT name,username,title,department FROM users WHERE position_status='approved' AND university=? ORDER BY name").all(req.scope);
@@ -194,17 +203,23 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
 <label class="row" style="gap:8px;margin-top:6px;cursor:pointer"><input type="checkbox" name="can_verify" value="1" style="width:auto">Let them verify others in that reach too</label><div class="row" style="gap:6px;margin-top:8px"><button>Verify</button></div></form>
 <form method="post" action="/uni/positions/${p.id}/reject" style="margin-top:4px"><button class="link">Reject</button></form></div>`).join('') || '<p class="mut">Nothing waiting.</p>') + `<h3>Verified positions</h3>` + (held.map(h => `<p class="mut" style="margin:4px 0"><b>${esc(h.title || '')}</b> &middot; ${esc(h.name)}${h.department ? ' &middot; ' + esc(h.department) : ''}</p>`).join('') || '<p class="mut">None yet.</p>');
     } else if (tab === 'admins') {
-      const inst = req.scope, seat = k => db.prepare("SELECT id,name,email FROM users WHERE lp_inst=? AND COALESCE(uni_role,'central')=? AND virtual=0").all(inst, k);
-      const waiting = db.prepare('SELECT id,email,kind FROM admin_invites WHERE institution=? AND accepted_at IS NULL AND expires>? ORDER BY id DESC').all(inst, Date.now());
-      body = `<p class="mut">There is one central admin and one full admin for ${esc(inst)}. To hand a seat over, type the new person's email. Nothing changes until they accept; the moment they do, the current holder loses access.</p>
-<div class="card"><b>Central admin</b> (you run the university)<br><span class="mut">${seat('central').map(h => esc(h.name) + ' &middot; ' + esc(h.email)).join(', ') || 'none'}</span>
+      const inst = req.scope, boss = isController(req), seat = k => db.prepare("SELECT id,name,email FROM users WHERE lp_inst=? AND COALESCE(uni_role,'central')=? AND virtual=0").all(inst, k);
+      const waiting = boss ? db.prepare('SELECT id,email,kind FROM admin_invites WHERE institution=? AND accepted_at IS NULL AND expires>? ORDER BY id DESC').all(inst, Date.now()) : [];
+      const seats = boss ? `<p class="mut">There is one central admin and one full admin for ${esc(inst)}. To hand a seat over, type the new person's email. Nothing changes until they accept; the moment they do, the current holder loses access.</p>
+<div class="card"><b>Central admin</b> (runs the whole university)<br><span class="mut">${seat('central').map(h => esc(h.name) + ' &middot; ' + esc(h.email)).join(', ') || 'none'}</span>
 <form method="post" action="/uni/handover" onsubmit="return confirm('When this person accepts, YOU lose access and your account is deleted. Continue?')" style="margin-top:8px"><input type="hidden" name="kind" value="central"><input name="email" type="email" placeholder="New central admin's email (must be a new email)" required><button>Hand over to a new central admin</button></form></div>
 <div class="card"><b>Full admin</b> (a student with extra powers, e.g. the Student Union)<br><span class="mut">${seat('full').map(h => esc(h.name) + ' &middot; ' + esc(h.email)).join(', ') || 'none'}</span>
-<form method="post" action="/uni/handover" style="margin-top:8px"><input type="hidden" name="kind" value="full"><input name="email" type="email" placeholder="Email of the new full admin's student account" required><button>${seat('full').length ? 'Change the full admin' : 'Appoint a full admin'}</button></form></div>
-<h3>Your own admins</h3><p class="mut">Appoint students of ${esc(inst)} to help. What a news admin or uploads admin posts reaches only ${esc(inst)}. Each person has one job.</p>
-<form method="post" action="/uni/appoint" class="card"><input name="who" placeholder="Their @username or email" required><select name="role">${Object.entries(SUB).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select><button>Appoint</button></form>
-${db.prepare("SELECT id,name,username,sub_role FROM users WHERE sub_inst=? AND sub_role IS NOT NULL ORDER BY name").all(inst).map(a => `<div class="card row"><span><b>${esc(a.name)}</b> <span class="mut">@${esc(a.username || '')}</span><br><span class="mut">${esc((SUB[a.sub_role] || [a.sub_role])[0])}</span></span><form method="post" action="/uni/appoint/${a.id}/remove" style="margin:0"><button class="link">Remove</button></form></div>`).join('') || '<p class="mut">None appointed yet.</p>'}
-${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="card row"><span><b>${esc(w.email)}</b><br><span class="mut">${LABEL[w.kind]}</span></span><form method="post" action="/uni/invite/${w.id}/cancel" style="margin:0"><button class="link">Cancel</button></form></div>`).join('') : ''}`;
+<form method="post" action="/uni/handover" style="margin-top:8px"><input type="hidden" name="kind" value="full"><input name="email" type="email" placeholder="Email of the new full admin's student account" required><button>${seat('full').length ? 'Change the full admin' : 'Appoint a full admin'}</button></form></div>` : '';
+      const mineOnly = boss ? '' : ' AND u.sub_by=?', args = boss ? [inst] : [inst, req.user.id];
+      const team = db.prepare(`SELECT u.id,u.name,u.username,u.sub_title,u.sub_perms,u.sub_by,b.name AS by_name FROM users u LEFT JOIN users b ON b.id=u.sub_by WHERE u.sub_inst=? AND u.sub_perms IS NOT NULL AND u.sub_perms!=''${mineOnly} ORDER BY u.name`).all(...args);
+      const log = boss ? db.prepare('SELECT * FROM admin_log WHERE institution=? ORDER BY id DESC LIMIT 30').all(inst) : [];
+      body = `${seats}<h3>Your own admins</h3><p class="mut">Appoint students of ${esc(inst)} to help. Give each person a title of your choice and tick what they are allowed to do. What they post reaches only ${esc(inst)}.${boss ? ' As central admin you can see and remove everyone appointed here, including the ones the full admin appointed.' : ''}</p>
+<form method="post" action="/uni/appoint" class="card" id="apForm"><input name="who" placeholder="Their @username or email" required><input name="title" list="apTitles" placeholder="Title (pick one or type your own)" required maxlength="60"><datalist id="apTitles">${Object.keys(PRESETS).map(k => `<option value="${esc(k)}">`).join('')}</datalist>
+<div style="margin:6px 0">${Object.entries(PERMS).map(([k, v]) => `<label class="row" style="gap:8px;justify-content:flex-start;cursor:pointer"><input type="checkbox" name="perm" value="${k}" style="width:auto">${v[0]}</label>`).join('')}</div><button>Appoint</button></form>
+<script>(function(){var P=${JSON.stringify(PRESETS)},f=document.getElementById('apForm');f.title.addEventListener('input',function(){var p=P[f.title.value];if(!p)return;[].forEach.call(f.querySelectorAll('input[name=perm]'),function(c){c.checked=p.indexOf(c.value)>-1})})})();</script>
+${team.map(a => `<div class="card row"><span><b>${esc(a.name)}</b> <span class="mut">@${esc(a.username || '')}</span><br><b>${esc(a.sub_title || 'Admin')}</b> <span class="mut">&middot; ${String(a.sub_perms).split(',').filter(p => PERMS[p]).map(p => esc(PERMS[p][0])).join(', ')}${boss && a.by_name ? ' &middot; appointed by ' + esc(a.by_name) : ''}</span></span><form method="post" action="/uni/appoint/${a.id}/remove" style="margin:0"><button class="link">Remove</button></form></div>`).join('') || '<p class="mut">None appointed yet.</p>'}
+${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="card row"><span><b>${esc(w.email)}</b><br><span class="mut">${LABEL[w.kind]}</span></span><form method="post" action="/uni/invite/${w.id}/cancel" style="margin:0"><button class="link">Cancel</button></form></div>`).join('') : ''}
+${boss ? `<h3>What your admins have been doing</h3>${log.map(l => `<p class="mut" style="margin:4px 0">${timeStr(l.at)} &middot; <b>${esc(l.actor_name || '')}</b>: ${esc(l.action)}</p>`).join('') || '<p class="mut">Nothing yet.</p>'}` : ''}`;
     } else if (tab === 'lecturers') {
       const rows = db.prepare("SELECT id,name,email,lecturer_reg_no,lecturer_status,created_at FROM users WHERE is_lecturer=1 AND university=? ORDER BY lecturer_status='pending' DESC, id DESC LIMIT 200").all(req.scope);
       const manage = req.user.uni_role !== 'full' ? '<p><a class="btn" href="/lecturer/admin?tab=verify" style="display:inline-block">Verify and manage lecturers</a></p>' : '';
@@ -276,37 +291,45 @@ ${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="
     logAdmin(req, req.scope, `Rejected ${t.name}'s position claim (${t.position})`);
     to('Rejected.');
   });
-  // ----- appointing the university's own admins (central admin only) -----
-  app.post('/uni/appoint', ctl, (req, res) => {
+  // ----- appointing the university's own admins (central admin and full admin) -----
+  const anyAdmin = (req, res, next) => { if (!req.user) return res.redirect('/login?next=/uni'); req.scope = scopeOf(req); return isAdminOf(req) ? next() : res.redirect('/uni'); };
+  app.post('/uni/appoint', anyAdmin, (req, res) => {
     const to = m => res.redirect('/uni?tab=admins&msg=' + encodeURIComponent(m));
-    const who = clean(req.body.who, 120).toLowerCase().replace(/^@+/, ''), role = SUB[req.body.role] ? req.body.role : null;
-    if (!role) return to('Pick a job for them.');
-    const t = db.prepare("SELECT id,name,sub_role FROM users WHERE (lower(username)=? OR lower(email)=?) AND role='user' AND is_lecturer=0 AND virtual=0 AND university=?").get(who, who, req.scope);
+    const who = clean(req.body.who, 120).toLowerCase().replace(/^@+/, ''), title = clean(req.body.title, 60);
+    const picked = [].concat(req.body.perm || []).map(String).filter((p, i, a) => PERMS[p] && a.indexOf(p) === i);
+    if (!title) return to('Give them a title.');
+    if (!picked.length) return to('Tick at least one thing they are allowed to do.');
+    const t = db.prepare("SELECT id,name,sub_by,sub_perms FROM users WHERE (lower(username)=? OR lower(email)=?) AND role='user' AND is_lecturer=0 AND virtual=0 AND university=?").get(who, who, req.scope);
     if (!t) return to(`No student of ${req.scope} found with that username or email.`);
-    db.prepare('UPDATE users SET sub_role=?, sub_inst=? WHERE id=?').run(role, req.scope, t.id);
-    notify([t.id], { title: 'You are now a ' + SUB[role][1] + ' admin', body: `${req.scope} appointed you. Find it in Settings.`, url: '/settings', tag: 'lecturer' });
-    logAdmin(req, req.scope, `Appointed ${t.name} as ${SUB[role][1]} admin`);
-    to(`${t.name} is now ${SUB[role][0].split(' (')[0]}.`);
+    if (t.id === req.user.id) return to('You already have these powers.');
+    if (!isController(req) && t.sub_perms && t.sub_by !== req.user.id) return to('That person was appointed by someone else. Ask the central admin.');
+    db.prepare('UPDATE users SET sub_perms=?, sub_title=?, sub_inst=?, sub_by=? WHERE id=?').run(picked.join(','), title, req.scope, req.user.id, t.id);
+    notify([t.id], { title: `You are now: ${title}`, body: `${req.scope} gave you a role. Find your tools in Settings.`, url: '/settings', tag: 'lecturer' });
+    logAdmin(req, req.scope, `Appointed ${t.name} as ${title} (${picked.map(p => PERMS[p][0]).join(', ')})`);
+    to(`${t.name} is now ${title}.`);
   });
-  app.post('/uni/appoint/:id/remove', ctl, (req, res) => {
-    const t = db.prepare('SELECT id,name FROM users WHERE id=? AND sub_inst=?').get(Number(req.params.id), req.scope);
-    if (t) { db.prepare('UPDATE users SET sub_role=NULL, sub_inst=NULL WHERE id=?').run(t.id); logAdmin(req, req.scope, `Removed ${t.name} as an admin`); }
+  app.post('/uni/appoint/:id/remove', anyAdmin, (req, res) => {
+    const t = db.prepare('SELECT id,name,sub_by FROM users WHERE id=? AND sub_inst=?').get(Number(req.params.id), req.scope);
+    if (t && (isController(req) || t.sub_by === req.user.id)) { db.prepare('UPDATE users SET sub_perms=NULL, sub_title=NULL, sub_inst=NULL, sub_by=NULL WHERE id=?').run(t.id); logAdmin(req, req.scope, `Removed ${t.name} as an admin`); }
     res.redirect('/uni?tab=admins&msg=' + encodeURIComponent('Removed.'));
   });
   // The jobs: who may do each one, and for which university. The central admin does all of them; an appointed student does just theirs.
   const power = kind => (req, res, next) => {
     if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
     if (isController(req)) { req.inst = req.user.lp_inst; req.boss = true; return next(); }
-    if (req.user.sub_role === kind && req.user.sub_inst && req.user.role === 'user') { req.inst = req.user.sub_inst; req.boss = false; return next(); }
+    if (isFull(req)) { req.inst = req.user.lp_inst; req.boss = false; return next(); }
+    if (permsOf(req.user).includes(kind)) { req.inst = req.user.sub_inst; req.boss = false; return next(); }
     res.redirect('/dashboard');
   };
-  const desk = (req, title, body) => layout(title, `<p class="mut"><a href="${isController(req) ? '/uni' : '/settings'}">&larr; ${isController(req) ? 'University home' : 'Settings'}</a></p><h1>${esc(title)}</h1><p class="mut" style="margin-top:0">${esc(req.inst)}</p>${req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : ''}${body}`, req.user, { mode: 'uni' });
+  // Central admin manages everything in the university; a full admin manages their own posts and those of the people they appointed.
+  const mayManage = (req, authorId) => req.boss || (authorId != null && (authorId === req.user.id || (isFull(req) && !!db.prepare('SELECT 1 FROM users WHERE id=? AND sub_by=?').get(authorId, req.user.id))));
+  const desk = (req, title, body) => layout(title, `<p class="mut"><a href="${isAdminOf(req) ? '/uni' : '/settings'}">&larr; ${isAdminOf(req) ? 'University home' : 'Settings'}</a></p><h1>${esc(title)}</h1><p class="mut" style="margin-top:0">${esc(req.inst)}</p>${req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : ''}${body}`, req.user, { mode: 'uni' });
 
   // News: goes live at once and reaches only this university (home page and alerts included).
   app.get('/uni/news', power('news'), (req, res) => {
     const rows = db.prepare("SELECT id,title,created_at,author_id FROM news WHERE scope_type='university' AND scope_university=? ORDER BY id DESC LIMIT 100").all(req.inst);
     res.send(desk(req, 'University news', `<form method="post" action="/uni/news" enctype="multipart/form-data" class="card"><p class="mut" style="margin:0 0 6px">This goes live straight away and reaches everyone in ${esc(req.inst)}, and nobody outside it.</p><input name="title" placeholder="Headline" required maxlength="140"><textarea name="body" required maxlength="20000" placeholder="What do you want to tell the university?" style="width:100%;min-height:120px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><input type="file" name="image" accept="image/*"><button style="margin-top:8px">Post to ${esc(req.inst)}</button></form>
-<h3>Posted</h3>${rows.map(n => `<div class="card row"><span><a href="/news/${n.id}"><b>${esc(n.title)}</b></a><br><span class="mut">${timeStr(n.created_at)}</span></span>${req.boss || n.author_id === req.user.id ? `<form method="post" action="/uni/news/${n.id}/delete" style="margin:0" onsubmit="return confirm('Delete this news?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
+<h3>Posted</h3>${rows.map(n => `<div class="card row"><span><a href="/news/${n.id}"><b>${esc(n.title)}</b></a><br><span class="mut">${timeStr(n.created_at)}</span></span>${mayManage(req, n.author_id) ? `<form method="post" action="/uni/news/${n.id}/delete" style="margin:0" onsubmit="return confirm('Delete this news?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
   });
   app.post('/uni/news', power('news'), upload.single('image'), (req, res) => {
     const to = m => res.redirect('/uni/news?msg=' + encodeURIComponent(m));
@@ -320,7 +343,7 @@ ${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="
   });
   app.post('/uni/news/:id/delete', power('news'), (req, res) => {
     const n = db.prepare("SELECT id,title,author_id FROM news WHERE id=? AND scope_type='university' AND scope_university=?").get(Number(req.params.id), req.inst);
-    if (n && (req.boss || n.author_id === req.user.id)) { db.prepare('DELETE FROM news WHERE id=?').run(n.id); logAdmin(req, req.inst, `Deleted news: ${n.title}`); }
+    if (n && mayManage(req, n.author_id)) { db.prepare('DELETE FROM news WHERE id=?').run(n.id); logAdmin(req, req.inst, `Deleted news: ${n.title}`); }
     res.redirect('/uni/news?msg=' + encodeURIComponent('Deleted.'));
   });
 
@@ -330,7 +353,7 @@ ${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="
     res.send(desk(req, 'University uploads', `<form method="post" action="/uni/uploads" enctype="multipart/form-data" class="card"><p class="mut" style="margin:0 0 6px">Only people in ${esc(req.inst)} can see and get alerted about these.</p><input name="title" placeholder="Title (e.g. GST 101 past questions)" required maxlength="140">
 <select name="kind"><option value="pdf">PDF</option><option value="doc">Word / PowerPoint document</option><option value="video">YouTube video</option></select><input type="file" name="file"><input name="video_url" placeholder="YouTube link (for a video)">
 <select name="department"><option value="">Every department</option>${departmentNames().map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select><select name="level"><option value="">Every level</option>${LEVELS.map(l => `<option value="${l}">${l} level</option>`).join('')}</select><button style="margin-top:8px">Upload</button></form>
-<h3>Uploaded</h3>${rows.map(p => `<div class="card row"><span><a href="/p/${esc(p.slug)}"><b>${esc(p.title)}</b></a><br><span class="mut">${esc(p.kind)} &middot; ${esc(p.dept || 'all departments')} &middot; ${p.level ? p.level + ' level' : 'all levels'} &middot; ${timeStr(p.created_at)}</span></span>${req.boss || p.admin_id === req.user.id ? `<form method="post" action="/uni/uploads/${p.id}/delete" style="margin:0" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
+<h3>Uploaded</h3>${rows.map(p => `<div class="card row"><span><a href="/p/${esc(p.slug)}"><b>${esc(p.title)}</b></a><br><span class="mut">${esc(p.kind)} &middot; ${esc(p.dept || 'all departments')} &middot; ${p.level ? p.level + ' level' : 'all levels'} &middot; ${timeStr(p.created_at)}</span></span>${mayManage(req, p.admin_id) ? `<form method="post" action="/uni/uploads/${p.id}/delete" style="margin:0" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
   });
   app.post('/uni/uploads', power('uploads'), upload.single('file'), (req, res) => {
     const to = m => res.redirect('/uni/uploads?msg=' + encodeURIComponent(m));
@@ -354,7 +377,7 @@ ${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="
   });
   app.post('/uni/uploads/:id/delete', power('uploads'), (req, res) => {
     const p = db.prepare('SELECT id,title,admin_id FROM pages WHERE id=? AND university=?').get(Number(req.params.id), req.inst);
-    if (p && (req.boss || p.admin_id === req.user.id)) { db.prepare('DELETE FROM pages WHERE id=?').run(p.id); logAdmin(req, req.inst, `Deleted upload ${p.title}`); }
+    if (p && mayManage(req, p.admin_id)) { db.prepare('DELETE FROM pages WHERE id=?').run(p.id); logAdmin(req, req.inst, `Deleted upload ${p.title}`); }
     res.redirect('/uni/uploads?msg=' + encodeURIComponent('Deleted.'));
   });
 
