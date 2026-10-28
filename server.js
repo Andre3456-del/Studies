@@ -68,6 +68,7 @@ if (!newsCols.includes('image_mime')) db.exec('ALTER TABLE news ADD COLUMN image
 for (const [c, def] of [['scope_type', 'TEXT'], ['scope_department', 'TEXT'], ['scope_level', 'INTEGER'], ['scope_faculty', 'TEXT'], ['approver_id', 'INTEGER'], ['approver_status', 'TEXT'], ['scope_university', 'TEXT']])
   if (!newsCols.includes(c)) db.exec(`ALTER TABLE news ADD COLUMN ${c} ${def}`);
 // Paid promotional posts from businesses/services -- shown in News, separately from regular submissions.
+db.exec("CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, who TEXT, rating INTEGER, liked TEXT, suggest TEXT, other TEXT, read INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
 db.exec(`CREATE TABLE IF NOT EXISTS sponsor_posts(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, contact TEXT, image_data BLOB, image_mime TEXT, reference TEXT UNIQUE NOT NULL, amount_kobo INTEGER NOT NULL, duration_days INTEGER NOT NULL DEFAULT 30, status TEXT NOT NULL DEFAULT 'pending_payment', created_at TEXT DEFAULT CURRENT_TIMESTAMP, expires_at TEXT)`);
 const sponsorCols = db.prepare('PRAGMA table_info(sponsor_posts)').all().map(c => c.name);
 if (!sponsorCols.includes('duration_days')) db.exec("ALTER TABLE sponsor_posts ADD COLUMN duration_days INTEGER NOT NULL DEFAULT 30");
@@ -566,6 +567,7 @@ function wipeUserData(id) {
   dbRun('DELETE FROM purchases WHERE user_id=?', id);
   dbRun('DELETE FROM lecturer_courses WHERE lecturer_id=?', id);
   dbRun('UPDATE news SET author_id=NULL WHERE author_id=?', id);
+  dbRun('DELETE FROM feedback WHERE user_id=?', id);
   dbRun('UPDATE news SET approver_id=NULL WHERE approver_id=?', id);
   dbRun('DELETE FROM sponsor_posts WHERE user_id=?', id);
   dbRun('DELETE FROM level_log WHERE by_user=?', id);
@@ -1075,14 +1077,75 @@ const central = (req, res, next) => isCentral(req.user) ? next() : res.sendStatu
 const canPromote = u => !!u && (isCentral(u) || !!u.can_promote);
 const promoter = (req, res, next) => canPromote(req.user) ? next() : req.method === 'GET' ? res.redirect('/login?next=/admin/levels') : res.sendStatus(403);
 
+const FEEDBACK_CSS = `.fbmin{display:flex;align-items:center;gap:10px;justify-content:space-between;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:0 0 12px;cursor:pointer}.fbmin b{font-size:15px}
+.fbsheet{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}.fbbox{background:var(--bg);color:var(--fg);width:min(520px,100%);max-height:92vh;overflow:auto;border:1px solid var(--line);border-radius:18px 18px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom,0px))}
+.fbbox h3{margin:0 0 4px}.fbbox textarea{width:100%;min-height:70px;font:inherit;padding:10px 12px;margin:4px 0 10px;color:var(--fg);background:rgba(8,10,22,.5);border:1px solid var(--line);border-radius:10px}.fbbox label.q{display:block;font-weight:600;margin-top:6px}
+.fbstars{display:flex;gap:6px;margin:6px 0 10px}.fbstars button{font-size:26px;padding:6px 10px;background:transparent;border:1px solid var(--line);color:var(--fg);box-shadow:none;border-radius:12px;min-width:50px;min-height:50px}.fbstars button.on{border-color:var(--blue);background:rgba(56,176,248,.2)}
+.fbrow{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px}.fbrow button{min-height:46px;padding:10px 18px}@media(min-width:700px){.fbsheet{align-items:center}.fbbox{border-radius:18px}}`;
+const FEEDBACK_JS = String.raw`(function(){
+var P=location.pathname;
+if(/^\/(login|signup|welcome|call|forgot|reset|verify|pay|invite|chat\/)/.test(P))return;
+var K='shFb',st={seen:[],loads:0,state:'',next:0};
+try{st=Object.assign(st,JSON.parse(localStorage.getItem(K)||'{}'))}catch(e){}
+function save(){try{localStorage.setItem(K,JSON.stringify(st))}catch(e){}}
+var sec=P==='/'||P==='/dashboard'?'home':P.indexOf('/news')===0?'news':P.indexOf('/chat')===0?'chat':P.indexOf('/p/')===0?'files':P.indexOf('/settings')===0?'settings':P.indexOf('/u/')===0?'people':P.indexOf('/lecturer')===0?'lecturer':P.indexOf('/uni')===0?'uni':P.indexOf('/admin')===0?'admin':'';
+if(sec&&st.seen.indexOf(sec)<0)st.seen.push(sec);
+st.loads=(st.loads||0)+1;save();
+if(st.state==='done'||Date.now()<(st.next||0))return;
+if(st.seen.length<3||st.loads<4)return;
+fetch('/api/feedback/status',{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
+ if(!j||!j.show){st.state='done';st.next=Date.now()+86400000*14;save();return}
+ if(st.state==='min')strip();else open();
+}).catch(function(){});
+var ratingV=0,sheet=null,bar=null;
+function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+function strip(){
+ if(bar)return;var m=document.querySelector('main');if(!m)return;
+ bar=el('div','fbmin');var b=el('b',null,'📝 Tell us what you think about Studies Hub');var o=el('span',null,'Open');o.style.color='var(--blue)';
+ bar.appendChild(b);bar.appendChild(o);bar.onclick=function(){st.state='';save();bar.remove();bar=null;open()};
+ m.insertBefore(bar,m.firstChild);
+}
+function ta(label,name,ph){var w=document.createDocumentFragment();w.appendChild(el('label','q',label));var t=document.createElement('textarea');t.name=name;t.maxLength=1000;t.placeholder=ph;w.appendChild(t);return w}
+function open(){
+ if(sheet)return;
+ sheet=el('div','fbsheet');var box=el('div','fbbox');sheet.appendChild(box);
+ box.appendChild(el('h3',null,'How is Studies Hub for you?'));
+ box.appendChild(el('p','mut','A minute of your time helps us make it better. Everything goes straight to the site owner.'));
+ box.appendChild(el('label','q','How would you rate the site?'));
+ var stars=el('div','fbstars'),faces=['😞','😐','🙂','😀','🤩'];
+ faces.forEach(function(f,i){var b=el('button',null,f);b.type='button';b.setAttribute('aria-label',(i+1)+' out of 5');b.onclick=function(){ratingV=i+1;[].forEach.call(stars.children,function(c,j){c.className=j===i?'on':''})};stars.appendChild(b)});
+ box.appendChild(stars);
+ box.appendChild(ta('What do you like about the site?','liked','The things that work well for you'));
+ box.appendChild(ta('What would you like us to add or change?','suggest','Features, fixes, anything you wish it had'));
+ box.appendChild(ta('Anything else you want to say?','other','A compliment, a complaint, a question'));
+ var msg=el('p','mut','');msg.style.margin='0';box.appendChild(msg);
+ var row=el('div','fbrow');
+ var later=el('button','ghost','Not now');later.type='button';later.onclick=function(){st.next=Date.now()+86400000*3;st.state='';save();close()};
+ var mini=el('button','ghost','Minimize');mini.type='button';mini.onclick=function(){st.state='min';save();close();strip()};
+ var send=el('button',null,'Send');send.type='button';
+ send.onclick=function(){
+  var v=function(n){return (box.querySelector('textarea[name='+n+']')||{}).value||''};
+  var body={rating:ratingV||null,liked:v('liked'),suggest:v('suggest'),other:v('other')};
+  if(!body.rating&&!body.liked.trim()&&!body.suggest.trim()&&!body.other.trim()){msg.textContent='Please answer at least one question.';msg.style.color='#ff8080';return}
+  send.disabled=true;msg.style.color='';msg.textContent='Sending…';
+  fetch('/api/feedback',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(x){
+   if(x.ok){st.state='done';st.next=Date.now()+86400000*14;save();box.innerHTML='';box.appendChild(el('h3',null,'Thank you! 💙'));box.appendChild(el('p','mut','Your feedback went straight to the site owner.'));var c=el('button',null,'Close');c.onclick=close;box.appendChild(c)}
+   else{send.disabled=false;msg.style.color='#ff8080';msg.textContent=x.j&&x.j.error||'Could not send. Please try again.'}
+  }).catch(function(){send.disabled=false;msg.style.color='#ff8080';msg.textContent='No connection. Please try again.'});
+ };
+ row.appendChild(later);row.appendChild(mini);row.appendChild(send);box.appendChild(row);
+ document.body.appendChild(sheet);
+}
+function close(){if(sheet){sheet.remove();sheet=null}}
+})();`;
 const CSS = `:root{--bg:#12121c;--panel:rgba(32,48,96,.30);--line:rgba(56,176,248,.24);--fg:#eaf2ff;--mut:#93a0bd;--blue:#38b0f8;--blue2:#1c7fe0;--pink:#f000e8;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 :root[data-theme="light"]{--bg:#f4f7fc;--panel:rgba(56,176,248,.08);--line:rgba(28,96,160,.22);--fg:#0e1a2b;--mut:#51607a;--blue:#1c7fe0;--blue2:#145fb0;--pink:#c400bc;color-scheme:light}
 html{background:var(--bg);scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:radial-gradient(900px 520px at 12% -8%,rgba(56,176,248,.22),transparent 62%),radial-gradient(700px 440px at 96% 4%,rgba(240,0,232,.13),transparent 60%),var(--bg);background-attachment:fixed}
-a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}${FEEDBACK_CSS}
 .autolink{text-decoration:underline}
-.top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;max-width:1000px;margin:0 auto}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:calc(10px + env(safe-area-inset-top,0px)) max(20px,calc((100% - 1000px)/2)) 10px;margin:calc(-1 * env(safe-area-inset-top,0px)) 0 0;position:sticky;top:0;z-index:40;background:var(--bg);border-bottom:1px solid var(--line);transition:transform .22s ease}.top.hide{transform:translateY(-110%)}.top[hidden]{display:none}.top .menu-btn{font-size:28px;padding:8px 12px;min-width:48px;min-height:48px}.top .brand{font-size:20px}
 .brand{display:flex;align-items:center;gap:10px;color:var(--fg);font-weight:700;font-size:18px}.brand:hover{text-decoration:none}
 .logo{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--blue),var(--pink));box-shadow:0 0 14px rgba(56,176,248,.7)}
 nav{display:flex;align-items:center;gap:10px}nav form{margin:0}
@@ -1205,7 +1268,7 @@ body.msg-selecting .chat-head{display:none}
 .bubble time{display:block;text-align:right;font-size:11px;opacity:.65;margin-top:3px}
 .chat-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line);max-width:1000px;margin:0 auto}
 .chat-bar input,.chat-bar textarea{margin:0;flex:1}.chat-bar button{margin:0}
-.chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:6px 0 12px;z-index:5}
+.chat-head{display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--bg);padding:calc(8px + env(safe-area-inset-top,0px)) 0 12px;z-index:5;font-size:17px}
 .news-body p.news-snip{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:0 0 8px}
 .role-tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;border:1px solid rgba(240,0,232,.45);color:#ff9cf7;margin-left:6px;vertical-align:middle;line-height:1.5}
 .verified-badge{color:#5bc8ff;font-weight:700;margin-left:2px}
@@ -1264,7 +1327,7 @@ a[href^="/p/"]{-webkit-touch-callout:none}
 .sticker-msg time{font-size:11px;opacity:.65;align-self:flex-end;text-align:right}
 .save-st{font-size:12px;color:var(--blue)}
 .chat-bar[hidden],.chat-panel[hidden]{display:none}
-.chat-bar .ic{padding:9px 12px;font-size:18px;line-height:1;background:transparent;border:1px solid var(--line);color:var(--fg);box-shadow:none}
+.chat-bar .ic{padding:12px 14px;font-size:24px;line-height:1;min-width:50px;min-height:50px;background:transparent;border:1px solid var(--line);color:var(--fg);box-shadow:none}.chat-bar button:not(.ic):not(.ghost):not(.link){padding:12px 22px;font-size:17px;min-height:50px}.chat-bar input,.chat-bar textarea{font-size:17px;min-height:50px}.chat-head .link{font-size:30px!important;min-width:48px;min-height:48px;display:inline-flex;align-items:center;justify-content:center}.chat-head .avatar,.chat-head img{width:44px;height:44px}
 label.ic{display:inline-flex;align-items:center;justify-content:center;cursor:pointer;margin:0}
 .chat-bar.rec{align-items:center}.rec-dot{width:10px;height:10px;border-radius:50%;background:#ef4444;animation:blink 1s infinite}@keyframes blink{50%{opacity:.25}}
 .chat-panel{position:fixed;left:0;right:0;bottom:calc(66px + env(safe-area-inset-bottom,0px));max-width:1000px;margin:0 auto;height:230px;display:flex;flex-direction:column;background:#161628;border-top:1px solid var(--line);z-index:6}
@@ -1404,7 +1467,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
-<header class="top"><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
+<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 <script>(function(){var d=document.getElementById('drawer'),a=document.getElementById('drawerArrows'),u=document.getElementById('drawerUp'),dn=document.getElementById('drawerDown'),t=null;if(!d||!a)return;
@@ -1450,6 +1513,8 @@ document.addEventListener('click',function(e){if(fired){e.preventDefault();e.sto
 document.addEventListener('contextmenu',function(e){var a=pageLink(e.target);if(a&&ptype==='touch')e.preventDefault()},true)})()</script>
 ` : ''}
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
+<script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
+${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
 </body></html>`;
 };
 
@@ -2126,6 +2191,40 @@ app.get('/api/messages/:id/info', (req, res) => {
   res.json({ group: false, sent: m.created_at, delivered: m.delivered_at || (r ? r.read_at : null), read: r ? r.read_at : null });
 });
 // Starred messages: everything you have starred, with a link back to the chat.
+// ---- site feedback: a small questionnaire people see now and then; the answers land in the owner's chat space (read only) ----
+const feedbackRecent = uid => !!db.prepare("SELECT 1 FROM feedback WHERE user_id=? AND created_at > datetime('now','-14 days')").get(uid);
+app.get('/api/feedback/status', (req, res) => {
+  if (!req.user) return res.json({ show: false });
+  res.json({ show: !isCentral(req.user) && !feedbackRecent(req.user.id) });
+});
+app.post('/api/feedback', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Log in first.' });
+  if (isCentral(req.user)) return res.status(400).json({ error: 'The owner does not send feedback to themselves.' });
+  if (feedbackRecent(req.user.id) || limited('fb:' + req.user.id, 3, 864e5)) return res.status(429).json({ error: 'You already sent feedback recently. Thank you!' });
+  const t = v => String(v || '').trim().replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, 1000);
+  const rating = [1, 2, 3, 4, 5].includes(Number(req.body.rating)) ? Number(req.body.rating) : null, liked = t(req.body.liked), suggest = t(req.body.suggest), other = t(req.body.other);
+  if (!rating && !liked && !suggest && !other) return res.status(400).json({ error: 'Please answer at least one question.' });
+  const u = db.prepare('SELECT id,name,university,department,level,is_lecturer,role FROM users WHERE id=?').get(req.user.id);
+  const who = [u.role === 'uniadmin' ? 'University admin' : u.is_lecturer ? 'Lecturer' : 'Student', u.university, u.department, u.level ? u.level + ' level' : ''].filter(Boolean).join(' · ');
+  db.prepare('INSERT INTO feedback(user_id,name,who,rating,liked,suggest,other) VALUES(?,?,?,?,?,?,?)').run(u.id, u.name, who, rating, liked, suggest, other);
+  notify(fullAdminIds(), { title: 'New feedback' + (rating ? ' ' + '★'.repeat(rating) : ''), body: `${u.name}: ${(liked || suggest || other || 'rated the site').slice(0, 90)}`, url: '/chat/feedback', tag: 'feedback' });
+  res.json({ ok: true });
+});
+app.get('/chat/feedback', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/chat/feedback');
+  if (!isCentral(req.user)) return res.redirect('/chat');
+  const rows = db.prepare('SELECT * FROM feedback ORDER BY id DESC LIMIT 300').all();
+  db.prepare('UPDATE feedback SET read=1 WHERE read=0').run();
+  const q = (label, v) => v ? `<p style="margin:6px 0 0"><span class="mut">${label}</span><br>${esc(v).replace(/\n/g, '<br>')}</p>` : '';
+  const avg = rows.filter(r => r.rating).length ? (rows.filter(r => r.rating).reduce((a, r) => a + r.rating, 0) / rows.filter(r => r.rating).length).toFixed(1) : null;
+  res.send(layout('Feedback', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h1 style="margin-bottom:4px">What people say about the site</h1><p class="mut" style="margin-top:0">${rows.length} message${rows.length === 1 ? '' : 's'}${avg ? ' &middot; average rating ' + avg + ' / 5' : ''}. Read only: nobody has to be your friend to send you one.</p>` +
+    (rows.map(r => `<div class="card"><div class="row" style="align-items:flex-start"><span><b>${r.user_id ? `<a href="/u/${r.user_id}" style="color:inherit">${esc(r.name)}</a>` : esc(r.name)}</b><br><span class="mut" style="font-size:13px">${esc(r.who || '')} &middot; ${esc(String(r.created_at).slice(0, 16))}</span></span><span style="font-size:18px;white-space:nowrap">${r.rating ? '★'.repeat(r.rating) + '<span class="mut">' + '★'.repeat(5 - r.rating) + '</span>' : ''}</span></div>${q('What they like', r.liked)}${q('What they would add or change', r.suggest)}${q('Anything else', r.other)}<form method="post" action="/chat/feedback/${r.id}/delete" style="margin:8px 0 0" onsubmit="return confirm('Delete this message?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">Nothing yet. The questionnaire appears for people after they have used a few parts of the site.</p>'), req.user));
+});
+app.post('/chat/feedback/:id/delete', (req, res) => {
+  if (!req.user || !isCentral(req.user)) return res.redirect('/chat');
+  db.prepare('DELETE FROM feedback WHERE id=?').run(Number(req.params.id));
+  res.redirect('/chat/feedback');
+});
 app.get('/chat/starred', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/chat/starred');
   const me = req.user.id;
@@ -2272,7 +2371,7 @@ applyView();mark();setInterval(refresh,4000);document.addEventListener('visibili
 <input id="chatSearch" class="chat-search" type="search" placeholder="Search chats" autocomplete="off">
 <div id="chipRow" class="chip-row"><button type="button" class="chip on" data-f="all">All</button><button type="button" class="chip" data-f="unread">Unread</button><button type="button" class="chip" data-f="fav">Favorites</button><button type="button" class="chip" data-f="groups">Groups</button></div>
 <div id="archHead" class="arch-head" style="display:none"><button type="button" id="archBack" class="link">&larr; Archived chats</button></div>
-<div id="chatList">${listHtml}</div><p id="chatEmpty" class="mut" style="display:none"></p><script>${listScript}</script>`, req.user));
+${isCentral(req.user) ? (() => { const n = db.prepare('SELECT COUNT(*) n FROM feedback WHERE read=0').get().n; return `<a class="chat-item" href="/chat/feedback"><span class="avatar" style="width:44px;height:44px;font-size:20px">💬</span><span class="meta"><b>What people say about the site</b><span>${n ? n + ' new' : 'Feedback and suggestions'} &middot; read only</span></span>${n ? `<b class="nbadge">${badgeText(n)}</b>` : ''}</a>`; })() : ''}<div id="chatList">${listHtml}</div><p id="chatEmpty" class="mut" style="display:none"></p><script>${listScript}</script>`, req.user));
 });
 
 const CHAT_JS = `(function(){
@@ -2760,7 +2859,7 @@ function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastI
 <form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" multiple style="display:none">📎</label><textarea id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required rows="1"></textarea><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button>Send</button></form>
 <div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
 <p id="upStatus" class="mut" style="margin:4px 0 0" hidden></p>
-<script>${script}</script>`, req.user, { noAI: true }));
+<script>${script}</script>`, req.user, { noAI: true, hideTop: true }));
 }
 
 app.get('/chat/:id', (req, res) => {
@@ -3112,7 +3211,8 @@ function chatBadge(me) {
   const gRows = db.prepare('SELECT group_id FROM group_members WHERE user_id=?').all(me).map(r => r.group_id);
   let g = 0;
   for (const gid of gRows) if (db.prepare("SELECT 1 FROM messages WHERE group_id=? AND sender_id != ? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) LIMIT 1").get(gid, me, me)) g++;
-  return dm + g;
+  const fb = db.prepare('SELECT 1 FROM users WHERE id=? AND lower(email)=?').get(me, String(ADMIN_EMAIL).toLowerCase()) ? db.prepare('SELECT COUNT(*) n FROM feedback WHERE read=0').get().n : 0;
+  return dm + g + (fb ? 1 : 0);
 }
 
 // ---------- sticker board (each member's own saved stickers) ----------

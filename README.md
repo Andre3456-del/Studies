@@ -283,3 +283,11 @@ First and second semester uploads never mix. The course code in an upload's titl
 `RESEND_API_KEY` + `MAIL_FROM` (needs a domain you own), `BREVO_API_KEY` + `MAIL_FROM`, or SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`) on hosts that allow it.
 
 Uploaded pages run on the same domain as the site, so only upload HTML you trust.
+
+## Feedback questionnaire
+
+After someone has opened at least three different parts of the site (dashboard, news, chat, files...) and loaded a few pages, a small questionnaire slides up on their next page load: a 1-5 rating plus what they like, what they would add or change, and anything else. They can send it, press **Not now** (asked again in 3 days) or **Minimize** (it becomes a slim bar at the top of the page they can reopen). Each person can answer once every 14 days. Answers go to the owner's chat space, not email (so no Resend quota is used): **Chat > What people say about the site**, read only, with the sender's name, role, university and department, an unread count, a push alert, and a Delete button. Nobody has to be your friend to send you one. Deleting a user also deletes their feedback.
+
+## Header and chat
+
+The three-line menu and logo bar now stays at the top of every page: it tucks away when you scroll down and returns as soon as you scroll up a little. Inside a conversation the site bar is replaced by the chat's own header (back arrow, name), and the chat buttons are bigger.
