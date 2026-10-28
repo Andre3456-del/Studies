@@ -1320,6 +1320,7 @@ const navItems = (user, badge = 0, mode = '') => user ? (user.role === 'uniadmin
   { href: '/uni', icon: '🏫', label: 'University home' },
   { href: '/uni?tab=students', icon: '🎓', label: 'Students' },
   { href: '/uni?tab=lecturers', icon: '👨‍🏫', label: 'Lecturers' },
+  { href: '/uni?tab=positions', icon: '🎖️', label: 'Positions' },
   { href: '/uni?tab=levels', icon: '📈', label: 'Level promotion' },
   { href: '/settings', icon: '⚙️', label: 'Settings' },
 ] : mode === 'lecturer-admin' ? [
@@ -3248,8 +3249,18 @@ function readProfile(user, body) {
   return { d, problem };
 }
 // Saves the profile. A position needs school authorities' approval (a full admin approves their own); until then no title shows.
+const normPos = v => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+// No two people at one university may hold (or be waiting to hold) exactly the same position name.
+function positionTaken(university, position, exceptId) {
+  const p = normPos(position);
+  if (!p || !university) return false;
+  return db.prepare("SELECT position FROM users WHERE university=? AND position IS NOT NULL AND position_status IN ('approved','pending') AND id!=?").all(university, exceptId || 0).some(r => normPos(r.position) === p);
+}
+// The controllers (central and full admin) of one university: they receive that university's position claims.
+const uniControllerIds = inst => inst ? db.prepare("SELECT id FROM users WHERE lp_inst=? AND virtual=0 AND role IN ('uniadmin','user')").all(inst).map(r => r.id) : [];
 function saveProfile(user, d) {
   const cur = db.prepare('SELECT username,university,department,level FROM users WHERE id=?').get(user.id) || {};
+  if (d.position && (d.position || null) !== (user.position || null) && !can.full(user) && positionTaken(cur.university || d.university, d.position, user.id)) return 'Someone at your university already holds or has claimed that exact position. Write it a little differently (for example add your department).';
   try { // a value that is already saved is never overwritten here, whatever the caller passed
     db.prepare('UPDATE users SET name=?, username=?, university=?, department=?, level=? WHERE id=?').run(d.name, cur.username || d.username, cur.university || d.university, cur.department || d.department, cur.level || d.level, user.id);
   } catch { return 'That username is already taken.'; }
@@ -3258,12 +3269,14 @@ function saveProfile(user, d) {
     else if (can.full(user)) db.prepare("UPDATE users SET position=?, position_status='approved', title=? WHERE id=?").run(d.position, d.position, user.id);
     else {
       db.prepare("UPDATE users SET position=?, position_status='pending', title=NULL WHERE id=?").run(d.position, user.id);
-      const claimant = { department: d.department, level: d.level };
+      const claimant = { department: d.department, level: d.level, university: cur.university || d.university };
       const delegate = db.prepare("SELECT * FROM users WHERE position_status='approved' AND position_can_verify=1").all()
         .filter(v => canVerifyClaim(v, claimant))
         .sort((a, b) => (SCOPE_RANK[a.position_scope] || 1) - (SCOPE_RANK[b.position_scope] || 1))[0];
+      const ctl = uniControllerIds(claimant.university);
+      if (ctl.length) notify(ctl, { title: 'Position to verify', body: `${d.name} says: ${d.position}`, url: '/uni?tab=positions', tag: 'position' });
       if (delegate) notify([delegate.id], { title: 'Position to verify', body: `${d.name} says: ${d.position}`, url: '/settings', tag: 'position' });
-      else notify(fullAdminIds(), { title: 'Position to verify', body: `${d.name} says: ${d.position}`, url: '/admin#positions', tag: 'position' });
+      else if (!ctl.length) notify(fullAdminIds(), { title: 'Position to verify', body: `${d.name} says: ${d.position}`, url: '/admin#positions', tag: 'position' });
     }
   }
   return '';
@@ -4204,6 +4217,7 @@ app.get('/admin', adminish, (req, res) => {
       const depts = fac ? db.prepare('SELECT name FROM departments WHERE faculty=?').all(fac).map(d => d.name) : [];
       pend = depts.length ? db.prepare(`SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' AND department IN (${depts.map(() => '?').join(',')})`).all(...depts) : [];
     } else pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending'").all();
+    if (me.university) pend = pend.filter(p => { const u = db.prepare('SELECT university FROM users WHERE id=?').get(p.id); return !u || !u.university || u.university === me.university; });
     const myRank = SCOPE_RANK[me.position_scope] || 1;
     const SCOPE_LABEL = { own: 'Their own department + level', department: 'Their whole department', faculty: 'Their whole faculty', school: 'The whole school' };
     const scopeOpts = Object.keys(SCOPE_RANK).filter(s => SCOPE_RANK[s] <= myRank).map(s => `<option value="${s}">${SCOPE_LABEL[s]}</option>`).join('');
@@ -4377,6 +4391,7 @@ app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
 // Whether `verifier` (already verified, with delegated verification power) may act on `claimant`'s pending claim.
 function canVerifyClaim(verifier, claimant) {
   if (!verifier || verifier.position_status !== 'approved' || !verifier.position_can_verify || !verifier.position_scope) return false;
+  if (verifier.university && claimant.university && verifier.university !== claimant.university) return false; // a verifier only covers their own university
   if (verifier.position_scope === 'own') return claimant.department === verifier.department && Number(claimant.level) === Number(verifier.level);
   if (verifier.position_scope === 'department') return claimant.department === verifier.department;
   if (verifier.position_scope === 'faculty') { const f = facultyOf(verifier.department); return !!f && facultyOf(claimant.department) === f; }
@@ -4386,8 +4401,9 @@ function canVerifyClaim(verifier, claimant) {
 // power, not just central/full admin. They can never grant more reach than they hold themselves.
 app.post('/positions/:id/verify', (req, res) => {
   if (!req.user) return res.redirect('/login');
-  const t = db.prepare("SELECT id,position,role,department,level FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
+  const t = db.prepare("SELECT id,position,role,department,level,university FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
   if (!t || !canVerifyClaim(req.user, t)) return res.redirect(back('You cannot verify that claim.'));
+  if (positionTaken(t.university, t.position, t.id)) return res.redirect(back('Another person at that university already holds exactly that position name.'));
   const myRank = SCOPE_RANK[req.user.position_scope] || 1;
   let scope = ['own', 'department', 'faculty', 'school'].includes(req.body.scope) ? req.body.scope : 'own';
   if (SCOPE_RANK[scope] > myRank) scope = req.user.position_scope;
@@ -4400,7 +4416,7 @@ app.post('/positions/:id/verify', (req, res) => {
 });
 app.post('/positions/:id/verify-reject', (req, res) => {
   if (!req.user) return res.redirect('/login');
-  const t = db.prepare("SELECT id,department,level FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
+  const t = db.prepare("SELECT id,department,level,university FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
   if (!t || !canVerifyClaim(req.user, t)) return res.redirect(back('You cannot act on that claim.'));
   db.prepare("UPDATE users SET position_status='rejected' WHERE id=?").run(req.params.id);
   res.redirect(back('Rejected.'));
@@ -4419,8 +4435,9 @@ app.post('/admin/lecturers/:id/reject', admin, (req, res) => {
   res.redirect(back('Lecturer rejected.'));
 });
 app.post('/admin/positions/:id/approve', admin, (req, res) => {
-  const t = db.prepare("SELECT id,position,role FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
+  const t = db.prepare("SELECT id,position,role,university FROM users WHERE id=? AND position_status='pending'").get(req.params.id);
   if (!t) return res.redirect(back('Nothing to verify.'));
+  if (positionTaken(t.university, t.position, t.id)) return res.redirect(back('Another person at that university already holds exactly that position name.'));
   const scope = ['own', 'department', 'faculty', 'school'].includes(req.body.scope) ? req.body.scope : 'own';
   const autoRole = ['news', 'content', 'observer'].includes(req.body.auto_role) ? req.body.auto_role : null;
   const approverId = req.body.approver_id ? Number(req.body.approver_id) : null;
@@ -4847,7 +4864,7 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername });
+const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.

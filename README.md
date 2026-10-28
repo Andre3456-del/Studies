@@ -266,6 +266,10 @@ This account has no student side and no lecturer side. Logging in (or opening `/
 **University full admin** (an ordinary student with extra abilities)
 They register and use the site as a normal student. The invite goes to their student email (or a new student is created from the link); on accepting they keep the student dashboard and get **Settings > University admin**: student list, remove students, move that university's students up a level, and a view-only lecturer list.
 
+**Position verification.** When a student claims a position, the claim goes to that university's controllers (central and full admin) first, who verify it in `/uni` > Positions. You (the owner) are only alerted if the university has no controller, and you can still verify anything yourself in Admin > Positions if a controller asks you to. A class-rep style verifier now only covers their own university. **No two people at one university can hold exactly the same position name** (ignoring capitals and extra spaces); the same name at another university is fine.
+
+**One seat each, and handover.** Each university has exactly one central admin and one full admin. A central admin (and you) can type a new email under `/uni` > Admins to hand a seat over. Nothing changes until the new person accepts; then the old holder loses the seat automatically (a central admin's account is deleted, a full admin just becomes a normal student again).
+
 The owner sees everything they do (Admin > University admins > What they have been doing), gets the same verification alerts, and can remove access at any time (a central admin's account is deleted; a full admin simply loses the extra abilities).
 
 ## Semesters

@@ -4,7 +4,7 @@
 //   - "University full admin": runs that university's student side (e.g. the Student Union).
 // Each works only inside one institution, always below the owner, and the owner can see what they do.
 function registerUniversityAdmin(app, d) {
-  const { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername } = d;
+  const { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken } = d;
   db.exec("CREATE TABLE IF NOT EXISTS admin_invites(id INTEGER PRIMARY KEY, email TEXT NOT NULL, kind TEXT NOT NULL, institution TEXT NOT NULL, token_hash TEXT NOT NULL, expires INTEGER NOT NULL, created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, accepted_at TEXT);" +
           "CREATE TABLE IF NOT EXISTS admin_log(id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP, actor INTEGER, actor_name TEXT, institution TEXT, action TEXT NOT NULL);");
   if (!db.prepare('PRAGMA table_info(admin_invites)').all().some(c => c.name === 'user_id')) db.exec('ALTER TABLE admin_invites ADD COLUMN user_id INTEGER');
@@ -30,6 +30,14 @@ function registerUniversityAdmin(app, d) {
     else db.prepare('UPDATE admin_invites SET user_id=? WHERE id=?').run(makeVirtual(i.email, i.institution, i.kind), i.id);
   }
   sweepInvites(); setInterval(sweepInvites, 36e5).unref();
+  // One central admin and one full admin per university. Whoever accepts takes the seat; the previous holder loses it.
+  const claimSeat = (inst, kind, newId, inviteId) => {
+    for (const h of db.prepare("SELECT id,role,name FROM users WHERE lp_inst=? AND COALESCE(uni_role,'central')=? AND id!=? AND virtual=0").all(inst, kind, newId)) {
+      if (h.role === 'uniadmin') purgeUser(h.id); else db.prepare('UPDATE users SET lp_inst=NULL, uni_role=NULL WHERE id=?').run(h.id);
+      db.prepare('INSERT INTO admin_log(actor,actor_name,institution,action) VALUES(?,?,?,?)').run(null, '', inst, `${h.name} no longer holds the ${kind} admin seat (handed over)`);
+    }
+    for (const o of db.prepare('SELECT id,user_id FROM admin_invites WHERE institution=? AND kind=? AND accepted_at IS NULL AND id!=?').all(inst, kind, inviteId)) { dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(o.id); }
+  };
   const LABEL = { central: 'University central admin', full: 'University full admin' };
   const clean = (v, n) => String(v || '').trim().replace(/\s+/g, ' ').slice(0, n);
   const owner = (req, res, next) => req.user && isCentral(req.user) ? next() : res.redirect('/dashboard');
@@ -55,26 +63,34 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
 <h3>What they have been doing</h3>${log.map(l => `<p class="mut" style="margin:4px 0">${timeStr(l.at)} &middot; <b>${esc(l.actor_name || '')}</b>${l.institution ? ' (' + esc(l.institution) + ')' : ''}: ${esc(l.action)}</p>`).join('') || '<p class="mut">Nothing yet.</p>'}`;
   }
 
-  app.post('/lecturer/admin/uni/invite', owner, async (req, res) => {
-    const to = m => res.redirect('/lecturer/admin?tab=admins&msg=' + encodeURIComponent(m));
-    const email = clean(req.body.email, 200).toLowerCase(), inst = clean(req.body.institution, 120), kind = req.body.kind === 'full' ? 'full' : 'central';
+  // Used by the owner (any institution) and by a university central admin (only their own, to hand a seat over).
+  // Inviting someone into a seat that is already held is a handover: the old holder loses it when the new person accepts.
+  async function createInvite(req, email, inst, kind) {
+    const to = m => m;
+    if (!isCentral(req.user) && (req.user.lp_inst !== inst || req.user.uni_role === 'full')) return to('You can only do this for your own university.');
     if (!/^\S+@\S+\.\S+$/.test(email)) return to('Enter a valid email address.');
     if (!db.prepare('SELECT 1 FROM institutions WHERE name=?').get(inst)) return to('Pick an institution from the list.');
     const have = db.prepare('SELECT id,role,is_lecturer,lp_inst FROM users WHERE email=?').get(email);
     if (kind === 'central' && have) return to('That email already has a Studies Hub account. A university central admin gets a dedicated account, so use a different email address.');
     if (kind === 'full' && have && (have.role !== 'user' || have.is_lecturer || have.lp_inst)) return to('A full admin must be a normal student account. That email belongs to someone else on the site (a lecturer or an admin).');
+    const holder = db.prepare("SELECT id FROM users WHERE lp_inst=? AND COALESCE(uni_role,'central')=? AND virtual=0").get(inst, kind);
     const token = crypto.randomBytes(32).toString('hex');
     for (const o of db.prepare('SELECT id,user_id FROM admin_invites WHERE email=? AND accepted_at IS NULL').all(email)) { dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(o.id); }
     db.prepare('INSERT INTO admin_invites(email,kind,institution,token_hash,expires,created_by,user_id) VALUES(?,?,?,?,?,?,?)').run(email, kind, inst, sha(token), Date.now() + 7 * 864e5, req.user.id, kind === 'central' ? makeVirtual(email, inst, kind) : null);
     const link = `${baseUrl(req)}/invite/${token}`;
-    const what = kind === 'full' ? 'run the student side' : 'run the lecturer side and look over the students';
+    const what = kind === 'full' ? 'run the student side' : 'manage everyone registered in that university and all their affairs, and appoint your own admins';
     try {
       const sent = await deliver(email, `You are invited to run ${inst} on Studies Hub`,
         `You have been invited as ${LABEL[kind]} for ${inst} on Studies Hub. You will ${what} for that institution.\n\nOpen this link to accept or decline (it works for 7 days): ${link}`,
         emailShell(`<h2 style="margin:0 0 8px;font-size:20px">You are invited</h2><p style="margin:0 0 8px">You have been invited as <b>${LABEL[kind]}</b> for <b>${esc(inst)}</b> on Studies Hub. You will ${what} for that institution.</p><p style="margin:16px 0"><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600">Accept or decline</a></p><p style="color:#5b6675;font-size:13px;margin:0">The link works for 7 days. If you were not expecting this, just ignore it: nothing is created for you unless you accept.</p>`, baseUrl(req)));
       if (!sent) console.log(`[email not configured] Invitation link for ${email}: ${link}`);
     } catch (e) { console.error('Invitation email failed:', e.message); return to("The invitation was saved but the email could not be sent. Check your email settings, then cancel it and send it again."); }
-    to(`Invitation sent to ${email}.`);
+    logAdmin(req, inst, `Invited ${email} as ${LABEL[kind]}${holder ? ' (takes over from the current one)' : ''}`);
+    return to(`Invitation sent to ${email}.`) + (holder ? ' When they accept, the current admin loses access.' : '');
+  }
+  app.post('/lecturer/admin/uni/invite', owner, async (req, res) => {
+    const msg = await createInvite(req, clean(req.body.email, 200).toLowerCase(), clean(req.body.institution, 120), req.body.kind === 'full' ? 'full' : 'central');
+    res.redirect('/lecturer/admin?tab=admins&msg=' + encodeURIComponent(msg));
   });
   app.post('/lecturer/admin/uni/invite/:id/revoke', owner, (req, res) => { const o = db.prepare('SELECT user_id FROM admin_invites WHERE id=? AND accepted_at IS NULL').get(Number(req.params.id)); if (o) dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=? AND accepted_at IS NULL').run(Number(req.params.id)); res.redirect('/lecturer/admin?tab=admins&msg=' + encodeURIComponent('Invitation cancelled.')); });
   app.post('/lecturer/admin/uni/holder/:id/remove', owner, (req, res) => { const h = db.prepare("SELECT id FROM users WHERE id=? AND role='uniadmin' AND lp_inst IS NOT NULL").get(Number(req.params.id)); if (h) purgeUser(h.id); else db.prepare("UPDATE users SET lp_inst=NULL, uni_role=NULL WHERE id=? AND role!='admin'").run(Number(req.params.id)); res.redirect('/lecturer/admin?tab=admins&msg=' + encodeURIComponent('Controller removed.')); });
@@ -116,6 +132,7 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
     }
     db.prepare("UPDATE users SET lp_inst=?, uni_role='full', university=CASE WHEN university IS NULL OR university='' THEN ? ELSE university END WHERE id=?").run(inv.institution, inv.institution, user.id);
     db.prepare("UPDATE admin_invites SET accepted_at=datetime('now') WHERE id=?").run(inv.id);
+    claimSeat(inv.institution, 'full', user.id, inv.id);
     db.prepare('INSERT INTO admin_log(actor,actor_name,institution,action) VALUES(?,?,?,?)').run(user.id, user.name, inv.institution, `Accepted the invitation as ${LABEL.full}`);
     notify(fullAdminIds(), { title: 'Admin invitation accepted', body: `${user.name} (${inv.email}) is now ${LABEL.full} for ${inv.institution}`, url: '/lecturer/admin?tab=admins', tag: 'lecturer' });
     if (!req.user) startSession(res, user.id);
@@ -140,6 +157,7 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
     if (db.prepare('SELECT 1 FROM users WHERE email=? AND id!=?').get(inv.email, user.id)) return bad('This email address now has another account. Decline, and ask the owner to use a different email.');
     db.prepare("UPDATE users SET virtual=0, verified=1, email=?, hash=?, username=?, name=? WHERE id=?").run(inv.email, bcrypt.hashSync(pw, 12), username, username, user.id);
     db.prepare("UPDATE admin_invites SET accepted_at=datetime('now') WHERE id=?").run(inv.id);
+    claimSeat(inv.institution, 'central', user.id, inv.id);
     db.prepare('INSERT INTO admin_log(actor,actor_name,institution,action) VALUES(?,?,?,?)').run(user.id, username, inv.institution, `Accepted the invitation as ${LABEL[inv.kind]}`);
     notify(fullAdminIds(), { title: 'Admin invitation accepted', body: `@${username} (${inv.email}) is now ${LABEL[inv.kind]} for ${inv.institution}`, url: '/lecturer/admin?tab=admins', tag: 'lecturer' });
     startSession(res, user.id);
@@ -151,11 +169,13 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
   const need = (req, res, next) => { if (!req.user) return res.redirect('/login?next=/uni'); req.scope = scopeOf(req); return req.scope ? next() : res.redirect('/dashboard'); };
   const studentWhere = req => req.scope === 'all' ? ["role='user'", 'is_lecturer=0', 'virtual=0'] : ["role='user'", 'is_lecturer=0', 'virtual=0', 'university=?'];
   const sArgs = req => req.scope === 'all' ? [] : [req.scope];
+  const isController = req => !!req.user && req.user.role === 'uniadmin' && req.user.uni_role !== 'full' && !!req.user.lp_inst;
+  const pendingPos = req => req.scope === 'all' ? 0 : db.prepare("SELECT COUNT(*) n FROM users WHERE position_status='pending' AND university=? AND id!=?").get(req.scope, req.user.id).n;
   app.get('/uni', need, (req, res) => {
-    const all = req.scope === 'all', tab = all ? 'students' : ['students', 'lecturers', 'levels'].includes(req.query.tab) ? req.query.tab : 'overview';
+    const all = req.scope === 'all', tab = all ? 'students' : ['students', 'lecturers', 'levels', 'positions'].concat(isController(req) ? ['admins'] : []).includes(req.query.tab) ? req.query.tab : 'overview';
     const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
     const head = `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>${all ? 'Students (all universities)' : esc(req.scope)}</h1><p class="mut" style="margin-top:0">${all ? '' : (LABEL[req.user.uni_role] || LABEL.central) + ' &middot; everyone registered here and all their affairs'}</p>${msg}
-<div class="row" style="justify-content:flex-start;gap:6px;margin:8px 0;flex-wrap:wrap">${all ? `<a class="${tab === 'students' ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=students">Students</a>` : `<a class="${tab === 'overview' ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=overview">Overview</a><a class="${tab === 'students' ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=students">Students</a><a class="${tab === 'lecturers' ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=lecturers">Lecturers</a><a class="${tab === 'levels' ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=levels">Level promotion</a>`}</div>`;
+<div class="row" style="justify-content:flex-start;gap:6px;margin:8px 0;flex-wrap:wrap">${(all ? [['students', 'Students']] : [['overview', 'Overview'], ['students', 'Students'], ['lecturers', 'Lecturers'], ['positions', 'Positions' + (pendingPos(req) ? ' (' + pendingPos(req) + ')' : '')], ['levels', 'Level promotion']].concat(isController(req) ? [['admins', 'Admins']] : [])).map(([k, l]) => `<a class="${tab === k ? 'btn' : 'btn ghost'}" style="padding:7px 12px;margin:0" href="/uni?tab=${k}">${l}</a>`).join('')}</div>`;
     let body = '';
     if (tab === 'overview') {
       const c = sql => db.prepare(sql).get(req.scope).n;
@@ -163,8 +183,24 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
       const lv = LEVELS.map(l => `${l}: <b>${db.prepare("SELECT COUNT(*) n FROM users WHERE role='user' AND is_lecturer=0 AND university=? AND level=?").get(req.scope, l).n}</b>`).join(' &middot; ');
       const log = db.prepare('SELECT * FROM admin_log WHERE institution=? ORDER BY id DESC LIMIT 8').all(req.scope);
       const tile = (n, l, h) => `<a class="card" href="${h}" style="text-decoration:none;color:inherit;margin:0;flex:1;min-width:120px;text-align:center"><div style="font-size:26px;font-weight:700">${n}</div><div class="mut">${l}</div></a>`;
-      body = `<div class="row" style="gap:8px;flex-wrap:wrap;justify-content:flex-start">${tile(stu, 'Students', '/uni?tab=students')}${tile(lecs, 'Lecturers', '/uni?tab=lecturers')}${tile(pend, 'Lecturers waiting', '/uni?tab=lecturers')}</div>
+      body = `<div class="row" style="gap:8px;flex-wrap:wrap;justify-content:flex-start">${tile(stu, 'Students', '/uni?tab=students')}${tile(lecs, 'Lecturers', '/uni?tab=lecturers')}${tile(pend, 'Lecturers waiting', '/uni?tab=lecturers')}${tile(pendingPos(req), 'Positions to verify', '/uni?tab=positions')}</div>
 <div class="card"><p class="mut" style="margin:0">Students by level &middot; ${lv}</p></div><h3>Recent activity</h3>${log.map(l => `<p class="mut" style="margin:4px 0">${timeStr(l.at)} &middot; <b>${esc(l.actor_name || '')}</b>: ${esc(l.action)}</p>`).join('') || '<p class="mut">Nothing yet.</p>'}`;
+    } else if (tab === 'positions') {
+      const rows = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' AND university=? AND id!=? ORDER BY id").all(req.scope, req.user.id);
+      const held = db.prepare("SELECT name,username,title,department FROM users WHERE position_status='approved' AND university=? ORDER BY name").all(req.scope);
+      body = `<p class="mut">Students at ${esc(req.scope)} who say they hold a position come here first. No two people in your university can hold exactly the same position name.</p><h3>Waiting for you (${rows.length})</h3>` + (rows.map(p => `<div class="card"><b>${esc(p.name)}</b> <span class="mut">${p.username ? '@' + esc(p.username) : ''} ${esc(p.department || '')} ${p.level ? p.level + ' level' : ''}</span><br>Says they are: <b>${esc(p.position)}</b>
+<form method="post" action="/uni/positions/${p.id}/approve" style="margin-top:8px"><select name="scope"><option value="own">Reach: their own department + level</option><option value="department">Reach: their whole department</option><option value="faculty">Reach: their whole faculty</option></select>
+<label class="row" style="gap:8px;margin-top:6px;cursor:pointer"><input type="checkbox" name="can_verify" value="1" style="width:auto">Let them verify others in that reach too</label><div class="row" style="gap:6px;margin-top:8px"><button>Verify</button></div></form>
+<form method="post" action="/uni/positions/${p.id}/reject" style="margin-top:4px"><button class="link">Reject</button></form></div>`).join('') || '<p class="mut">Nothing waiting.</p>') + `<h3>Verified positions</h3>` + (held.map(h => `<p class="mut" style="margin:4px 0"><b>${esc(h.title || '')}</b> &middot; ${esc(h.name)}${h.department ? ' &middot; ' + esc(h.department) : ''}</p>`).join('') || '<p class="mut">None yet.</p>');
+    } else if (tab === 'admins') {
+      const inst = req.scope, seat = k => db.prepare("SELECT id,name,email FROM users WHERE lp_inst=? AND COALESCE(uni_role,'central')=? AND virtual=0").all(inst, k);
+      const waiting = db.prepare('SELECT id,email,kind FROM admin_invites WHERE institution=? AND accepted_at IS NULL AND expires>? ORDER BY id DESC').all(inst, Date.now());
+      body = `<p class="mut">There is one central admin and one full admin for ${esc(inst)}. To hand a seat over, type the new person's email. Nothing changes until they accept; the moment they do, the current holder loses access.</p>
+<div class="card"><b>Central admin</b> (you run the university)<br><span class="mut">${seat('central').map(h => esc(h.name) + ' &middot; ' + esc(h.email)).join(', ') || 'none'}</span>
+<form method="post" action="/uni/handover" onsubmit="return confirm('When this person accepts, YOU lose access and your account is deleted. Continue?')" style="margin-top:8px"><input type="hidden" name="kind" value="central"><input name="email" type="email" placeholder="New central admin's email (must be a new email)" required><button>Hand over to a new central admin</button></form></div>
+<div class="card"><b>Full admin</b> (a student with extra powers, e.g. the Student Union)<br><span class="mut">${seat('full').map(h => esc(h.name) + ' &middot; ' + esc(h.email)).join(', ') || 'none'}</span>
+<form method="post" action="/uni/handover" style="margin-top:8px"><input type="hidden" name="kind" value="full"><input name="email" type="email" placeholder="Email of the new full admin's student account" required><button>${seat('full').length ? 'Change the full admin' : 'Appoint a full admin'}</button></form></div>
+${waiting.length ? '<h3>Waiting to accept</h3>' + waiting.map(w => `<div class="card row"><span><b>${esc(w.email)}</b><br><span class="mut">${LABEL[w.kind]}</span></span><form method="post" action="/uni/invite/${w.id}/cancel" style="margin:0"><button class="link">Cancel</button></form></div>`).join('') : ''}`;
     } else if (tab === 'lecturers') {
       const rows = db.prepare("SELECT id,name,email,lecturer_reg_no,lecturer_status,created_at FROM users WHERE is_lecturer=1 AND university=? ORDER BY lecturer_status='pending' DESC, id DESC LIMIT 200").all(req.scope);
       const manage = req.user.uni_role !== 'full' ? '<p><a class="btn" href="/lecturer/admin?tab=verify" style="display:inline-block">Verify and manage lecturers</a></p>' : '';
@@ -203,6 +239,38 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
     if (ids.length) notify(ids, { title: 'You moved up a level', body: 'Your level has been updated by your school admin.', url: '/dashboard', tag: 'level' });
     logAdmin(req, req.scope, `Moved ${info.changes} student${info.changes === 1 ? '' : 's'} up a level${dept ? ' in ' + dept : ''}`);
     res.redirect('/uni?tab=levels&msg=' + encodeURIComponent(`${info.changes} student${info.changes === 1 ? '' : 's'} moved up a level.`));
+  });
+  const ctl = (req, res, next) => { if (!req.user) return res.redirect('/login?next=/uni'); req.scope = scopeOf(req); return isController(req) ? next() : res.redirect('/uni'); };
+  app.post('/uni/handover', ctl, async (req, res) => {
+    const msg = await createInvite(req, clean(req.body.email, 200).toLowerCase(), req.scope, req.body.kind === 'full' ? 'full' : 'central');
+    res.redirect('/uni?tab=admins&msg=' + encodeURIComponent(msg));
+  });
+  app.post('/uni/invite/:id/cancel', ctl, (req, res) => {
+    const o = db.prepare('SELECT id,user_id FROM admin_invites WHERE id=? AND institution=? AND accepted_at IS NULL').get(Number(req.params.id), req.scope);
+    if (o) { dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(o.id); }
+    res.redirect('/uni?tab=admins&msg=' + encodeURIComponent('Invitation cancelled.'));
+  });
+  // Position claims of this university's students: the controllers verify them (never wider than their own university).
+  const posTarget = (req, id) => db.prepare("SELECT id,name,position,university,role FROM users WHERE id=? AND position_status='pending' AND university=? AND id!=?").get(id, req.scope, req.user.id);
+  app.post('/uni/positions/:id/approve', need, (req, res) => {
+    const to = m => res.redirect('/uni?tab=positions&msg=' + encodeURIComponent(m));
+    if (req.scope === 'all') return res.redirect('/admin#positions');
+    const t = posTarget(req, Number(req.params.id)); if (!t) return to('Nothing to verify.');
+    if (positionTaken(t.university, t.position, t.id)) return to('Another person at your university already holds exactly that position name.');
+    const scope = ['own', 'department', 'faculty'].includes(req.body.scope) ? req.body.scope : 'own';
+    db.prepare("UPDATE users SET title=position, position_status='approved', position_scope=?, position_auto_role=NULL, position_can_verify=? WHERE id=?").run(scope, req.body.can_verify ? 1 : 0, t.id);
+    notify([t.id], { title: 'Position verified', body: `${t.position} now shows beside your name.`, url: '/settings', tag: 'position' });
+    logAdmin(req, req.scope, `Verified ${t.name} as ${t.position}`);
+    to('Position verified.');
+  });
+  app.post('/uni/positions/:id/reject', need, (req, res) => {
+    const to = m => res.redirect('/uni?tab=positions&msg=' + encodeURIComponent(m));
+    if (req.scope === 'all') return res.redirect('/admin#positions');
+    const t = posTarget(req, Number(req.params.id)); if (!t) return to('Nothing to reject.');
+    db.prepare("UPDATE users SET title=NULL, position_status='rejected' WHERE id=?").run(t.id);
+    notify([t.id], { title: 'Position not verified', body: 'Your university admin could not verify the position you entered.', url: '/settings', tag: 'position' });
+    logAdmin(req, req.scope, `Rejected ${t.name}'s position claim (${t.position})`);
+    to('Rejected.');
   });
   return { panel, logAdmin };
 }
