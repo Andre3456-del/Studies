@@ -254,20 +254,19 @@ News, new uploads, verifications, payments and level changes are also emailed to
 
 ## University admins (invited by email)
 
-The site owner (the central admin, `ADMIN_EMAIL`) invites a **university controller** by email: Admin > University admins. The email must not already have a Studies Hub account.
+The site owner (`ADMIN_EMAIL`) invites people by email: Admin > University admins. Two kinds, each limited to one institution and always below the owner.
 
-1. Sending the invite creates a **virtual account** straight away. It cannot log in, has a placeholder email, and is hidden from every list, count, search and notification.
-2. The person opens the email link and is asked: *do you accept to be the university controller?* They choose a **username and password** (so they can log in again later) and press Accept or Decline.
+**University central admin** (own dedicated account, its own home page)
+1. Sending the invite creates a **virtual account** straight away. It cannot log in, has a placeholder email, and is hidden from every list, count, search and notification. The email must not already have a Studies Hub account.
+2. The person opens the email link and is asked: *do you accept to be the university controller?* They choose a **username and password** and press Accept or Decline.
 3. **Accept** makes the account real and takes them straight to their university home (`/uni`). **Decline**, cancelling the invite, or the 7-day expiry deletes the virtual account completely.
 
-A controller account is its own thing: no student side, no lecturer side. Logging in (or opening `/`) always lands on `/uni`, which shows only that university: an overview (students, lecturers, lecturers waiting, students by level, recent activity), the Students list (search, remove), the Lecturers list, and Level promotion. Two kinds, each limited to one institution and always below the owner:
+This account has no student side and no lecturer side. Logging in (or opening `/`) always lands on `/uni`: an overview (students, lecturers, lecturers waiting, students by level, recent activity), the Students list (search, remove), the Lecturers list with a button to verify and manage them (and their uploads), and Level promotion. Anyone who had already accepted as a central admin was converted to this kind of account automatically.
 
-- **University central admin** - also gets a link to verify and manage that university's lecturers (and their uploads).
-- **University full admin** - the student side (student list, remove students, level promotion); the lecturer list is view-only.
+**University full admin** (an ordinary student with extra abilities)
+They register and use the site as a normal student. The invite goes to their student email (or a new student is created from the link); on accepting they keep the student dashboard and get **Settings > University admin**: student list, remove students, move that university's students up a level, and a view-only lecturer list.
 
-People who had already accepted under the old flow were converted to controller accounts automatically; invitations that were still waiting got their virtual account, unless the email already had an account (then the invitation was dropped and must be re-sent with another email).
-
-The owner sees everything they do (Admin > University admins > What they have been doing), gets the same verification alerts, and can remove a controller at any time (this deletes the controller account).
+The owner sees everything they do (Admin > University admins > What they have been doing), gets the same verification alerts, and can remove access at any time (a central admin's account is deleted; a full admin simply loses the extra abilities).
 
 ## Semesters
 

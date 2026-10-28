@@ -22,8 +22,10 @@ function registerUniversityAdmin(app, d) {
   };
   // One-time conversion: people who already accepted become dedicated controller accounts (no student/lecturer side),
   // and invitations that were still waiting get their virtual account now.
-  db.prepare("UPDATE users SET role='uniadmin', is_lecturer=0, uni_role=COALESCE(uni_role,'central') WHERE lp_inst IS NOT NULL AND role='user' AND virtual=0").run();
-  for (const i of db.prepare('SELECT * FROM admin_invites WHERE accepted_at IS NULL AND user_id IS NULL').all()) {
+  db.prepare("UPDATE users SET role='uniadmin', is_lecturer=0, uni_role=COALESCE(uni_role,'central') WHERE lp_inst IS NOT NULL AND role='user' AND virtual=0 AND COALESCE(uni_role,'central')!='full'").run();
+  // a university FULL admin is an ordinary student with extra abilities, so give back the student side to any converted by mistake
+  db.prepare("UPDATE users SET role='user' WHERE role='uniadmin' AND uni_role='full' AND virtual=0").run();
+  for (const i of db.prepare("SELECT * FROM admin_invites WHERE accepted_at IS NULL AND user_id IS NULL AND kind!='full'").all()) {
     if (db.prepare('SELECT 1 FROM users WHERE email=?').get(i.email)) db.prepare('DELETE FROM admin_invites WHERE id=?').run(i.id);
     else db.prepare('UPDATE admin_invites SET user_id=? WHERE id=?').run(makeVirtual(i.email, i.institution, i.kind), i.id);
   }
@@ -44,7 +46,7 @@ function registerUniversityAdmin(app, d) {
     const holders = db.prepare("SELECT id,name,email,lp_inst,uni_role FROM users WHERE lp_inst IS NOT NULL AND virtual=0 ORDER BY lp_inst,name").all();
     const pending = db.prepare('SELECT id,email,kind,institution,expires FROM admin_invites WHERE accepted_at IS NULL AND expires>? ORDER BY id DESC').all(Date.now());
     const log = db.prepare('SELECT * FROM admin_log ORDER BY id DESC LIMIT 40').all();
-    return `<h1>University admins</h1><p class="mut">Invite someone by email. An account is created for them straight away but stays hidden. They open the link in the email and choose to accept or decline. If they accept they pick a username and password and go straight to their university's page. If they decline, the account deletes itself. They only ever see their own institution, and they stay below you. Use an email address that has no Studies Hub account yet.</p>
+    return `<h1>University admins</h1><p class="mut">Invite someone by email. <b>Central admin:</b> an account is created for them straight away but stays hidden. They open the link and choose to accept or decline; if they accept they pick a username and password and go straight to their university's page (no student or lecturer side). If they decline, the account deletes itself. <b>Full admin:</b> must be a normal student. They keep their student account and get the extra abilities once they accept. They only ever see their own institution, and they stay below you. For a central admin use an email with no Studies Hub account yet; for a full admin use the email of their student account (or a new student).</p>
 <form method="post" action="/lecturer/admin/uni/invite" class="card"><input name="email" type="email" placeholder="Their email address" required>
 <select name="institution" required><option value="">Which institution?</option>${insts.map(i => `<option value="${esc(i)}">${esc(i)}</option>`).join('')}</select>
 <select name="kind"><option value="central">University central admin (lecturer side, can look over students)</option><option value="full">University full admin (student side, e.g. Student Union)</option></select><button>Send invitation</button></form>
@@ -58,10 +60,12 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
     const email = clean(req.body.email, 200).toLowerCase(), inst = clean(req.body.institution, 120), kind = req.body.kind === 'full' ? 'full' : 'central';
     if (!/^\S+@\S+\.\S+$/.test(email)) return to('Enter a valid email address.');
     if (!db.prepare('SELECT 1 FROM institutions WHERE name=?').get(inst)) return to('Pick an institution from the list.');
-    if (db.prepare('SELECT 1 FROM users WHERE email=?').get(email)) return to('That email already has a Studies Hub account. A university controller gets a dedicated account, so use a different email address.');
+    const have = db.prepare('SELECT id,role,is_lecturer,lp_inst FROM users WHERE email=?').get(email);
+    if (kind === 'central' && have) return to('That email already has a Studies Hub account. A university central admin gets a dedicated account, so use a different email address.');
+    if (kind === 'full' && have && (have.role !== 'user' || have.is_lecturer || have.lp_inst)) return to('A full admin must be a normal student account. That email belongs to someone else on the site (a lecturer or an admin).');
     const token = crypto.randomBytes(32).toString('hex');
     for (const o of db.prepare('SELECT id,user_id FROM admin_invites WHERE email=? AND accepted_at IS NULL').all(email)) { dropVirtual(o.user_id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(o.id); }
-    db.prepare('INSERT INTO admin_invites(email,kind,institution,token_hash,expires,created_by,user_id) VALUES(?,?,?,?,?,?,?)').run(email, kind, inst, sha(token), Date.now() + 7 * 864e5, req.user.id, makeVirtual(email, inst, kind));
+    db.prepare('INSERT INTO admin_invites(email,kind,institution,token_hash,expires,created_by,user_id) VALUES(?,?,?,?,?,?,?)').run(email, kind, inst, sha(token), Date.now() + 7 * 864e5, req.user.id, kind === 'central' ? makeVirtual(email, inst, kind) : null);
     const link = `${baseUrl(req)}/invite/${token}`;
     const what = kind === 'full' ? 'run the student side' : 'run the lecturer side and look over the students';
     try {
@@ -81,13 +85,46 @@ ${pending.length ? `<h3>Waiting to accept</h3>` + pending.map(i => `<div class="
   const acceptForm = (inv, user, err) => `${err ? `<p class="err">${esc(err)}</p>` : ''}<form method="post" class="card"><p style="margin:0 0 10px"><b>Do you accept to be the university controller for ${esc(inv.institution)}?</b></p><p class="mut" style="margin:0 0 10px">You will manage everyone registered in ${esc(inv.institution)} and all their affairs. This is its own account: you do not log in as a student or a lecturer. Choose a username and a password to keep, so you can log in again any time.</p>
 <input name="username" placeholder="Choose a username" required minlength="3" maxlength="20" autocapitalize="none" value="${esc((user && user.username) || '')}"><input name="password" type="password" placeholder="Choose a password (8+ characters)" required minlength="8" autocomplete="new-password">
 <div class="row" style="gap:8px;margin-top:10px"><button name="action" value="accept">Accept</button><button class="ghost" name="action" value="decline" formnovalidate onclick="return confirm('Decline? The account made for you will be deleted.')">Decline</button></div></form>`;
+  const fullNewForm = (name, err) => `${err ? `<p class="err">${esc(err)}</p>` : ''}<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name || '')}"><input name="password" type="password" placeholder="Password (8+ characters)" required minlength="8" autocomplete="new-password"><button>Accept</button></form>`;
   app.get('/invite/:token', (req, res) => {
     const inv = findInvite(req.params.token);
-    if (!inv || !db.prepare('SELECT 1 FROM users WHERE id=? AND virtual=1').get(inv.user_id)) return res.status(404).send(page(req, 'Invitation not valid', '<p class="mut">This invitation has expired, was declined or was already used. Ask the site owner to send a new one.</p>'));
+    const dead = () => res.status(404).send(page(req, 'Invitation not valid', '<p class="mut">This invitation has expired, was declined or was already used. Ask the site owner to send a new one.</p>'));
+    if (!inv || (inv.kind === 'central' && !db.prepare('SELECT 1 FROM users WHERE id=? AND virtual=1').get(inv.user_id))) return dead();
+    if (inv.kind === 'full') {
+      const existing = db.prepare('SELECT id FROM users WHERE email=?').get(inv.email), intro = `<p>You are invited as <b>${LABEL.full}</b> for <b>${esc(inv.institution)}</b>. You stay a normal student and get extra abilities for your university.</p>`;
+      if (existing) {
+        if (!req.user) return res.send(page(req, 'Accept the invitation', `${intro}<p class="mut">Log in with your student account (${esc(inv.email)}) to accept.</p><a class="btn" href="/login?next=${encodeURIComponent('/invite/' + req.params.token)}">Log in to accept</a>`));
+        if (req.user.id !== existing.id) return res.send(page(req, 'Wrong account', `${intro}<p class="err">You are logged in as someone else. Log out and use ${esc(inv.email)}.</p>`));
+        return res.send(page(req, 'Accept the invitation', `${intro}<form method="post"><button>Accept</button></form>`));
+      }
+      return res.send(page(req, 'Accept the invitation', `${intro}<p class="mut">Create your student account for ${esc(inv.email)}. This email link already proves the address is yours.</p>${fullNewForm()}`));
+    }
     res.send(page(req, 'You are invited', `<p>You are invited as <b>${LABEL[inv.kind]}</b> for <b>${esc(inv.institution)}</b>.</p>${acceptForm(inv)}`));
   });
+  function acceptFull(req, res, inv) {
+    let user = db.prepare('SELECT * FROM users WHERE email=?').get(inv.email);
+    if (user) {
+      if (!req.user || req.user.id !== user.id) return res.redirect('/login?next=' + encodeURIComponent('/invite/' + req.params.token));
+      if (user.role !== 'user' || user.is_lecturer) return res.redirect('/');
+    } else {
+      const name = clean(req.body.name, 80), pw = String(req.body.password || '');
+      const bad = m => res.status(400).send(page(req, 'Accept the invitation', fullNewForm(name, m)));
+      if (!name) return bad('Enter your name.');
+      if (pw.length < 8) return bad('Password must be at least 8 characters.');
+      if (weakPw(pw, inv.email)) return bad('That password is too easy to guess. Please pick something less common.');
+      user = db.prepare('SELECT * FROM users WHERE id=?').get(insertUser('name,email,hash,verified', [name, inv.email, bcrypt.hashSync(pw, 12), 1]));
+    }
+    db.prepare("UPDATE users SET lp_inst=?, uni_role='full', university=CASE WHEN university IS NULL OR university='' THEN ? ELSE university END WHERE id=?").run(inv.institution, inv.institution, user.id);
+    db.prepare("UPDATE admin_invites SET accepted_at=datetime('now') WHERE id=?").run(inv.id);
+    db.prepare('INSERT INTO admin_log(actor,actor_name,institution,action) VALUES(?,?,?,?)').run(user.id, user.name, inv.institution, `Accepted the invitation as ${LABEL.full}`);
+    notify(fullAdminIds(), { title: 'Admin invitation accepted', body: `${user.name} (${inv.email}) is now ${LABEL.full} for ${inv.institution}`, url: '/lecturer/admin?tab=admins', tag: 'lecturer' });
+    if (!req.user) startSession(res, user.id);
+    res.redirect('/uni');
+  }
   app.post('/invite/:token', (req, res) => {
-    const inv = findInvite(req.params.token), user = inv && db.prepare('SELECT * FROM users WHERE id=? AND virtual=1').get(inv.user_id);
+    const inv = findInvite(req.params.token);
+    if (inv && inv.kind === 'full') return acceptFull(req, res, inv);
+    const user = inv && db.prepare('SELECT * FROM users WHERE id=? AND virtual=1').get(inv.user_id);
     if (!inv || !user) return res.status(404).send(page(req, 'Invitation not valid', '<p class="mut">This invitation has expired, was declined or was already used.</p>'));
     if (req.body.action === 'decline') {
       purgeUser(user.id); db.prepare('DELETE FROM admin_invites WHERE id=?').run(inv.id);
