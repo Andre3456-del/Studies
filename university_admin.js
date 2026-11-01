@@ -4,7 +4,7 @@
 //   - "University full admin": runs that university's student side (e.g. the Student Union).
 // Each works only inside one institution, always below the owner, and the owner can see what they do.
 function registerUniversityAdmin(app, d) {
-  const { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited } = d;
+  const { videoMimeOf, db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited } = d;
   db.exec("CREATE TABLE IF NOT EXISTS admin_invites(id INTEGER PRIMARY KEY, email TEXT NOT NULL, kind TEXT NOT NULL, institution TEXT NOT NULL, token_hash TEXT NOT NULL, expires INTEGER NOT NULL, created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, accepted_at TEXT);" +
           "CREATE TABLE IF NOT EXISTS admin_log(id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP, actor INTEGER, actor_name TEXT, institution TEXT, action TEXT NOT NULL);");
   if (!db.prepare('PRAGMA table_info(admin_invites)').all().some(c => c.name === 'user_id')) db.exec('ALTER TABLE admin_invites ADD COLUMN user_id INTEGER');
@@ -349,7 +349,7 @@ ${boss ? `<h3>What your admins have been doing</h3>${log.map(l => `<p class="mut
   app.get('/uni/uploads', power('uploads'), (req, res) => {
     const rows = db.prepare('SELECT id,slug,title,kind,created_at,dept,level,admin_id FROM pages WHERE university=? ORDER BY id DESC LIMIT 100').all(req.inst);
     res.send(desk(req, 'University uploads', `<form method="post" action="/uni/uploads" enctype="multipart/form-data" class="card"><p class="mut" style="margin:0 0 6px">Only people in ${esc(req.inst)} can see and get alerted about these.</p><input name="title" placeholder="Title (e.g. GST 101 past questions)" required maxlength="140">
-<select name="kind"><option value="pdf">PDF</option><option value="doc">Word / PowerPoint document</option><option value="video">YouTube video</option></select><input type="file" name="file"><input name="video_url" placeholder="YouTube link (for a video)">
+<select name="kind"><option value="pdf">PDF</option><option value="doc">Word / PowerPoint document</option><option value="video">Video (YouTube link or from your phone)</option></select><input type="file" name="file" accept=".pdf,.doc,.docx,.ppt,.pptx,video/*"><input name="video_url" placeholder="YouTube link (only for a video; or choose a video file above)">
 <select name="department"><option value="">Every department</option>${departmentNames().map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select><select name="level"><option value="">Every level</option>${LEVELS.map(l => `<option value="${l}">${l} level</option>`).join('')}</select><button style="margin-top:8px">Upload</button></form>
 <h3>Uploaded</h3>${rows.map(p => `<div class="card row"><span><a href="/p/${esc(p.slug)}"><b>${esc(p.title)}</b></a><br><span class="mut">${esc(p.kind)} &middot; ${esc(p.dept || 'all departments')} &middot; ${p.level ? p.level + ' level' : 'all levels'} &middot; ${timeStr(p.created_at)}</span></span>${mayManage(req, p.admin_id) ? `<form method="post" action="/uni/uploads/${p.id}/delete" style="margin:0" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
   });
@@ -360,9 +360,12 @@ ${boss ? `<h3>What your admins have been doing</h3>${log.map(l => `<p class="mut
     if (!title) return to('Enter a title.');
     let slug;
     if (kind === 'video') {
-      const vid = youtubeId(req.body.video_url); if (!vid) return to('Enter a valid YouTube link.');
+      const vid = youtubeId(req.body.video_url), vmime = !vid && req.file ? videoMimeOf(req.file) : null;
+      if (!vid && !req.file) return to('Paste a YouTube link, or choose a video from your phone.');
+      if (!vid && !vmime) return to('That file is not a video.');
       slug = uniqueSlug(slugify(title));
-      db.prepare("INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id,university) VALUES(?,?,'',1,'video',0,NULL,?,?,?,?,?)").run(slug, title, vid, dept, level, req.user.id, req.inst);
+      if (vid) db.prepare("INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id,university) VALUES(?,?,'',1,'video',0,NULL,?,?,?,?,?)").run(slug, title, vid, dept, level, req.user.id, req.inst);
+      else db.prepare("INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id,university) VALUES(?,?,'',1,'video',0,NULL,?,?,?,?,?,?,?)").run(slug, title, req.file.buffer, vmime, req.file.originalname, dept, level, req.user.id, req.inst);
     } else {
       if (!req.file) return to('Choose a file first.');
       if (kind === 'pdf' && req.file.mimetype !== 'application/pdf') return to('That is not a PDF file.');

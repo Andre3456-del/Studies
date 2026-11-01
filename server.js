@@ -3514,12 +3514,13 @@ app.get('/lecturer', (req, res) => {
   const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
   const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option></select>
+<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
+<div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 <button>Publish -- goes live immediately</button></form>
-<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');function sync(){fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField');function sync(){var v=k.value==='video';lv.style.display=v?'':'none';fi.required=!v;fi.accept=v?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
   const pagesList = myPages.map(p => {
     const [icon, label] = KIND_META[p.kind] || KIND_META.html;
     return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
@@ -3536,12 +3537,19 @@ app.post('/lecturer/upload', upload.single('file'), (req, res) => {
   const courseId = Number(req.body.course_id);
   const owns = courseId && db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(req.user.id, courseId);
   if (!owns) return res.redirect(back('Pick one of your own courses.'));
-  const kind = ['pdf', 'doc', 'html'].includes(req.body.kind) ? req.body.kind : 'pdf';
+  const kind = ['pdf', 'doc', 'html', 'video'].includes(req.body.kind) ? req.body.kind : 'pdf';
   const title = (req.body.title || '').trim();
-  if (!req.file) return res.redirect(back('Choose a file first.'));
-  const base = req.file.originalname.replace(/\.[a-z0-9]+$/i, '');
+  const vid = kind === 'video' ? youtubeId(req.body.video_url) : null;
+  if (kind === 'video' && !vid && !req.file) return res.redirect(back('Paste a YouTube link, or choose a video from your phone.'));
+  if (!req.file && !vid) return res.redirect(back('Choose a file first.'));
+  const vmime = kind === 'video' && !vid ? videoMimeOf(req.file) : null;
+  if (kind === 'video' && !vid && !vmime) return res.redirect(back('That file is not a video.'));
+  const base = req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'Video';
   const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base);
-  if (kind === 'pdf' || kind === 'doc') {
+  if (kind === 'video') {
+    if (vid) db.prepare('INSERT INTO pages(slug,title,html,kind,video_id,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', vid, aud.dept, aud.level, req.user.id, courseId);
+    else db.prepare('INSERT INTO pages(slug,title,html,kind,file_data,file_mime,file_name,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id, courseId);
+  } else if (kind === 'pdf' || kind === 'doc') {
     db.prepare('INSERT INTO pages(slug,title,html,kind,file_data,file_mime,file_name,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
       .run(slug, title || base, '', kind, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, req.user.id, courseId);
   } else {
@@ -3559,7 +3567,8 @@ app.get('/lecturer/pages/:id/edit', (req, res) => {
 <form class="card" method="post" action="/lecturer/pages/${p.id}/edit" enctype="multipart/form-data">
 <input name="title" value="${esc(p.title)}" required maxlength="140">
 <label class="mut">Replace the file (optional -- leave blank to keep the current one)</label>
-<input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : '.html,.htm'}">
+<input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : p.kind === 'video' ? 'video/*' : '.html,.htm'}">
+${p.kind === 'video' ? '<label class="mut">Or use a YouTube link instead</label><input name="video_url" placeholder="https://youtube.com/watch?v=...">' : ''}
 <label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>
 <button>Save changes</button></form>`, req.user));
@@ -3570,8 +3579,13 @@ app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
   if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
   const title = (req.body.title || '').trim() || p.title;
   const aud = readAudience(req.body, title);
-  if (req.file) {
-    if (p.kind === 'pdf' || p.kind === 'doc') db.prepare('UPDATE pages SET title=?, file_data=?, file_mime=?, file_name=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, p.id);
+  const newLink = p.kind === 'video' && !req.file ? youtubeId(req.body.video_url) : null;
+  if (p.kind === 'video' && req.file && !videoMimeOf(req.file)) return res.redirect(back('That file is not a video.'));
+  if (newLink) {
+    db.prepare("UPDATE pages SET title=?, video_id=?, file_data=NULL, file_mime=NULL, file_name=NULL, dept=?, level=? WHERE id=?").run(title, newLink, aud.dept, aud.level, p.id);
+  } else if (req.file) {
+    if (p.kind === 'video') db.prepare('UPDATE pages SET title=?, file_data=?, file_mime=?, file_name=?, video_id=NULL, dept=?, level=? WHERE id=?').run(title, req.file.buffer, videoMimeOf(req.file), req.file.originalname, aud.dept, aud.level, p.id);
+    else if (p.kind === 'pdf' || p.kind === 'doc') db.prepare('UPDATE pages SET title=?, file_data=?, file_mime=?, file_name=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, p.id);
     else db.prepare('UPDATE pages SET title=?, html=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer.toString('utf8'), aud.dept, aud.level, p.id);
   } else {
     db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
@@ -3709,6 +3723,14 @@ function youtubeId(url) {
   const m = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/))([a-zA-Z0-9_-]{11})/.exec(String(url || ''));
   return m ? m[1] : null;
 }
+// A video uploaded from a phone: the browser's own label is trusted only when it names a real video type; otherwise the file
+// ending decides (some phones send nothing useful). Anything else is refused, so a page can never be passed off as a video.
+function videoMimeOf(file) {
+  const m = String((file && file.mimetype) || '').toLowerCase();
+  if (/^video\/(mp4|quicktime|webm|x-matroska|3gpp2?|x-m4v|mpeg|ogg)$/.test(m)) return m;
+  const e = /\.(mp4|m4v|mov|webm|mkv|3gp|3g2|mpeg|mpg|ogv)$/i.exec(String((file && file.originalname) || ''));
+  return e ? ({ mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', '3gp': 'video/3gpp', '3g2': 'video/3gpp2', mpeg: 'video/mpeg', mpg: 'video/mpeg', ogv: 'video/ogg' })[e[1].toLowerCase()] : null;
+}
 const hasPurchased = (userId, pageId) => !!db.prepare("SELECT 1 FROM purchases WHERE user_id=? AND page_id=? AND status='approved'").get(userId, pageId);
 const purchaseFor = (userId, pageId) => db.prepare('SELECT * FROM purchases WHERE user_id=? AND page_id=?').get(userId, pageId);
 function canViewPage(page, user) {
@@ -3800,6 +3822,10 @@ app.get('/p/:slug', (req, res) => {
     res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');
     return res.type('html').send(preparePage(p.html, '/'));
   }
+  if (p.kind === 'video' && !p.video_id && p.file_data) {
+    // Uploaded from a phone: played right here with the browser's own player (it fetches pieces as needed, so it starts quickly and can be skipped around).
+    return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><video controls playsinline preload="metadata" style="width:100%;max-height:78vh;border-radius:12px;background:#000" src="/p/${esc(p.slug)}/raw"></video><p class="mut" style="margin:10px 0 0">If it does not start, <a href="/p/${esc(p.slug)}/raw?dl=1">download it</a> and play it on your phone.</p></div>`, req.user));
+  }
   if (p.kind === 'video') {
     return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
   }
@@ -3834,14 +3860,36 @@ app.get('/p/:slug', (req, res) => {
 });
 
 app.get('/p/:slug/raw', (req, res) => {
-  const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
-  if (!p || !p.file_data || !sortedFor(p, req.user)) return res.status(404).send('Not found');
+  // The file itself is read separately, so a video can be sent in small pieces without loading the whole thing each time.
+  const cols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name).filter(c => c !== 'file_data' && c !== 'html');
+  const p = db.prepare(`SELECT ${cols.join(',')}, length(file_data) AS file_len FROM pages WHERE slug=?`).get(req.params.slug);
+  if (!p || !p.file_len || !sortedFor(p, req.user)) return res.status(404).send('Not found');
   if (!canViewPage(p, req.user)) return res.status(p.members_only && !p.paid ? 401 : 402).send('Not available');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (p.kind === 'video') {
+    const total = Number(p.file_len), vmime = videoMimeOf({ mimetype: p.file_mime, originalname: p.file_name }) || 'application/octet-stream';
+    let start = 0, end = total - 1, partial = false;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+    if (m && (m[1] || m[2])) {
+      if (m[1] === '') start = Math.max(0, total - Number(m[2]));
+      else { start = Number(m[1]); if (m[2]) end = Math.min(end, Number(m[2])); }
+      if (start > end || start >= total) { res.status(416).setHeader('Content-Range', `bytes */${total}`); return res.end(); }
+      end = Math.min(end, start + 8 * 1024 * 1024 - 1); // pieces of at most 8 MB; the player simply asks for the next one
+      partial = true;
+    }
+    const row = db.prepare('SELECT substr(file_data, ?, ?) AS b FROM pages WHERE id=?').get(start + 1, end - start + 1, p.id);
+    const buf = Buffer.from(row.b);
+    res.setHeader('Content-Type', vmime);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Disposition', `${req.query.dl ? 'attachment' : 'inline'}; filename="${String(p.file_name || p.slug).replace(/[^\w. -]/g, '_')}"`);
+    if (partial) { res.status(206); res.setHeader('Content-Range', `bytes ${start}-${start + buf.length - 1}/${total}`); }
+    res.setHeader('Content-Length', buf.length);
+    return res.end(buf);
+  }
   const safeMime = /^(application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.[a-z.]+|image\/(png|jpe?g|gif|webp))$/i.test(String(p.file_mime || ''));
   res.setHeader('Content-Type', safeMime ? p.file_mime : 'application/octet-stream');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Disposition', `${p.kind === 'pdf' && safeMime ? 'inline' : 'attachment'}; filename="${(p.file_name || p.slug).replace(/"/g, '')}"`);
-  res.send(Buffer.from(p.file_data));
+  res.send(Buffer.from(db.prepare('SELECT file_data FROM pages WHERE id=?').get(p.id).file_data));
 });
 
 app.post('/pay/verify', async (req, res) => {
@@ -4432,17 +4480,17 @@ app.get('/admin', adminish, (req, res) => {
 ${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><a href="/admin/news/${n.id}/edit">Edit</a><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
   const pagesSection = cp ? `<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
-${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">YouTube video</option></select>`
+${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">Video (YouTube link or from your phone)</option></select>`
     : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Your role can upload plain HTML pages. PDFs, Word documents, videos and CBT pages need a Files admin or a full admin.</p>'}
 <div id="fileField"><input type="file" name="file" accept=".html,.htm,text/html"></div>
-${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."></div>` : ''}
+${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."><p class="hint" style="margin:4px 0 0">Paste a YouTube link here, <b>or</b> choose a video from your phone above. Either one works.</p></div>` : ''}
 <label><input type="checkbox" name="members_only" value="1"> Members only (login required)</label><br>
 <label class="hint" style="display:block;margin-top:8px">Who is this for?</label>
 <details><summary>Which departments? (leave all unchecked for every department)</summary>${departmentCheckboxes([])}</details>
 <select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
 <button>Upload</button></form>
-${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';f.style.display=isVideo?'none':'';fi.required=!isVideo;fi.accept=k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
+${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';fi.required=!isVideo;fi.accept=isVideo?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
 <script>if('launchQueue' in window){window.launchQueue.setConsumer(function(lp){if(!lp.files||!lp.files.length)return;lp.files[0].getFile().then(function(file){var dt=new DataTransfer();dt.items.add(file);var fi=document.querySelector('#fileField input[type=file]');fi.files=dt.files;var n=file.name.toLowerCase();var ks=document.getElementById('kindSelect');ks.value=n.indexOf('.pdf')>-1?'pdf':(n.indexOf('.doc')>-1?'doc':'html');ks.dispatchEvent(new Event('change'));document.getElementById('upload').scrollIntoView({behavior:'smooth'})})})}</script>` : ''}
 ${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',function(e){if(e.data&&e.data.type==='uploads-synced')location.reload()})}</script>` : ''}
 <h3 id="pages">Pages (${pages.length})</h3>${(() => {
@@ -4451,7 +4499,7 @@ ${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEven
       const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
       const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
       const replaceCtrl = p.kind === 'video'
-        ? (ck ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form>` : '')
+        ? (ck ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form><form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" accept="video/*" required style="width:auto"><button>Upload another video</button></form>` : '')
         : (p.kind === 'html' || ck ? `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>` : '');
       const deptList = deptListOf(p);
       const forWho = `${deptList.length ? esc(deptList.join(', ')) : 'All departments'} &middot; ${p.level ? p.level + ' level' : 'All levels'}`;
@@ -4505,10 +4553,14 @@ app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
 
   if (kind === 'video') {
     const vid = youtubeId(req.body.video_url);
-    if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
-    const slug = uniqueSlug(slugify(title || 'video')), aud = readAudience(req.body, title);
-    db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+    if (!vid && !req.file) return res.redirect(back('Paste a YouTube link, or choose a video from your phone.'));
+    const vmime = !vid && videoMimeOf(req.file);
+    if (!vid && !vmime) return res.redirect(back('That file is not a video.'));
+    const slug = uniqueSlug(slugify(title || (req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'video'))), aud = readAudience(req.body, title);
+    if (vid) db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
       .run(slug, title || 'Video', '', membersOnly, 'video', paid, PRICE_KOBO, vid, aud.dept, aud.level, req.user.id);
+    else db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(slug, title || req.file.originalname.replace(/\.[a-z0-9]+$/i, ''), '', membersOnly, 'video', paid, PRICE_KOBO, req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id);
     announceUpload({ title: title || 'Video', slug, paid, ...aud });
     return res.redirect(back(`Published at /p/${slug}`));
   }
@@ -4723,7 +4775,11 @@ app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, re
   if (!ownsAdminPage(req.user, page)) return res.redirect(back(NOT_YOURS));
   if (page.kind !== 'html' && !can.allKinds(req.user)) return res.sendStatus(403);
   if (!req.file) return res.redirect(back('Choose a file first.'));
-  if (page.kind === 'pdf' || page.kind === 'doc') {
+  if (page.kind === 'video') {
+    const vmime = videoMimeOf(req.file);
+    if (!vmime) return res.redirect(back('That file is not a video.'));
+    db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=?, video_id=NULL WHERE id=?').run(req.file.buffer, vmime, req.file.originalname, req.params.id);
+  } else if (page.kind === 'pdf' || page.kind === 'doc') {
     db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.file.originalname, req.params.id);
   } else {
     db.prepare('UPDATE pages SET html=? WHERE id=?').run(req.file.buffer.toString('utf8'), req.params.id);
@@ -4735,7 +4791,7 @@ app.post('/admin/pages/:id/video', filesAdmin, (req, res) => {
   if (!vid) return res.redirect(back('Enter a valid YouTube link.'));
   const own = db.prepare('SELECT author_id, admin_id FROM pages WHERE id=?').get(req.params.id);
   if (!own || !ownsAdminPage(req.user, own)) return res.redirect(back(NOT_YOURS));
-  db.prepare("UPDATE pages SET video_id=? WHERE id=? AND kind='video'").run(vid, req.params.id);
+  db.prepare("UPDATE pages SET video_id=?, file_data=NULL, file_mime=NULL, file_name=NULL WHERE id=? AND kind='video'").run(vid, req.params.id);
   res.redirect(back('Video link updated.'));
 });
 app.post('/admin/news', newsAdmin, upload.single('image'), (req, res) => {
@@ -5047,7 +5103,7 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-const uni = registerUniversityAdmin(app, { db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
+const uni = registerUniversityAdmin(app, { videoMimeOf, db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.

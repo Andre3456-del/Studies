@@ -298,3 +298,12 @@ The three-line menu and logo bar now stays at the top of every page: it tucks aw
 - **Last level:** 500 by default. In Admin > Positions & departments > Departments you can set a different last level (300-600) for one department, or for a whole faculty at once (for example 400 for Architecture). Sign-up refuses a level above the department's last level.
 - **Graduates:** when you press **Move students up one level** (or end the session, or a university controller promotes their students), a student already at their department's last level is flagged as a **graduate** instead (`users.graduated`, level kept). They are told, and they show as "Graduate" on their dashboard and profile. Graduates are skipped by later promotions. What graduates can do on the site is not decided yet; the flag is ready for it.
 - **Searchable dropdowns:** every faculty / department / university dropdown (control panel and sign-up) gets a "Type to search..." box that narrows the list as you type; tapping the arrow still shows everything. The department checkbox lists for uploads have a search box too.
+
+## Videos: YouTube link or upload from a phone
+
+Wherever a video can be added (admin uploads, the lecturer portal, and university uploads) there are two ways: paste a YouTube link, or choose a video from your phone. Either one is shown on the site: a YouTube link plays in the YouTube player, and an uploaded video plays in the page's own player (play, pause, skip around, full screen) with a "download" link as a fallback.
+
+- Uploaded videos are stored with the site's other files and sent to the player in small pieces, so they start quickly. The size limit is the same as other uploads (200 MB); longer videos are better as a YouTube link.
+- Phone formats are recognised (MP4, iPhone .mov, 3GP, WebM). Anything that is not a video is refused.
+- Who can watch follows the normal rules: department and level, members-only, and a university's own uploads stay inside that university.
+- To swap, admins and lecturers can replace an uploaded video with a link (or the other way round) from the item's edit controls.
