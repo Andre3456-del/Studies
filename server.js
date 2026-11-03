@@ -1485,6 +1485,51 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  .sheet{left:var(--side)}
  table{font-size:15px}td,th{padding:10px 8px}
 }
+/* laptop: WhatsApp-Web style — thin icon rail | list pane | reading area */
+@media (min-width:1024px){
+ :root{--rail:68px;--pane:380px;--side:68px}
+ body.has-pane{--side:448px}
+ .drawer{width:var(--rail);align-items:center;padding:0;overflow-x:hidden}
+ .drawer-top,.drawer-label,.drawer-arrows,.drawer-user div{display:none!important}
+ .drawer-user{margin:16px 0 8px;padding:0;border:0;background:none;display:flex;justify-content:center;font-size:0}
+ .drawer-item{width:48px;height:48px;margin:4px auto;padding:0;justify-content:center;font-size:0;gap:0;position:relative}
+ .drawer-item span{width:24px}
+ .drawer-item .nbadge,.drawer-item b,.drawer-item .badge{font-size:11px!important;position:absolute;top:2px;right:0}
+ .drawer-bottom{margin:auto 0 0;padding:10px 0 14px;width:100%}.drawer-bottom .drawer-item{margin:4px auto}
+ .pane{display:none}
+ body.has-pane .pane{display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:var(--rail);width:var(--pane);border-right:1px solid var(--line);background:var(--bg);z-index:20}
+ .pane-head{padding:18px 20px 12px;font-size:24px;font-weight:800;flex:none}
+ .pane-body{flex:1;overflow-y:auto;padding:0 12px 20px;font-size:15px}
+ .pane-body h1,.pane-body .dash-hero h1{font-size:18px}
+ .pane-body>h1:first-child{display:none}
+ .pane-body .grid{grid-template-columns:1fr;gap:10px}
+ .pane-body .card,.pane-body .tile{padding:14px}.pane-body .dash-hero{padding:16px;border-radius:16px}
+ .pane-body table{display:block;overflow-x:auto}
+ .pane-body a.cur,.pane-body .cur{background:rgba(56,176,248,.16);border-radius:12px}
+ body.has-pane{padding-top:58px}
+ body.has-pane .top{display:flex;position:fixed;top:0;left:var(--rail);right:0;height:58px;padding:0 26px;margin:0;z-index:36;align-items:center}
+ body.has-pane .top.hide{transform:none}
+ body.has-pane .pane{top:58px}.pane-head{display:none}
+ .pane-body h1,body.has-pane main>h1:first-child{display:none}
+ body.has-pane main{max-width:none;padding:20px 32px 56px}
+ .pane-empty{min-height:65vh;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--mut);text-align:center}
+ .pane-empty-ic{font-size:54px;opacity:.5}
+ body.pane-index .site-foot{display:none}
+}
+@media (min-width:1024px){
+ .drawer-out,.drawer-bottom .drawer-item{font-size:0!important}
+ .drawer-bottom .drawer-out{width:48px!important;height:48px;padding:0!important;display:flex;justify-content:center}
+ .pane-body .dash-hero{display:none}
+ .pane-body .pv-grid{grid-template-columns:1fr;gap:6px}
+ .pane-body .pv{display:flex!important;flex-direction:row!important;align-items:center;gap:12px;padding:8px;border-radius:14px;text-align:left}
+ .pane-body .pv-body{text-align:left}
+ .pane-body .pv-img{width:64px;height:64px;aspect-ratio:1;flex:none;border-radius:12px;font-size:26px}
+ .pane-body .pv-body{padding:0;min-width:0}
+ .pane-body .pv:hover{background:rgba(56,176,248,.08)}
+ iframe.reader{display:block;width:100%;height:calc(100vh - 66px);border:0;background:#fff}
+ body.has-pane main:has(iframe.reader){padding:0}
+ body.has-pane:has(iframe.reader) .site-foot{display:none}
+}
 /* accessibility polish: visible keyboard focus, calmer motion, comfortable touch targets, tablet width */
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:3px solid #fcc419;outline-offset:2px;border-radius:6px}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
@@ -1631,8 +1676,25 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
-<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}">${esc(topTitle(title))}</a><span style="width:40px"></span></header>
+${user && !opts.hideTop ? '<aside id="pane" class="pane"><div class="pane-head" id="paneHead"></div><div class="pane-body" id="paneBody"></div></aside>' : ''}<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}">${esc(topTitle(title))}</a><span style="width:40px"></span></header>
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<script>(function(){if(innerWidth<1024)return;
+document.querySelectorAll('.drawer-item').forEach(function(a){a.title=a.textContent.trim()});
+var pane=document.getElementById('pane'),main=document.querySelector('main');if(!pane||!main)return;
+var P=location.pathname.replace(/\\/+$/,'')||'/';
+var S=[[/^\\/(dashboard)?$|^\\/p\\//,'/dashboard','Studies Hub','Pick a course or file from the list.'],[/^\\/news/,'/news','News','Pick a post to read it here.'],[/^\\/chat/,'/chat','Chats','Select a chat to start messaging.'],[/^\\/settings/,'/settings','Settings','Choose a setting.'],[/^\\/admin/,'/admin','Admin','Choose a section.'],[/^\\/lecturer/,'/lecturer','Lecturer portal','Choose a section.'],[/^\\/uni/,'/uni','University','Choose a section.']];
+var sec=null;for(var i=0;i<S.length;i++)if(S[i][0].test(P)){sec=S[i];break}
+if(!sec)return;
+var head=document.getElementById('paneHead'),body=document.getElementById('paneBody');head.textContent=sec[2];document.body.classList.add('has-pane');
+function mark(){body.querySelectorAll('a[href]').forEach(function(a){var h=a.getAttribute('href');if(h&&h.split('?')[0]===P&&P!==sec[1])a.classList.add('cur')})}
+if(P===sec[1]||(sec[1]==='/dashboard'&&P==='/')){
+ var keep=main.querySelector('#pushBar');[].slice.call(main.childNodes).forEach(function(n){if(n!==keep)body.appendChild(n)});
+ var e=document.createElement('div');e.className='pane-empty';e.innerHTML='<div class="pane-empty-ic">&#9776;</div><p>'+sec[3]+'</p>';main.appendChild(e);document.body.classList.add('pane-index');mark();
+}else{
+ fetch(sec[1],{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html'),m=d.querySelector('main');if(!m)return;var pb=m.querySelector('#pushBar');if(pb)pb.remove();
+  [].slice.call(m.childNodes).forEach(function(n){body.appendChild(document.importNode(n,true))});
+  body.querySelectorAll('script').forEach(function(o){var s=document.createElement('script');s.text=o.text;o.replaceWith(s)});mark()}).catch(function(){})
+}})()</script>
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 <script>(function(){var d=document.getElementById('drawer'),a=document.getElementById('drawerArrows'),u=document.getElementById('drawerUp'),dn=document.getElementById('drawerDown'),t=null;if(!d||!a)return;
 function check(){a.classList.toggle('show',d.classList.contains('open')&&d.scrollHeight>d.clientHeight+4)}
@@ -3794,7 +3856,7 @@ const uniToolRows = u => {
 };
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.filter(x => isPhoneAgent(req) || x[0] !== '/settings/devices').concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -3911,6 +3973,7 @@ function preparePage(html, home) {
     else if (/<html[^>]*>/i.test(h)) h = h.replace(/<html[^>]*>/i, m => m + '<head>' + tags + '</head>');
     else h = h.replace(/^(\s*<!doctype[^>]*>)?/i, m => m + tags);
   }
+  if (!home) return h;
   const back = `<a href="${home}" style="position:fixed;left:12px;bottom:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:2147483647;font:600 13px system-ui,sans-serif;color:#eaf2ff;background:rgba(18,18,28,.85);border:1px solid rgba(56,176,248,.55);border-radius:99px;padding:8px 14px;text-decoration:none">&larr; Studies Hub</a>`;
   let at = -1, m; const re = /<\/body>/gi;
   while ((m = re.exec(h))) at = m.index;
@@ -3967,11 +4030,12 @@ app.get('/p/:slug', (req, res) => {
     if (p.members_only && !p.paid) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
     return res.send(layout(p.title, paywallBody(p, req), req.user));
   }
+  if (!isPhoneAgent(req) && !req.query.embed && req.user) return res.send(layout(p.title, `<iframe class="reader" src="/p/${esc(p.slug)}?embed=1" title="${esc(p.title)}" allow="fullscreen"></iframe>`, req.user));
   res.setHeader('Cache-Control', 'private, no-cache');
   if (p.kind === 'html' || p.kind === 'cbt') {
     // Uploaded pages run in a sealed box: they work normally but cannot reach this site's sign-in or act as the person viewing.
     res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');
-    return res.type('html').send(preparePage(p.html, '/'));
+    return res.type('html').send(preparePage(p.html, req.query.embed ? null : '/'));
   }
   if (p.kind === 'video' && !p.video_id && p.file_data) {
     // Uploaded from a phone: played right here with the browser's own player (it fetches pieces as needed, so it starts quickly and can be skipped around).
@@ -4247,7 +4311,7 @@ app.post('/admin/sponsors/:id/reject', admin, (req, res) => {
   res.redirect(back('Sponsor post rejected.'));
 });
 
-app.get('/signup', (req, res) => res.send(authForm('signup')));
+app.get('/signup', (req, res) => isPhoneAgent(req) ? res.send(authForm('signup')) : res.send(linkPage(req, '', 'New here? Create your account on your phone first, then scan this code to open it on this laptop.')));
 app.post('/signup', async (req, res) => {
   if (limited('signup-ip:' + req.ip, 12, 3600e3)) return res.status(429).send('Too many sign-ups from this connection. Please try again later.');
   const name = String(req.body.name || '').trim().slice(0, 80);
@@ -4375,6 +4439,7 @@ app.post('/link/:token', (req, res) => {
 });
 app.get('/settings/devices', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/devices');
+  if (!isPhoneAgent(req)) return res.redirect('/settings');
   db.prepare('DELETE FROM linked_devices WHERE sid NOT IN (SELECT id FROM sessions WHERE expires>?)').run(Date.now());
   const list = db.prepare('SELECT * FROM linked_devices WHERE user_id=? ORDER BY created DESC').all(req.user.id);
   const rows = list.length ? list.map(d => `<div class="card row" style="align-items:center;justify-content:space-between;gap:12px"><div><b>${esc(d.label)}</b><br><span class="mut" style="font-size:13px">Linked ${esc(new Date(d.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))}</span></div><form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="${esc(d.sid)}"><button class="ghost">Log out</button></form></div>`).join('') : '<p class="mut">No laptops are linked yet.</p>';
