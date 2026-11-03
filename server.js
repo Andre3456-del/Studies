@@ -18,6 +18,8 @@ db.exec('PRAGMA journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', created_at TEXT DEFAULT CURRENT_TIMESTAMP, verified INTEGER NOT NULL DEFAULT 0, verify_hash TEXT, verify_expires INTEGER, verify_sent INTEGER);
 CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS device_links(token TEXT PRIMARY KEY, created INTEGER NOT NULL, label TEXT, user_id INTEGER, approved INTEGER, done INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS linked_devices(sid TEXT PRIMARY KEY, user_id INTEGER NOT NULL, label TEXT, created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS pages(id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, html TEXT NOT NULL, members_only INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, page_id INTEGER NOT NULL, reference TEXT UNIQUE NOT NULL, amount INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, page_id));
 CREATE TABLE IF NOT EXISTS courses(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -627,6 +629,7 @@ function startSession(res, userId) {
   db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(sidKey(sid), userId, Date.now() + 7 * 864e5);
   const secure = process.env.NODE_ENV === 'production' || !!(res.req && res.req.secure);
   res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secure ? '; Secure' : ''}`);
+  return sidKey(sid);
 }
 
 app.get('/health', (req, res) => res.type('text').send('ok'));
@@ -1173,7 +1176,7 @@ html{background:var(--bg);scroll-padding-top:env(safe-area-inset-top,0px)}
 body{margin:0;min-height:100vh;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:radial-gradient(900px 520px at 12% -8%,rgba(56,176,248,.22),transparent 62%),radial-gradient(700px 440px at 96% 4%,rgba(240,0,232,.13),transparent 60%),var(--bg);background-attachment:fixed}
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}${FEEDBACK_CSS}
 .autolink{text-decoration:underline}
-.top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:calc(10px + env(safe-area-inset-top,0px)) max(20px,calc((100% - 1000px)/2)) 10px;margin:calc(-1 * env(safe-area-inset-top,0px)) 0 0;position:sticky;top:0;z-index:40;background:var(--bg);border-bottom:1px solid var(--line);transition:transform .22s ease}.top.hide{transform:translateY(-110%)}.top[hidden]{display:none}.top .menu-btn{font-size:28px;padding:8px 12px;min-width:48px;min-height:48px}.top .brand{font-size:20px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:calc(10px + env(safe-area-inset-top,0px)) max(20px,calc((100% - 1000px)/2)) 10px;margin:calc(-1 * env(safe-area-inset-top,0px)) 0 0;position:sticky;top:0;z-index:40;background:var(--bg);border-bottom:1px solid var(--line);transition:transform .22s ease}.top.hide{transform:translateY(-110%)}.top[hidden]{display:none}.top .menu-btn{font-size:28px;padding:8px 12px;min-width:48px;min-height:48px}.top .brand{font-size:22px;font-weight:800;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 .brand{display:flex;align-items:center;gap:10px;color:var(--fg);font-weight:700;font-size:18px}.brand:hover{text-decoration:none}
 .logo{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--blue),var(--pink));box-shadow:0 0 14px rgba(56,176,248,.7)}
 nav{display:flex;align-items:center;gap:10px}nav form{margin:0}
@@ -1436,7 +1439,7 @@ a.drawer-user{color:var(--fg)}a.drawer-user:hover{text-decoration:none}
  .drawer-top{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:14px 16px}
  .drawer-user{margin:14px 12px 6px;padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}
  body.has-tabbar .menu-btn,body.has-tabbar .top>span{display:none}
- body.has-tabbar .top{justify-content:center}
+ body.has-tabbar .top{justify-content:flex-start}
  .drawer-label{display:none}
  .drawer-item{margin:0 12px 2px;padding:16px;background:var(--panel);border-radius:14px;font-size:17px}
  .drawer-item.active{background:rgba(56,176,248,.16);border-right:0;color:var(--blue)}
@@ -1454,7 +1457,7 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  body{padding-left:var(--side);font-size:17px}
  body.has-tabbar{padding-bottom:0}.tabbar,body.has-tabbar .tabbar{display:none}
  body.has-tabbar .ai-fab{bottom:16px}body.has-tabbar .ai-box{bottom:72px}
- .top{display:none}
+ .top{padding-left:28px;padding-right:28px}.top>span{display:none}
  .scrim,.scrim.show{display:none}
  .menu-btn,#drawerClose,.drawer-arrows,.drawer-arrows.show{display:none!important}
  .drawer{transform:none;width:var(--side);z-index:35;background:rgba(10,10,20,.97);padding-right:0}
@@ -1595,6 +1598,11 @@ if(bar&&window.Notification&&window.PushManager&&Notification.permission==='defa
   document.getElementById('pushNo').addEventListener('click',function(){try{localStorage.setItem('pushDismissed','1')}catch(_){}bar.hidden=true})
 }
 })();`;
+// The name shown at the top of each page (like WhatsApp): the page's own name, or "Studies Hub" on the home/dashboard.
+function topTitle(title) {
+  const t = String(title || '').replace(/\s*[|\-\u2013\u2014]\s*Studies Hub\s*$/i, '').trim();
+  return !t || /^(dashboard|home|welcome|studies hub)$/i.test(t) ? 'Studies Hub' : t;
+}
 const layout = (title, body, user, opts = {}) => {
   const avatarBit = user
     ? (user.avatar_mime ? `<img src="/avatar/${user.id}" class="drawer-av-img" alt="">` : `<span class="avatar" style="width:40px;height:40px;font-size:15px">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)
@@ -1623,7 +1631,7 @@ ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
 </nav>
 <div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
-<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}"><img class="logo-img" src="/logo.png" alt="">Studies Hub</a><span style="width:40px"></span></header>
+<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}">${esc(topTitle(title))}</a><span style="width:40px"></span></header>
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 <script>(function(){var d=document.getElementById('drawer'),a=document.getElementById('drawerArrows'),u=document.getElementById('drawerUp'),dn=document.getElementById('drawerDown'),t=null;if(!d||!a)return;
@@ -3774,6 +3782,7 @@ const SETTINGS_PAGES = [
   ['/settings/active-status', '🟢', 'Active status', 'Whether others see when you\u2019re online'],
   ['/settings/appearance', '🎨', 'Appearance', 'Light or dark mode'],
   ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
+  ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
 ];
 // The tools a university admin gave this person (or that a full admin has by default).
 const UNI_TOOLS = { news: ['/uni/news', '📰', 'University news', 'Post news to everyone in '], uploads: ['/uni/uploads', '📤', 'University uploads', 'Upload files and videos for everyone in '], support: ['/uni/support', '🛟', 'Login help', 'Help students who cannot sign in at '] };
@@ -4307,7 +4316,95 @@ app.post('/lecturer/signup', async (req, res) => {
   res.send(checkEmailPage(email));
 });
 
-app.get('/login', (req, res) => res.send(authForm('login', '', safeNext(req.query.next))));
+// ---------- link a laptop from your phone (like WhatsApp Web) ----------
+// A laptop cannot log in with a password. It shows a QR code; a phone that is already logged in scans it and approves.
+// The phone can cut the laptop off at any time from Settings > Linked devices.
+const { qrSvg } = require('./qr');
+const isPhoneAgent = req => /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(String(req.headers['user-agent'] || ''));
+const deviceLabel = req => {
+  const ua = String(req.headers['user-agent'] || '');
+  const os = /Windows/i.test(ua) ? 'Windows' : /Mac OS X|Macintosh/i.test(ua) ? 'Mac' : /CrOS/i.test(ua) ? 'Chromebook' : /Linux/i.test(ua) ? 'Linux' : 'Computer';
+  const br = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  return `${os} · ${br}`;
+};
+const LINK_TTL = 5 * 60 * 1000;
+function linkPage(req, next, note) {
+  db.prepare('DELETE FROM device_links WHERE created<?').run(Date.now() - 3600e3);
+  const token = crypto.randomBytes(16).toString('hex');
+  db.prepare('INSERT INTO device_links(token,created,label) VALUES(?,?,?)').run(sha(token), Date.now(), deviceLabel(req));
+  const origin = baseUrl(req).replace(/\/$/, '');
+  const svg = qrSvg(`${origin}/link/${token}`, 6);
+  return layout('Log in', `<div class="card auth" style="text-align:center"><h1 style="margin-top:0">Log in with your phone</h1>
+${note ? `<p class="err">${esc(note)}</p>` : ''}
+<div style="display:inline-block;background:#fff;padding:6px;border-radius:14px;max-width:100%"><div id="qrBox" style="width:min(300px,80vw)">${svg.replace(/width="\d+" height="\d+"/, 'width="100%" height="auto"')}</div></div>
+<p id="linkMsg" class="mut" style="margin:10px 0 0">Waiting for your phone&hellip;</p>
+<ol style="text-align:left;line-height:1.7;margin:14px auto 6px;max-width:340px;padding-left:20px"><li>Open Studies Hub on your phone.</li><li>Go to <b>Settings &rarr; Linked devices</b>.</li><li>Tap <b>Link a device</b> and point the phone at this code.</li></ol>
+<p class="mut" style="font-size:13px;margin-top:10px">New here? Create your account on your phone first.<br><a href="/login?admin=1">Admin sign-in</a></p></div>
+<script>(function(){var t=${JSON.stringify(token)},next=${JSON.stringify(next || '/dashboard')},m=document.getElementById('linkMsg'),stop=false;
+function tick(){if(stop)return;fetch('/link/status/'+t,{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
+if(j.state==='ok'){stop=true;m.textContent='Linked! Opening…';location.href=next}
+else if(j.state==='expired'){stop=true;m.innerHTML='This code timed out. <a href="/login">Get a new one</a>'}
+else setTimeout(tick,2000)}).catch(function(){setTimeout(tick,3000)})}
+tick()})()</script>`, null);
+}
+app.get('/link/status/:token', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(sha(String(req.params.token)));
+  if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.json({ state: 'expired' });
+  if (!row.approved || !row.user_id) return res.json({ state: 'wait' });
+  const claimed = db.prepare('UPDATE device_links SET done=1 WHERE token=? AND done=0').run(row.token);
+  if (!claimed.changes) return res.json({ state: 'expired' });
+  const key = startSession(res, row.user_id);
+  db.prepare('INSERT OR REPLACE INTO linked_devices(sid,user_id,label,created) VALUES(?,?,?,?)').run(key, row.user_id, row.label || 'Computer', Date.now());
+  res.json({ state: 'ok' });
+});
+app.get('/link/:token', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl || req.url));
+  const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(sha(String(req.params.token)));
+  if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
+  res.send(layout('Link a device', `<div class="card auth"><h1 style="margin-top:0">Link this laptop?</h1><p>A computer (<b>${esc(row.label || 'Computer')}</b>) wants to log in as <b>${esc(req.user.name)}</b>.</p><p class="mut">Only continue if you are looking at that laptop right now and it is yours. Anyone you link can see your account until you remove them.</p>
+<form method="post" action="/link/${esc(req.params.token)}"><button>Yes, link it</button> <a class="btn ghost" href="/settings/devices" style="margin-left:8px">Cancel</a></form></div>`, req.user));
+});
+app.post('/link/:token', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const h = sha(String(req.params.token));
+  const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(h);
+  if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
+  db.prepare('UPDATE device_links SET user_id=?, approved=1 WHERE token=? AND approved IS NULL').run(req.user.id, h);
+  res.send(notice('Linked', 'Your laptop is opening Studies Hub now. You can remove it any time from Settings → Linked devices.', '<p><a href="/settings/devices">Linked devices</a></p>'));
+});
+app.get('/settings/devices', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/settings/devices');
+  db.prepare('DELETE FROM linked_devices WHERE sid NOT IN (SELECT id FROM sessions WHERE expires>?)').run(Date.now());
+  const list = db.prepare('SELECT * FROM linked_devices WHERE user_id=? ORDER BY created DESC').all(req.user.id);
+  const rows = list.length ? list.map(d => `<div class="card row" style="align-items:center;justify-content:space-between;gap:12px"><div><b>${esc(d.label)}</b><br><span class="mut" style="font-size:13px">Linked ${esc(new Date(d.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))}</span></div><form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="${esc(d.sid)}"><button class="ghost">Log out</button></form></div>`).join('') : '<p class="mut">No laptops are linked yet.</p>';
+  res.send(layout('Linked devices', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Linked devices</h1>
+<div class="card"><p style="margin-top:0">To use Studies Hub on a laptop, open it there and scan the code it shows.</p><button id="scanBtn" type="button">Link a device</button>
+<div id="scanBox" hidden style="margin-top:12px"><video id="scanVid" playsinline muted style="width:100%;max-width:360px;border-radius:12px;background:#000"></video><p id="scanMsg" class="mut"></p></div></div>
+<h2 style="font-size:18px">Logged-in laptops</h2>${rows}${list.length > 1 ? '<form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="all"><button class="ghost">Log out of all laptops</button></form>' : ''}
+<script>(function(){var b=document.getElementById('scanBtn'),box=document.getElementById('scanBox'),v=document.getElementById('scanVid'),m=document.getElementById('scanMsg'),stream=null,go=false;
+function end(){go=false;if(stream)stream.getTracks().forEach(function(t){t.stop()})}
+b.onclick=function(){box.hidden=false;
+if(!('BarcodeDetector' in window)||!navigator.mediaDevices){m.textContent='This browser cannot scan inside the page. Open your phone\\u2019s Camera app and point it at the code on the laptop; it will open here.';return}
+var det=new BarcodeDetector({formats:['qr_code']});
+navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(s){stream=s;v.srcObject=s;v.play();go=true;m.textContent='Point at the code on your laptop\\u2026';
+(function loop(){if(!go)return;det.detect(v).then(function(r){for(var i=0;i<r.length;i++){var x=/\\/link\\/([0-9a-f]{32})/.exec(r[i].rawValue||'');if(x){end();location.href='/link/'+x[1];return}}setTimeout(loop,250)}).catch(function(){setTimeout(loop,400)})})()
+}).catch(function(){m.textContent='Camera permission was blocked. Allow the camera, or use your phone\\u2019s Camera app on the laptop code.'})};
+window.addEventListener('pagehide',end)})()</script>`, req.user));
+});
+app.post('/settings/devices/remove', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const sid = String(req.body.sid || '');
+  const mine = sid === 'all' ? db.prepare('SELECT sid FROM linked_devices WHERE user_id=?').all(req.user.id).map(r => r.sid) : db.prepare('SELECT sid FROM linked_devices WHERE user_id=? AND sid=?').all(req.user.id, sid).map(r => r.sid);
+  for (const k of mine) { db.prepare('DELETE FROM sessions WHERE id=? AND user_id=?').run(k, req.user.id); db.prepare('DELETE FROM linked_devices WHERE sid=?').run(k); }
+  res.redirect('/settings/devices');
+});
+
+app.get('/login', (req, res) => {
+  const next = safeNext(req.query.next);
+  if (!isPhoneAgent(req) && !req.query.admin) return res.send(linkPage(req, next));
+  res.send(authForm('login', '', next));
+});
 app.post('/login', (req, res) => {
   const next = safeNext(req.body.next);
   if (tooMany(req.ip)) return res.status(429).send(authForm('login', 'Too many attempts. Try again in 15 minutes.', next));
@@ -4320,6 +4417,7 @@ app.post('/login', (req, res) => {
     return res.status(401).send(authForm('login', 'Wrong email or password.', next));
   }
   if (!u.verified) return res.status(403).send(notice('Verify your email', 'Your email is not verified yet. Check your inbox for the link, or request a new one.', resendForm(u.email)));
+  if (!isPhoneAgent(req) && u.role !== 'admin') return res.status(403).send(linkPage(req, next, 'Laptops log in by linking with your phone. Scan the code below.'));
   fails.delete('acct:' + who);
   startSession(res, u.id);
   res.redirect(next || '/');
@@ -4411,6 +4509,7 @@ app.get('/auth/google/callback', async (req, res) => {
       db.prepare('UPDATE users SET verified=1, hash=? WHERE id=?').run(rnd(), u.id);
       db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
     }
+    if (!isPhoneAgent(req) && u.role !== 'admin') return res.redirect('/login');
     startSession(res, u.id);
     res.redirect('/');
   } catch (e) {

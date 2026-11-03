@@ -325,3 +325,9 @@ The site now has two different layouts, chosen by screen width (so a phone set t
 - **Laptop (1024 px and wider):** the menu is always open down the left as a sidebar (logo, your name, the links with the same line icons and their words, Settings and Log out), the top bar and tab bar are gone, and the content area is wider with roomier cards and more columns. The chat message bar sits beside the sidebar instead of under it.
 
 Also fixed: the chat message box was squeezed on narrow phones after the bigger buttons; it now has room to type.
+
+## Logging in on a laptop (link with your phone)
+A laptop cannot log in with a password. It shows a QR code (made by `qr.js`, no outside package). On the phone, go to Settings → Linked devices → Link a device, scan the code and approve. The phone lists every linked laptop and can log any of them out (or all) at any time. Codes last 5 minutes and work once. Admin accounts can still sign in on a laptop with a password (`/login?admin=1`). Phones and tablets log in as before.
+
+## Page names at the top
+Like WhatsApp, the top bar shows the page's own name (News, Settings, Chat…) and "Studies Hub" on the dashboard — text only, no logo.
