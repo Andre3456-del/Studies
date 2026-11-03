@@ -34,7 +34,7 @@ for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verifie
   // (by a full admin, shown which institution they claimed), their own interface. is_lecturer marks the
   // account type; lecturer_status tracks pending/approved/rejected; lecturer_reg_no is optional.
   ['is_lecturer', 'INTEGER NOT NULL DEFAULT 0'], ['lecturer_status', 'TEXT'], ['lecturer_reg_no', 'TEXT'],
-  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT'], ['virtual', 'INTEGER NOT NULL DEFAULT 0'], ['sub_role', 'TEXT'], ['sub_inst', 'TEXT'], ['sub_perms', 'TEXT'], ['sub_title', 'TEXT'], ['sub_by', 'INTEGER'], ['graduated', 'INTEGER NOT NULL DEFAULT 0'], ['graduated_at', 'TEXT']])
+  ['theme', 'TEXT'], ['hide_active', 'INTEGER NOT NULL DEFAULT 0'], ['email_notify', 'INTEGER NOT NULL DEFAULT 1'], ['lp_inst', 'TEXT'], ['uni_role', 'TEXT'], ['virtual', 'INTEGER NOT NULL DEFAULT 0'], ['sub_role', 'TEXT'], ['sub_inst', 'TEXT'], ['sub_perms', 'TEXT'], ['sub_title', 'TEXT'], ['sub_by', 'INTEGER'], ['graduated', 'INTEGER NOT NULL DEFAULT 0'], ['graduated_at', 'TEXT'], ['dept_option', 'TEXT']])
   if (!userCols.includes(c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${def}`);
 // Upgrade older databases that predate paid/media pages
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
@@ -635,7 +635,7 @@ app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
   req.sid = c && /^[0-9a-f]{48,64}$/.test(c.slice(4)) ? c.slice(4) : null;
   req.user = req.sid
-    ? db.prepare('SELECT u.id,u.graduated,u.lp_inst,u.uni_role,u.sub_role,u.sub_inst,u.sub_perms,u.sub_title,u.sub_by,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
+    ? db.prepare('SELECT u.id,u.dept_option,u.graduated,u.lp_inst,u.uni_role,u.sub_role,u.sub_inst,u.sub_perms,u.sub_title,u.sub_by,u.name,u.email,u.role,u.verified,u.created_at,u.last_seen,u.avatar_mime,u.department,u.university,u.course,u.title,u.can_set_title,u.username,u.level,u.position,u.position_status,u.position_scope,u.position_auto_role,u.position_approver_id,u.position_can_verify,u.is_lecturer,u.lecturer_status,u.lecturer_reg_no,u.theme,u.hide_active,u.can_promote FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').get(sidKey(req.sid), Date.now()) || null
     : null;
   // Presence: stamp last_seen at most once every 20s per user, so the online/offline dot in
   // /admin has real data without writing to the database on every single request.
@@ -722,6 +722,10 @@ function levelFromText(text) {
   const m = /\b[A-Za-z]{2,5}[\s_-]?([1-6])\d{2}\b/.exec(String(text || ''));
   return m ? Number(m[1]) * 100 : null;
 }
+// Some departments are broken down further (e.g. Education into Mathematics, English...): the admin lists the parts, a student picks one.
+db.exec('CREATE TABLE IF NOT EXISTS department_options(id INTEGER PRIMARY KEY, department TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(department,name))');
+const optionsOf = dept => dept ? db.prepare('SELECT name FROM department_options WHERE department=? ORDER BY name').all(dept).map(r => r.name) : [];
+const optionsMap = () => { const m = {}; for (const r of db.prepare('SELECT department,name FROM department_options ORDER BY name').all()) (m[r.department] = m[r.department] || []).push(r.name); return m; };
 const departmentNames = () => db.prepare('SELECT name FROM departments ORDER BY name').all().map(r => r.name);
 // Nobody goes past their department's last level (500 by default, 400 for some): the site owner sets it per department or faculty.
 const DEFAULT_LAST_LEVEL = 500;
@@ -1830,7 +1834,7 @@ app.get('/u/:id', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
   const u = db.prepare('SELECT id,name,title,position_auto_role,avatar_mime,username,department,university,level,graduated,last_seen,hide_active FROM users WHERE id=?').get(Number(req.params.id));
   if (!u) return res.status(404).send(layout('Not found', '<h2>Member not found</h2>', req.user));
-  const facts = [['University', u.university], ['Department', u.department], ['Level', u.level ? u.level + ' level' : null], ['Status', u.graduated ? '🎓 Graduate' : null]].filter(r => r[1])
+  const facts = [['University', u.university], ['Department', u.department], ['Course', u.dept_option], ['Level', u.level ? u.level + ' level' : null], ['Status', u.graduated ? '🎓 Graduate' : null]].filter(r => r[1])
     .map(r => `<tr><td class="mut">${r[0]}</td><td>${esc(String(r[1]))}</td></tr>`).join('');
   const posts = db.prepare("SELECT id,title,created_at FROM news WHERE author_id=? AND status='approved' ORDER BY id DESC LIMIT 5").all(u.id);
   const me = u.id === req.user.id, areFriends = !me && friendStatus(req.user.id, u.id) === 'friends';
@@ -2230,7 +2234,7 @@ app.post('/api/feedback', (req, res) => {
   const rating = [1, 2, 3, 4, 5].includes(Number(req.body.rating)) ? Number(req.body.rating) : null, liked = t(req.body.liked), suggest = t(req.body.suggest), other = t(req.body.other);
   if (!rating && !liked && !suggest && !other) return res.status(400).json({ error: 'Please answer at least one question.' });
   const u = db.prepare('SELECT id,name,university,department,level,is_lecturer,role FROM users WHERE id=?').get(req.user.id);
-  const who = [u.role === 'uniadmin' ? 'University admin' : u.is_lecturer ? 'Lecturer' : 'Student', u.university, u.department, u.level ? u.level + ' level' : ''].filter(Boolean).join(' · ');
+  const who = [u.role === 'uniadmin' ? 'University admin' : u.is_lecturer ? 'Lecturer' : 'Student', u.university, u.department, u.dept_option, u.level ? u.level + ' level' : ''].filter(Boolean).join(' · ');
   db.prepare('INSERT INTO feedback(user_id,name,who,rating,liked,suggest,other) VALUES(?,?,?,?,?,?,?)').run(u.id, u.name, who, rating, liked, suggest, other);
   notify(fullAdminIds(), { title: 'New feedback' + (rating ? ' ' + '★'.repeat(rating) : ''), body: `${u.name}: ${(liked || suggest || other || 'rated the site').slice(0, 90)}`, url: '/chat/feedback', tag: 'feedback' });
   res.json({ ok: true });
@@ -3348,7 +3352,7 @@ app.get('/avatar/:id', (req, res) => {
 const levelOptions = (sel, blank, dept) => { const top = maxLevelFor(dept); return `<option value="">${blank}</option>${LEVELS.filter(l => l <= top || Number(sel) === l).map(l => `<option value="${l}"${Number(sel) === l ? ' selected' : ''}>${l} level</option>`).join('')}`; };
 // Once someone has signed up, their username, university, department and level are permanent -- only their name, picture and position can change.
 // (A level only moves when the central admin, or someone they appointed, promotes students.) A field is locked as soon as it has a value.
-const lockedOf = u => ({ username: !!(u && u.username), university: !!(u && u.university), department: !!(u && u.department), level: !!(u && u.level) });
+const lockedOf = u => ({ username: !!(u && u.username), university: !!(u && u.university), department: !!(u && u.department), level: !!(u && u.level), option: !!(u && u.dept_option) });
 const lockedRow = (label, value) => `<label class="mut">${label}</label><div class="locked-field"><span>${esc(String(value))}</span></div>`;
 function profileFields(v, student, lk = {}) {
   const lockedBlock = lk.username || lk.university || lk.department || lk.level;
@@ -3357,23 +3361,28 @@ function profileFields(v, student, lk = {}) {
   const curFac = v.department ? (facultyOf(v.department) || '') : '';
   const facOpts = `<option value="">Choose your faculty...</option>${Object.keys(map).map(f => `<option value="${esc(f)}"${f === curFac ? ' selected' : ''}>${esc(f)}</option>`).join('')}`;
   const depOpts = curFac && map[curFac] ? `<option value="">Choose your department...</option>${map[curFac].map(([n]) => `<option value="${esc(n)}"${n === v.department ? ' selected' : ''}>${esc(n)}</option>`).join('')}` : `<option value="">Choose your faculty first...</option>`;
-  const script = `<script>(function(){var M=${JSON.stringify(map).replace(/</g, '\\u003c')},F=document.getElementById('facSel'),D=document.getElementById('deptSel'),L=document.getElementById('lvlSel');if(!F||!D)return;var LV=${JSON.stringify(LEVELS)};
+  const OM = optionsMap(), curOpts = OM[v.department] || [];
+  const optRow = lk.option ? lockedRow('Course under ' + v.department, v.dept_option)
+    : `<div id="optWrap"${curOpts.length ? '' : ' style="display:none"'}><label class="mut">Course under this department</label><select name="dept_option" id="optSel" data-search><option value="">Choose your course...</option>${curOpts.map(n => `<option value="${esc(n)}"${n === v.dept_option ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></div>`;
+  const script = `<script>(function(){var M=${JSON.stringify(map).replace(/</g, '\\u003c')},OM=${JSON.stringify(OM).replace(/</g, '\\u003c')},F=document.getElementById('facSel'),D=document.getElementById('deptSel'),L=document.getElementById('lvlSel'),OS=document.getElementById('optSel'),OW=document.getElementById('optWrap');if(!D)return;var LV=${JSON.stringify(LEVELS)};
 function opts(sel,list,blank,cur){sel.innerHTML='';var o=document.createElement('option');o.value='';o.textContent=blank;sel.appendChild(o);list.forEach(function(x){var e=document.createElement('option');e.value=x[0];e.textContent=x[1];if(String(x[0])===String(cur))e.selected=true;sel.appendChild(e)})}
+function ov(){if(!OS||!OW)return;var l=OM[D.value]||[];OS.innerHTML='';var o=document.createElement('option');o.value='';o.textContent='Choose your course...';OS.appendChild(o);l.forEach(function(n){var e=document.createElement('option');e.value=n;e.textContent=n;OS.appendChild(e)});OW.style.display=l.length?'':'none';OS.required=l.length>0}
 function top(){var f=M[F.value]||[];for(var i=0;i<f.length;i++)if(f[i][0]===D.value)return f[i][1];return 0}
 function lv(){if(!L)return;var t=top(),cur=L.value;opts(L,LV.filter(function(l){return l<=t}).map(function(l){return[l,l+' level']}),t?'Choose your level...':'Choose your department first...',cur)}
-F.addEventListener('change',function(){var f=M[F.value]||[];opts(D,f.map(function(d){return[d[0],d[0]]}),F.value?'Choose your department...':'Choose your faculty first...','');lv()});
-D.addEventListener('change',lv);
+if(F)F.addEventListener('change',function(){var f=M[F.value]||[];opts(D,f.map(function(d){return[d[0],d[0]]}),F.value?'Choose your department...':'Choose your faculty first...','');lv();ov()});
+D.addEventListener('change',function(){lv();ov()});
 })()</script>`;
   return `<label class="mut">Your name</label><input name="name" value="${esc(v.name || '')}" maxlength="80" required>
 ${lk.username ? lockedRow('Username', '@' + v.username) : `<label class="mut">Username</label><input name="username" id="unameInput" value="${esc(v.username || '')}" maxlength="21" placeholder="@yourname" autocapitalize="none" autocomplete="off" required>
 <p class="hint" id="unameHint">3 to 20 characters: letters, numbers, dots or underscores. Nobody else can have the same one, and friends will find you with it. <b>You cannot change it later.</b></p>`}
 ${lk.department ? lockedRow('Faculty', curFac || '-') + lockedRow('Department / course of study', v.department) : `<label class="mut">Faculty</label><select name="faculty" id="facSel"${student ? ' required' : ''}>${facOpts}</select>
 <label class="mut">Department / course of study</label><select name="department" id="deptSel"${student ? ' required' : ''}>${depOpts}</select>`}
+${optRow}
 ${lk.level ? lockedRow('Level', v.level + ' level' + (v.graduated ? ' - Graduate' : '')) : `<label class="mut">Level</label><select name="level" id="lvlSel"${student ? ' required' : ''}>${levelOptions(v.level, v.department ? 'Choose your level...' : 'Choose your department first...', v.department)}</select>`}
 <p class="hint">${lockedBlock ? 'These are fixed once you have signed up. Your level moves up only when the school admin promotes students; if something is wrong, ask an admin.' : 'Your department and level decide which uploads you see. <b>You cannot change them later</b>, so choose carefully.'}</p>
 ${lk.university ? lockedRow('University', v.university) : `<label class="mut">University</label><input name="university" value="${esc(v.university || 'University of Uyo')}" maxlength="120"${student ? ' required' : ''}>`}
 <label class="mut">Position held in school (optional)</label><input name="position" value="${esc(v.position || '')}" maxlength="60" placeholder="e.g. Director of Socials">
-<p class="hint">If you add one, school authorities check it first. Once verified it shows beside your name.</p>${lk.department ? '' : script}`;
+<p class="hint">If you add one, school authorities check it first. Once verified it shows beside your name.</p>${lk.department && lk.option ? '' : script}`;
 }
 const UNAME_JS = `(function(){var i=document.getElementById('unameInput'),h=document.getElementById('unameHint'),t=null;if(!i)return;
 i.addEventListener('input',function(){clearTimeout(t);var v=i.value;t=setTimeout(function(){if(!v.replace(/^@+/,'').length)return;fetch('/api/username/check?u='+encodeURIComponent(v)).then(function(r){return r.json()}).then(function(j){h.textContent=j.message;h.className='hint '+(j.ok?'ok':'err')}).catch(function(){})},350)})})();`;
@@ -3386,8 +3395,13 @@ function readProfile(user, body) {
   if (lk.university) d.university = user.university;
   if (lk.department) d.department = user.department;
   if (lk.level) d.level = user.level;
+  d.dept_option = lk.option ? user.dept_option : trim(body.dept_option, 120) || null;
   let problem = lk.username ? '' : usernameProblem(d.username, user.id);
   if (!problem && !lk.department && d.department && !departmentNames().includes(d.department)) problem = 'Choose your department from the list.';
+  const myOpts = optionsOf(d.department);
+  if (!problem && !lk.option && d.dept_option && !myOpts.includes(d.dept_option)) problem = 'Choose your course from the list.';
+  if (!problem && !lk.option && !myOpts.length) d.dept_option = null;
+  if (!problem && student && !lk.option && myOpts.length && !d.dept_option) problem = `Choose your course under ${d.department}.`;
   if (!problem && student) {
     if (!d.university) problem = 'Enter your university.';
     else if (!d.department) problem = 'Choose your department from the list.';
@@ -3406,10 +3420,10 @@ function positionTaken(university, position, exceptId) {
 // The controllers (central and full admin) of one university: they receive that university's position claims.
 const uniControllerIds = inst => inst ? db.prepare("SELECT id FROM users WHERE lp_inst=? AND virtual=0 AND role IN ('uniadmin','user')").all(inst).map(r => r.id) : [];
 function saveProfile(user, d) {
-  const cur = db.prepare('SELECT username,university,department,level FROM users WHERE id=?').get(user.id) || {};
+  const cur = db.prepare('SELECT username,university,department,level,dept_option FROM users WHERE id=?').get(user.id) || {};
   if (d.position && (d.position || null) !== (user.position || null) && !can.full(user) && positionTaken(cur.university || d.university, d.position, user.id)) return 'Someone at your university already holds or has claimed that exact position. Write it a little differently (for example add your department).';
   try { // a value that is already saved is never overwritten here, whatever the caller passed
-    db.prepare('UPDATE users SET name=?, username=?, university=?, department=?, level=? WHERE id=?').run(d.name, cur.username || d.username, cur.university || d.university, cur.department || d.department, cur.level || d.level, user.id);
+    db.prepare('UPDATE users SET name=?, username=?, university=?, department=?, level=?, dept_option=? WHERE id=?').run(d.name, cur.username || d.username, cur.university || d.university, cur.department || d.department, cur.level || d.level, cur.dept_option || d.dept_option || null, user.id);
   } catch { return 'That username is already taken.'; }
   if ((d.position || null) !== (user.position || null)) {
     if (!d.position) db.prepare('UPDATE users SET position=NULL, position_status=NULL, title=NULL WHERE id=?').run(user.id);
@@ -4346,7 +4360,7 @@ function dashboardBody(req) {
   const locked = rows.filter(isLocked), available = rows.filter(p => !isLocked(p));
   const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
   const posPill = u.position_status === 'pending' ? ` <span class="pill pending">Position waiting for verification: ${esc(u.position)}</span>` : u.title ? ` <span class="pill">${esc(u.title)}</span>` : '';
-  const forYou = [u.department, u.level ? u.level + ' level' : '', u.graduated ? '🎓 Graduate' : ''].filter(Boolean).join(' · ');
+  const forYou = [u.department, u.dept_option, u.level ? u.level + ' level' : '', u.graduated ? '🎓 Graduate' : ''].filter(Boolean).join(' · ');
   const subtitle = isCentral(u) ? 'You are the central admin.' : u.role !== 'user' ? `You are a ${esc(ROLE_LABEL[u.role] || 'admin')}.` : (forYou ? esc(forYou) : 'Uploads for you, at a glance.');
   const grid = list => `<div class="pv-grid">${list.map(previewTile).join('')}</div>`;
   return `<p class="mut" style="margin:8px 0 0">${SEM.semesterName(SEM.getCurrent(db))}</p>${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="dash-top">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:52px;height:52px" alt="">` : `<span class="avatar">${initial}</span>`}<div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}${u.username ? ` &middot; @${esc(u.username)}` : ''}</p></div></div>
@@ -4391,7 +4405,7 @@ app.get('/admin', adminish, (req, res) => {
   const positionsSection = cf ? (() => {
     const pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' ORDER BY id").all();
     const depts = db.prepare('SELECT id,name,faculty,max_level FROM departments ORDER BY faculty,name').all();
-    const facs = [...new Set(depts.map(d => d.faculty))];
+    const facs = [...new Set(depts.map(d => d.faculty))], OPTS = optionsMap();
     const approvers = db.prepare("SELECT id,name,title FROM users WHERE position_status='approved' AND position_auto_role='news' ORDER BY name").all();
     const approverOpts = `<option value="">No extra approval needed</option>${approvers.map(a => `<option value="${a.id}">${esc(a.name)}${a.title ? ' -- ' + esc(a.title) : ''}</option>`).join('')}`;
     return `<h3 id="positions">Positions waiting for verification (${pend.length})</h3>${pend.map(p => `<div class="card"><b>${esc(p.name)}</b> <span class="mut">${p.username ? '@' + esc(p.username) : ''} ${esc(p.department || '')} ${p.level ? p.level + ' level' : ''}</span><br>Says they are: <b>${esc(p.position)}</b>
@@ -4410,7 +4424,8 @@ app.get('/admin', adminish, (req, res) => {
 <h3 id="departments">Departments (${depts.length})</h3><p class="mut" style="margin-top:0">This list feeds sign-up and the upload form. Add anything that is missing.</p>
 <form class="card" method="post" action="/admin/departments/add"><input name="name" placeholder="Department or programme name" required maxlength="120"><input name="faculty" list="facList" placeholder="Faculty (e.g. Science)" maxlength="80"><datalist id="facList">${facs.map(f => `<option value="${esc(f)}">`).join('')}</datalist><label class="mut">Last level</label><select name="max_level">${[300, 400, 500, 600].map(l => `<option value="${l}"${l === 500 ? ' selected' : ''}>${l} level</option>`).join('')}</select><button>Add department</button></form>
 <form class="card" method="post" action="/admin/faculties/maxlevel" onsubmit="return confirm('Set the last level for every department in this faculty?')"><b>Set the last level for a whole faculty</b><br><select name="faculty" required><option value="">Choose a faculty...</option>${facs.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('')}</select><select name="max_level">${[300, 400, 500, 600].map(l => `<option value="${l}">${l} level</option>`).join('')}</select><button>Apply to the faculty</button><p class="mut" style="margin:6px 0 0">Students at the last level are flagged as graduates when you promote.</p></form>
-<details class="card"><summary style="cursor:pointer">Show all departments</summary>${facs.map(f => `<p class="chat-label">${esc(f)}</p>${depts.filter(d => d.faculty === f).map(d => `<div class="row" style="gap:8px"><span style="flex:1">${esc(d.name)}</span><form method="post" action="/admin/departments/${d.id}/maxlevel" style="margin:0"><select name="max_level" onchange="this.form.submit()" title="Last level">${[300, 400, 500, 600].map(l => `<option value="${l}"${l === d.max_level ? ' selected' : ''}>${l} level</option>`).join('')}</select></form><form method="post" action="/admin/departments/${d.id}/delete" style="margin:0" onsubmit="return confirm('Remove this department from the list?')"><button class="link">Remove</button></form></div>`).join('')}`).join('')}</details>`;
+<form class="card" method="post" action="/admin/departments/breakdown"><b>Break a department down into courses</b><p class="mut" style="margin:4px 0">For a department that has parts (for example Education: Mathematics, English, Biology). Students of that department will then also pick their course. Type the names separated by commas or on separate lines.</p><select name="department" data-search required><option value="">Choose the department...</option>${depts.map(d => `<option value="${esc(d.name)}">${esc(d.name)}</option>`).join('')}</select><textarea name="names" placeholder="e.g. Mathematics, English, Biology" required maxlength="3000" style="width:100%;min-height:60px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Add courses</button></form>
+<details class="card"><summary style="cursor:pointer">Show all departments</summary>${facs.map(f => `<p class="chat-label">${esc(f)}</p>${depts.filter(d => d.faculty === f).map(d => `<div class="row" style="gap:8px"><span style="flex:1">${esc(d.name)}</span><form method="post" action="/admin/departments/${d.id}/maxlevel" style="margin:0"><select name="max_level" onchange="this.form.submit()" title="Last level">${[300, 400, 500, 600].map(l => `<option value="${l}"${l === d.max_level ? ' selected' : ''}>${l} level</option>`).join('')}</select></form><form method="post" action="/admin/departments/${d.id}/delete" style="margin:0" onsubmit="return confirm('Remove this department from the list?')"><button class="link">Remove</button></form></div>${(OPTS[d.name] || []).length ? `<div style="margin:2px 0 8px 12px" class="mut">Courses: ${OPTS[d.name].map(n => `<form method="post" action="/admin/departments/breakdown/remove" style="display:inline;margin:0 6px 0 0"><input type="hidden" name="department" value="${esc(d.name)}"><input type="hidden" name="name" value="${esc(n)}"><button class="chip" title="Remove this course" onclick="return confirm('Remove ${esc(n).replace(/'/g, '')}?')">${esc(n)} &times;</button></form>`).join('')}</div>` : ''}`).join('')}`).join('')}</details>`;
   })() : '';
   const delegatedVerifySection = me.position_can_verify ? (() => {
     let pend;
@@ -4680,7 +4695,21 @@ app.post('/admin/faculties/maxlevel', admin, (req, res) => {
   const n = db.prepare('UPDATE departments SET max_level=? WHERE faculty=?').run(ml, f).changes;
   res.redirect(back(`Last level for ${f} is now ${ml} (${n} department${n === 1 ? '' : 's'}).`));
 });
+app.post('/admin/departments/breakdown', admin, (req, res) => {
+  const dept = String(req.body.department || '').trim();
+  if (!departmentNames().includes(dept)) return res.redirect(back('Choose the department from the list.'));
+  const names = [...new Set(String(req.body.names || '').split(/[,\n;]+/).map(s => s.trim().replace(/\s+/g, ' ').slice(0, 120)).filter(Boolean))].slice(0, 60);
+  if (!names.length) return res.redirect(back('Type at least one course.'));
+  let n = 0; for (const x of names) n += db.prepare('INSERT OR IGNORE INTO department_options(department,name) VALUES(?,?)').run(dept, x).changes;
+  res.redirect(back(`${dept} now has ${optionsOf(dept).length} courses (${n} added).`));
+});
+app.post('/admin/departments/breakdown/remove', admin, (req, res) => {
+  db.prepare('DELETE FROM department_options WHERE department=? AND name=?').run(String(req.body.department || ''), String(req.body.name || ''));
+  res.redirect(back('Course removed. Students who already chose it keep it.'));
+});
 app.post('/admin/departments/:id/delete', admin, (req, res) => {
+  const gone = db.prepare('SELECT name FROM departments WHERE id=?').get(req.params.id);
+  if (gone) db.prepare('DELETE FROM department_options WHERE department=?').run(gone.name);
   db.prepare('DELETE FROM departments WHERE id=?').run(req.params.id);
   res.redirect(back('Department removed from the list.'));
 });

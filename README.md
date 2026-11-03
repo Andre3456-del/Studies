@@ -307,3 +307,12 @@ Wherever a video can be added (admin uploads, the lecturer portal, and universit
 - Phone formats are recognised (MP4, iPhone .mov, 3GP, WebM). Anything that is not a video is refused.
 - Who can watch follows the normal rules: department and level, members-only, and a university's own uploads stay inside that university.
 - To swap, admins and lecturers can replace an uploaded video with a link (or the other way round) from the item's edit controls.
+
+## Departments broken down into courses
+
+Some departments have parts under them (for example Education: Mathematics, English, Biology). The central admin opens Admin, Departments, "Break a department down into courses", picks the department and types the courses (commas or new lines). Under "Show all departments" each department then lists its courses, and one tap removes a course.
+
+- At sign-up, once a student picks a department that has courses, a "Course under this department" list appears and is required. Departments with no courses behave exactly as before.
+- Like the department, the course is fixed once chosen. Students who signed up before a breakdown was added can pick theirs from their profile.
+- It shows beside the department on the dashboard and on profiles. Uploads are still sorted by department and level.
+- Removing a course keeps it for students who already chose it; removing a department removes its courses.
