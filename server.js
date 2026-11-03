@@ -1482,6 +1482,11 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  .sheet{left:var(--side)}
  table{font-size:15px}td,th{padding:10px 8px}
 }
+/* accessibility polish: visible keyboard focus, calmer motion, comfortable touch targets, tablet width */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:3px solid #fcc419;outline-offset:2px;border-radius:6px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+@media (pointer:coarse){button,.btn,select,.chip,.tabbar a{min-height:44px}input:not([type=checkbox]):not([type=radio]),select{min-height:44px}}
+@media (min-width:768px) and (max-width:1023px){.wrap,.container{max-width:760px;margin-left:auto;margin-right:auto}.grid{grid-template-columns:repeat(2,1fr)}}
 `;
 
 const canLecturerAdmin = u => !!u && (isCentral(u) || (!!u.lp_inst && u.uni_role !== 'full'));
