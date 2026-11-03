@@ -650,6 +650,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Laptop view: opening any inner page directly (refresh, bookmark, shared link) shows the same three-part screen,
+// with the page itself inside the big area, so the list and menu stay in place.
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || !req.user || req.query.embed) return next();
+  if (String(req.headers['sec-fetch-dest'] || '') !== 'document' || !/(^|;\s*)wide=1/.test(String(req.headers.cookie || ''))) return next();
+  if (!/^\/(p|news|chat|settings|admin|lecturer|uni)\/./.test(req.path) || /\/raw$|\.(csv|pdf|zip|png|jpe?g|gif|webp|mp4)$|\/(export|download|avatar|logout)/.test(req.path)) return next();
+  const url = req.originalUrl + (req.originalUrl.includes('?') ? '&' : '?') + 'embed=1';
+  const pm = /^\/p\/([^/]+)$/.exec(req.path), pg = pm && db.prepare('SELECT title FROM pages WHERE slug=?').get(pm[1]);
+  res.send(layout(pg ? pg.title : 'Studies Hub', `<iframe class="reader" src="${esc(url)}" title="Page"></iframe>`, req.user));
+});
 // LiveKit calling module; credentials stay in server-side environment variables.
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
 const { registerLecturerAdmin } = require('./lecturer_admin');
@@ -1496,6 +1506,9 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  .sheet{left:var(--side)}
  table{font-size:15px}td,th{padding:10px 8px}
 }
+html.embed{--side:0px!important}
+.embed .drawer,.embed .pane,.embed .top,.embed .tabbar,.embed .scrim,.embed #drawerArrows,.embed .site-foot,.embed .pushbar{display:none!important}
+.embed body{padding:0!important}.embed main{max-width:none}
 /* laptop: WhatsApp-Web style — thin icon rail | list pane | reading area */
 @media (min-width:1024px){
  :root{--rail:68px;--pane:380px;--side:68px}
@@ -1537,7 +1550,7 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  .pane-body .pv-img{width:64px;height:64px;aspect-ratio:1;flex:none;border-radius:12px;font-size:26px}
  .pane-body .pv-body{padding:0;min-width:0}
  .pane-body .pv:hover{background:rgba(56,176,248,.08)}
- iframe.reader{display:block;width:100%;height:calc(100vh - 66px);border:0;background:#fff}
+ iframe.reader{display:block;width:100%;height:calc(100vh - 66px);border:0;background:transparent}
  body.has-pane main:has(iframe.reader){padding:0}
  body.has-pane:has(iframe.reader) .site-foot{display:none}
 }
@@ -1677,7 +1690,7 @@ function show(el){hide();tip=document.createElement('div');tip.className='tabtip
 document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>try{document.cookie="wide="+(innerWidth>=1024?1:0)+";path=/;max-age=31536000;SameSite=Lax"}catch(e){}if(window.top!==window.self)document.documentElement.className+=" embed"</script><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
 <div id="scrim" class="scrim"></div>${tabbar}
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
@@ -1689,23 +1702,46 @@ ${drawerNav}
 <div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
 ${user && !opts.hideTop ? '<aside id="pane" class="pane"><div class="pane-head" id="paneHead"></div><div class="pane-body" id="paneBody"></div></aside>' : ''}<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}">${esc(topTitle(title))}</a><span style="width:40px"></span></header>
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
-<script>(function(){if(innerWidth<1024)return;
+<script>(function(){if(innerWidth<1024||window.top!==window.self)return;
 document.querySelectorAll('.drawer-item').forEach(function(a){a.title=a.textContent.trim()});
 var pane=document.getElementById('pane'),main=document.querySelector('main');if(!pane||!main)return;
-var P=location.pathname.replace(/\\/+$/,'')||'/';
+var head=document.getElementById('paneHead'),pbody=document.getElementById('paneBody'),topEl=document.querySelector('header.top .brand'),cur=null,frame=null,lastLabel='';
 var S=[[/^\\/(dashboard)?$|^\\/p\\//,'/dashboard','Studies Hub','Pick a course or file from the list.'],[/^\\/news/,'/news','News','Pick a post to read it here.'],[/^\\/chat/,'/chat','Chats','Select a chat to start messaging.'],[/^\\/settings/,'/settings','Settings','Choose a setting.'],[/^\\/admin/,'/admin','Admin','Choose a section.'],[/^\\/lecturer/,'/lecturer','Lecturer portal','Choose a section.'],[/^\\/uni/,'/uni','University','Choose a section.']];
-var sec=null;for(var i=0;i<S.length;i++)if(S[i][0].test(P)){sec=S[i];break}
-if(!sec)return;
-var head=document.getElementById('paneHead'),body=document.getElementById('paneBody');head.textContent=sec[2];document.body.classList.add('has-pane');
-function mark(){body.querySelectorAll('a[href]').forEach(function(a){var h=a.getAttribute('href');if(h&&h.split('?')[0]===P&&P!==sec[1])a.classList.add('cur')})}
-if(P===sec[1]||(sec[1]==='/dashboard'&&P==='/')){
- var keep=main.querySelector('#pushBar');[].slice.call(main.childNodes).forEach(function(n){if(n!==keep)body.appendChild(n)});
- var e=document.createElement('div');e.className='pane-empty';e.innerHTML='<div class="pane-empty-ic">&#9776;</div><p>'+sec[3]+'</p>';main.appendChild(e);document.body.classList.add('pane-index');mark();
-}else{
- fetch(sec[1],{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html'),m=d.querySelector('main');if(!m)return;var pb=m.querySelector('#pushBar');if(pb)pb.remove();
-  [].slice.call(m.childNodes).forEach(function(n){body.appendChild(document.importNode(n,true))});
-  body.querySelectorAll('script').forEach(function(o){var s=document.createElement('script');s.text=o.text;o.replaceWith(s)});mark()}).catch(function(){})
-}})()</script>
+function norm(p){return p.replace(/\\/+$/,'')||'/'}
+function secOf(p){for(var i=0;i<S.length;i++)if(S[i][0].test(p))return S[i];return null}
+function isIdx(sec,p){return p===sec[1]||(sec[1]==='/dashboard'&&p==='/')}
+function tt(t){t=(t||'').replace(/\\s*[|\\-\\u2013\\u2014]\\s*Studies Hub\\s*$/i,'').trim();return(!t||/^(dashboard|home|welcome|studies hub)$/i.test(t))?'Studies Hub':t}
+function setTitle(t){if(topEl)topEl.textContent=tt(t);if(t)document.title=t}
+function runScripts(root){root.querySelectorAll('script').forEach(function(o){var s=document.createElement('script');s.text=o.text;o.replaceWith(s)})}
+function mark(){var P=norm(location.pathname);pbody.querySelectorAll('a.cur').forEach(function(a){a.classList.remove('cur')});pbody.querySelectorAll('a[href]').forEach(function(a){var h=a.getAttribute('href');if(h&&h.charAt(0)==='/'&&h.split('?')[0]===P&&!(cur&&isIdx(cur,P)))a.classList.add('cur')})}
+function rail(sec){document.querySelectorAll('.drawer-item[href]').forEach(function(a){var h=a.getAttribute('href');a.classList.toggle('active',h===sec[1]||h===norm(location.pathname))})}
+function loadPane(sec,done){if(cur===sec){if(done)done();return}cur=sec;head.textContent=sec[2];document.body.classList.add('has-pane');pbody.innerHTML='';
+fetch(sec[1],{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){if(cur!==sec)return;var d=new DOMParser().parseFromString(h,'text/html'),m=d.querySelector('main');if(!m)return;var pb=m.querySelector('#pushBar');if(pb)pb.remove();
+[].slice.call(m.childNodes).forEach(function(n){pbody.appendChild(document.importNode(n,true))});runScripts(pbody);mark();if(done)done()}).catch(function(){})}
+function clearMain(){[].slice.call(main.children).forEach(function(n){if(n.id!=='pushBar')n.remove()})}
+function showEmpty(sec){frame=null;clearMain();var e=document.createElement('div');e.className='pane-empty';e.innerHTML='<div class="pane-empty-ic">&#9776;</div><p>'+sec[3]+'</p>';main.appendChild(e);document.body.classList.add('pane-index');setTitle(sec[2])}
+function onFrame(){try{var w=frame.contentWindow;if(!w||w.location.href==='about:blank')return;var p=norm(w.location.pathname),q=w.location.search.replace(/([?&])embed=1&?/,'$1').replace(/[?&]$/,''),sec=secOf(p);
+var wt=w.document.title;if(wt)setTitle(wt);else if(lastLabel)setTitle(lastLabel);if(!sec)return;
+if(isIdx(sec,p)){go(p+q);return}
+var url=p+q;if(url!==location.pathname+location.search)history.pushState({},'',url);
+if(cur!==sec)loadPane(sec,mark);else mark();rail(sec)}catch(e){}}
+function showFrame(src){if(!frame){clearMain();frame=document.createElement('iframe');frame.className='reader';frame.addEventListener('load',onFrame);main.appendChild(frame)}document.body.classList.remove('pane-index');if(frame.getAttribute('src')!==src)frame.src=src}
+function go(href,push,label){lastLabel=label||'';var u=new URL(href,location.href),p=norm(u.pathname),sec=secOf(p);if(!sec){location.href=href;return}
+loadPane(sec,mark);
+if(isIdx(sec,p)){showEmpty(sec)}else{showFrame(p+u.search+(u.search?'&':'?')+'embed=1')}
+if(push!==false&&(p+u.search)!==(location.pathname+location.search))history.pushState({},'',p+u.search);rail(sec);mark()}
+document.addEventListener('click',function(e){if(e.defaultPrevented||e.button||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;var a=e.target.closest&&e.target.closest('a[href]');if(!a||(!a.closest('#pane')&&!a.closest('.drawer')))return;
+var h=a.getAttribute('href')||'';if(!h||h.charAt(0)==='#'||(a.target&&a.target!=='_self')||a.hasAttribute('download'))return;var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;
+if(!secOf(norm(u.pathname))||/\\/raw$|\\.(csv|pdf|zip)$|\\/logout|\\/export/.test(u.pathname))return;e.preventDefault();var hh=a.querySelector('h3,b'),lb=((hh||a).textContent||'').replace(/\\s+/g,' ').trim().slice(0,80);go(u.href,true,lb)});
+window.addEventListener('popstate',function(){go(location.href,false)});
+// first load
+var P0=norm(location.pathname),sec0=secOf(P0);if(!sec0)return;
+cur=sec0;head.textContent=sec0[2];document.body.classList.add('has-pane');
+var fr0=main.querySelector('iframe.reader');
+if(isIdx(sec0,P0)){var keep=main.querySelector('#pushBar');[].slice.call(main.childNodes).forEach(function(n){if(n!==keep)pbody.appendChild(n)});showEmpty(sec0);mark()}
+else{if(fr0){frame=fr0;frame.addEventListener('load',onFrame);document.body.classList.remove('pane-index')}
+ cur=null;loadPane(sec0,mark)}
+rail(sec0)})()</script>
 <script>(function(){var d=document.getElementById('drawer'),s=document.getElementById('scrim'),o=document.getElementById('drawerOpen'),c=document.getElementById('drawerClose');function open(){d.classList.add('open');s.classList.add('show')}function close(){d.classList.remove('open');s.classList.remove('show')}o&&o.addEventListener('click',open);c&&c.addEventListener('click',close);s&&s.addEventListener('click',close);var path=location.pathname;document.querySelectorAll('.drawer-item[href]').forEach(function(a){if(a.getAttribute('href')===path)a.classList.add('active')})})()</script>
 <script>(function(){var d=document.getElementById('drawer'),a=document.getElementById('drawerArrows'),u=document.getElementById('drawerUp'),dn=document.getElementById('drawerDown'),t=null;if(!d||!a)return;
 function check(){a.classList.toggle('show',d.classList.contains('open')&&d.scrollHeight>d.clientHeight+4)}
@@ -3870,7 +3906,7 @@ const uniToolRows = u => {
 };
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.filter(x => isPhoneAgent(req) || x[0] !== '/settings/devices').concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.filter(x => !isLaptop(req) || x[0] !== '/settings/devices').concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -4044,7 +4080,7 @@ app.get('/p/:slug', (req, res) => {
     if (p.members_only && !p.paid) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
     return res.send(layout(p.title, paywallBody(p, req), req.user));
   }
-  if (!isPhoneAgent(req) && !req.query.embed && req.user) return res.send(layout(p.title, `<iframe class="reader" src="/p/${esc(p.slug)}?embed=1" title="${esc(p.title)}" allow="fullscreen"></iframe>`, req.user));
+  if (!req.query.embed && req.user && String(req.headers['sec-fetch-dest'] || '') === 'document' && isLaptop(req)) return res.send(layout(p.title, `<iframe class="reader" src="/p/${esc(p.slug)}?embed=1" title="${esc(p.title)}" allow="fullscreen"></iframe>`, req.user));
   res.setHeader('Cache-Control', 'private, no-cache');
   if (p.kind === 'html' || p.kind === 'cbt') {
     // Uploaded pages run in a sealed box: they work normally but cannot reach this site's sign-in or act as the person viewing.
@@ -4325,7 +4361,7 @@ app.post('/admin/sponsors/:id/reject', admin, (req, res) => {
   res.redirect(back('Sponsor post rejected.'));
 });
 
-app.get('/signup', (req, res) => isPhoneAgent(req) ? res.send(authForm('signup')) : res.send(linkPage(req, '', 'New here? Create your account on your phone first, then scan this code to open it on this laptop.')));
+app.get('/signup', (req, res) => !isLaptop(req) ? res.send(authForm('signup')) : res.send(linkPage(req, '', 'New here? Create your account on your phone first, then scan this code to open it on this laptop.')));
 app.post('/signup', async (req, res) => {
   if (limited('signup-ip:' + req.ip, 12, 3600e3)) return res.status(429).send('Too many sign-ups from this connection. Please try again later.');
   const name = String(req.body.name || '').trim().slice(0, 80);
@@ -4399,6 +4435,8 @@ app.post('/lecturer/signup', async (req, res) => {
 // The phone can cut the laptop off at any time from Settings > Linked devices.
 const { qrSvg } = require('./qr');
 const isPhoneAgent = req => /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(String(req.headers['user-agent'] || ''));
+// A laptop = a computer browser, or any screen wide enough for the laptop layout (the page tells us its width in a cookie).
+const isLaptop = req => !isPhoneAgent(req) || /(^|;\s*)wide=1/.test(String(req.headers.cookie || ''));
 const deviceLabel = req => {
   const ua = String(req.headers['user-agent'] || '');
   const os = /Windows/i.test(ua) ? 'Windows' : /Mac OS X|Macintosh/i.test(ua) ? 'Mac' : /CrOS/i.test(ua) ? 'Chromebook' : /Linux/i.test(ua) ? 'Linux' : 'Computer';
@@ -4453,7 +4491,7 @@ app.post('/link/:token', (req, res) => {
 });
 app.get('/settings/devices', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/devices');
-  if (!isPhoneAgent(req)) return res.redirect('/settings');
+  if (isLaptop(req)) return res.redirect('/settings');
   db.prepare('DELETE FROM linked_devices WHERE sid NOT IN (SELECT id FROM sessions WHERE expires>?)').run(Date.now());
   const list = db.prepare('SELECT * FROM linked_devices WHERE user_id=? ORDER BY created DESC').all(req.user.id);
   const rows = list.length ? list.map(d => `<div class="card row" style="align-items:center;justify-content:space-between;gap:12px"><div><b>${esc(d.label)}</b><br><span class="mut" style="font-size:13px">Linked ${esc(new Date(d.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))}</span></div><form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="${esc(d.sid)}"><button class="ghost">Log out</button></form></div>`).join('') : '<p class="mut">No laptops are linked yet.</p>';
@@ -4481,7 +4519,7 @@ app.post('/settings/devices/remove', (req, res) => {
 
 app.get('/login', (req, res) => {
   const next = safeNext(req.query.next);
-  if (!isPhoneAgent(req) && !req.query.admin) return res.send(linkPage(req, next));
+  if (isLaptop(req) && !req.query.admin) return res.send(linkPage(req, next));
   res.send(authForm('login', '', next));
 });
 app.post('/login', (req, res) => {
@@ -4496,7 +4534,7 @@ app.post('/login', (req, res) => {
     return res.status(401).send(authForm('login', 'Wrong email or password.', next));
   }
   if (!u.verified) return res.status(403).send(notice('Verify your email', 'Your email is not verified yet. Check your inbox for the link, or request a new one.', resendForm(u.email)));
-  if (!isPhoneAgent(req) && u.role !== 'admin') return res.status(403).send(linkPage(req, next, 'Laptops log in by linking with your phone. Scan the code below.'));
+  if (isLaptop(req) && u.role !== 'admin') return res.status(403).send(linkPage(req, next, 'Laptops log in by linking with your phone. Scan the code below.'));
   fails.delete('acct:' + who);
   startSession(res, u.id);
   res.redirect(next || '/');
@@ -4588,7 +4626,7 @@ app.get('/auth/google/callback', async (req, res) => {
       db.prepare('UPDATE users SET verified=1, hash=? WHERE id=?').run(rnd(), u.id);
       db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
     }
-    if (!isPhoneAgent(req) && u.role !== 'admin') return res.redirect('/login');
+    if (isLaptop(req) && u.role !== 'admin') return res.redirect('/login');
     startSession(res, u.id);
     res.redirect('/');
   } catch (e) {
