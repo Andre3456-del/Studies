@@ -3878,7 +3878,7 @@ function canViewPage(page, user) {
 const KIND_META = { html: ['🌐', 'Page'], cbt: ['📝', 'CBT'], pdf: ['📄', 'PDF'], doc: ['📃', 'Document'], video: ['▶️', 'Video'] };
 function pageCard(p) {
   const [icon, label] = KIND_META[p.kind] || KIND_META.html;
-  const chip = p.paid ? `<span class="chip pay">₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view</span>` : p.members_only ? '<span class="chip lock">Members</span>' : '<span class="chip">Open</span>';
+  const chip = p.paid ? '<span class="chip pay">Pay</span>' : '';
   return `<a class="tile" href="/p/${p.slug}"><span class="stat">${icon}</span>${chip}<h3>${esc(p.title)}</h3><span class="go">${label} &middot; View &rarr;</span></a>`;
 }
 
@@ -4466,13 +4466,16 @@ const back = msg => '/admin?' + (adminTab ? 'tab=' + adminTab + '&' : '') + 'msg
 
 // ---------- dashboard body: what a logged-in visitor sees at "/" ----------
 // Preview tile for one upload: a picture (the YouTube thumbnail for videos, a big icon for everything else).
-function previewTile(p) {
+// Kept plain: just the title, what it is, the level and which semester's course it is. A paid item shows a single "Pay" sign
+// until the student has paid; after that it looks exactly like the others.
+const semLabel = p => p.semester ? SEM.semesterName(p.semester) : '';
+function previewTile(p, needsPay) {
   const [icon, label] = KIND_META[p.kind] || KIND_META.html;
-  const chip = p.paid ? `<span class="chip pay">₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view</span>` : p.members_only ? '<span class="chip lock">Members</span>' : '<span class="chip">Open</span>';
+  const chip = needsPay ? '<span class="chip pay">Pay</span>' : '';
   const thumb = p.kind === 'video' && p.video_id
     ? `<img class="pv-img" src="https://i.ytimg.com/vi/${esc(p.video_id)}/hqdefault.jpg" alt="" loading="lazy">`
     : `<div class="pv-img pv-icon">${icon}</div>`;
-  return `<a class="pv" href="/p/${p.slug}">${thumb}<div class="pv-body">${chip}<h3>${esc(p.title)}</h3><span class="mut">${label}${p.level ? ` &middot; ${p.level} level` : ''}</span></div></a>`;
+  return `<a class="pv" href="/p/${p.slug}">${thumb}<div class="pv-body">${chip}<h3>${esc(p.title)}</h3><span class="mut">${label}${p.level ? ` &middot; ${p.level} level` : ''}</span>${semLabel(p) ? `<br><span class="mut">${semLabel(p)}</span>` : ''}</div></a>`;
 }
 // Dashboard: a greeting, then only uploads that are meant for this member (their department and level).
 // "Available" = free to view plus anything they've paid for; "Locked" = pay-to-view CBT they haven't unlocked yet.
@@ -4485,7 +4488,7 @@ function dashboardBody(req) {
   const posPill = u.position_status === 'pending' ? ` <span class="pill pending">Position waiting for verification: ${esc(u.position)}</span>` : u.title ? ` <span class="pill">${esc(u.title)}</span>` : '';
   const forYou = [u.department, u.dept_option, u.level ? u.level + ' level' : '', u.graduated ? '🎓 Graduate' : ''].filter(Boolean).join(' · ');
   const subtitle = isCentral(u) ? 'You are the central admin.' : u.role !== 'user' ? `You are a ${esc(ROLE_LABEL[u.role] || 'admin')}.` : (forYou ? esc(forYou) : 'Uploads for you, at a glance.');
-  const grid = list => `<div class="pv-grid">${list.map(previewTile).join('')}</div>`;
+  const grid = list => `<div class="pv-grid">${list.map(p => previewTile(p, isLocked(p))).join('')}</div>`;
   return `<p class="mut" style="margin:8px 0 0">${SEM.semesterName(SEM.getCurrent(db))}</p>${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="dash-top">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:52px;height:52px" alt="">` : `<span class="avatar">${initial}</span>`}<div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}${u.username ? ` &middot; @${esc(u.username)}` : ''}</p></div></div>
 <p style="margin:14px 0 0">${pill}${posPill} <span class="mut">&middot; member since ${esc(String(u.created_at).slice(0, 10))}</span></p></div>
 <h2 class="sec">${rows.length} upload${rows.length === 1 ? '' : 's'} for you</h2>
