@@ -693,7 +693,8 @@ function broadcastNews(newsId, exceptId) {
 }
 function announceUpload(page) {
   stampSemesters();
-  if (!SEM.visibleInSemester(SEM.parseCourseCode(page.title).semester, SEM.getCurrent(db))) return; // not this semester's material: no alert
+  const rowSem = page.slug ? db.prepare('SELECT semester FROM pages WHERE slug=?').get(page.slug) : null;
+  if (!SEM.visibleInSemester(rowSem && rowSem.semester != null ? rowSem.semester : SEM.parseCourseCode(page.title).semester, SEM.getCurrent(db))) return; // not this semester's material: no alert
   const ids = audienceFor(page);
   const where = [deptListOf(page).join(', '), page.level ? page.level + ' level' : ''].filter(Boolean).join(' · ');
   notify(ids, { title: page.paid ? 'New CBT (pay to view)' : 'New upload', body: `${page.title}${where ? ' — ' + where : ''}`, url: '/p/' + page.slug, tag: 'upload' });
@@ -721,6 +722,16 @@ if (!db.prepare('SELECT 1 FROM institutions LIMIT 1').get()) { const insI = db.p
 const OTHER_UNI = 'Other (type it in below)';
 const institutionList = () => db.prepare('SELECT name FROM institutions ORDER BY name').all().map(r => r.name);
 // A course code's first digit is the level: GST 121 / ENT 121 = 100 level, PHY 2xx = 200 level ... up to 6xx.
+// Semester choice on upload forms: "auto" reads it from the course code in the title (GST 121 = second semester); 1 or 2 is set by hand.
+function semesterField(selected) {
+  const cur = SEM.semesterName(SEM.getCurrent(db)), sel = Number(selected);
+  return `<label class="mut">Semester</label><select name="semester"><option value="auto">Detect from the course code (it is ${esc(cur)} now)</option><option value="1"${sel === 1 ? ' selected' : ''}>First semester</option><option value="2"${sel === 2 ? ' selected' : ''}>Second semester</option></select>`;
+}
+function applySemester(where, choice) { // where: {slug} or {id}
+  const col = where.slug != null ? 'slug' : 'id', val = where.slug != null ? where.slug : where.id, c = String(choice || 'auto');
+  if (c === '1' || c === '2') db.prepare(`UPDATE pages SET semester=? WHERE ${col}=?`).run(Number(c), val);
+  else { db.prepare(`UPDATE pages SET semester=NULL WHERE ${col}=?`).run(val); stampSemesters(); }
+}
 function levelFromText(text) {
   const m = /\b[A-Za-z]{2,5}[\s_-]?([1-6])\d{2}\b/.exec(String(text || ''));
   return m ? Number(m[1]) * 100 : null;
@@ -3731,6 +3742,7 @@ app.get('/lecturer', (req, res) => {
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
+${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField');function sync(){var v=k.value==='video';lv.style.display=v?'':'none';fi.required=!v;fi.accept=v?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
   const pagesList = myPages.map(p => {
@@ -3768,6 +3780,7 @@ app.post('/lecturer/upload', upload.single('file'), (req, res) => {
     db.prepare('INSERT INTO pages(slug,title,html,kind,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?)')
       .run(slug, title || base, req.file.buffer.toString('utf8'), kind, aud.dept, aud.level, req.user.id, courseId);
   }
+  applySemester({ slug }, req.body.semester);
   announceUpload({ title: title || base, slug, paid: 0, ...aud });
   res.redirect('/lecturer?msg=' + encodeURIComponent(`Published at /p/${slug}`));
 });
@@ -3783,6 +3796,7 @@ app.get('/lecturer/pages/:id/edit', (req, res) => {
 ${p.kind === 'video' ? '<label class="mut">Or use a YouTube link instead</label><input name="video_url" placeholder="https://youtube.com/watch?v=...">' : ''}
 <label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>
+${semesterField(p.semester)}
 <button>Save changes</button></form>`, req.user));
 });
 app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
@@ -3802,7 +3816,7 @@ app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
   } else {
     db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
   }
-  db.prepare('UPDATE pages SET semester=NULL WHERE id=?').run(p.id); stampSemesters();
+  applySemester({ id: p.id }, req.body.semester);
   res.redirect('/lecturer?msg=' + encodeURIComponent('Saved.'));
 });
 app.post('/lecturer/pages/:id/delete', (req, res) => {
@@ -4799,6 +4813,7 @@ ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeh
 <details><summary>Which departments? (leave all unchecked for every department)</summary>${departmentCheckboxes([])}</details>
 <select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
+${semesterField('')}
 <button>Upload</button></form>
 ${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';fi.required=!isVideo;fi.accept=isVideo?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
 <script>if('launchQueue' in window){window.launchQueue.setConsumer(function(lp){if(!lp.files||!lp.files.length)return;lp.files[0].getFile().then(function(file){var dt=new DataTransfer();dt.items.add(file);var fi=document.querySelector('#fileField input[type=file]');fi.files=dt.files;var n=file.name.toLowerCase();var ks=document.getElementById('kindSelect');ks.value=n.indexOf('.pdf')>-1?'pdf':(n.indexOf('.doc')>-1?'doc':'html');ks.dispatchEvent(new Event('change'));document.getElementById('upload').scrollIntoView({behavior:'smooth'})})})}</script>` : ''}
@@ -4871,6 +4886,7 @@ app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
       .run(slug, title || 'Video', '', membersOnly, 'video', paid, PRICE_KOBO, vid, aud.dept, aud.level, req.user.id);
     else db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(slug, title || req.file.originalname.replace(/\.[a-z0-9]+$/i, ''), '', membersOnly, 'video', paid, PRICE_KOBO, req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id);
+    applySemester({ slug }, req.body.semester);
     announceUpload({ title: title || 'Video', slug, paid, ...aud });
     return res.redirect(back(`Published at /p/${slug}`));
   }
@@ -4884,6 +4900,7 @@ app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
     db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
       .run(slug, title || base, req.file.buffer.toString('utf8'), membersOnly, kind, paid, PRICE_KOBO, aud.dept, aud.level, req.user.id);
   }
+  applySemester({ slug }, req.body.semester);
   announceUpload({ title: title || base, slug, paid, ...aud });
   res.redirect(back(`Published at /p/${slug}`));
 });
@@ -4894,7 +4911,7 @@ app.get('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
   if (!ownsAdminPage(req.user, p)) return res.redirect(back(NOT_YOURS));
   res.send(layout('Who is this for?', `<p class="mut"><a href="/admin?tab=pages">&larr; Admin</a></p><h1 style="font-size:26px">${esc(p.title)}</h1>
 <form class="card" method="post" action="/admin/pages/${p.id}/sort"><label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
-<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select><button>Save</button></form>`, req.user));
+<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>${semesterField(p.semester)}<button>Save</button></form>`, req.user));
 });
 app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
   const p = db.prepare('SELECT id, author_id, admin_id FROM pages WHERE id=?').get(req.params.id);
@@ -4903,6 +4920,7 @@ app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {
   if (!ownsAdminPage(req.user, p)) return res.redirect(back(NOT_YOURS));
   const aud = readAudience({ dept: req.body.dept, level: req.body.level === '' ? 'all' : req.body.level }, '');
   db.prepare('UPDATE pages SET dept=?, level=? WHERE id=?').run(aud.dept, aud.level, p.id);
+  if (req.body.semester) applySemester({ id: p.id }, req.body.semester);
   res.redirect(back('Saved who this upload is for.'));
 });
 // Positions and departments (full admin).
@@ -5427,7 +5445,7 @@ app.post('/admin/structure/course/:id/merge', central, (req, res) => {
 
 app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Something went wrong</h2><p class="mut">${esc(err.message)} (uploads are limited to 20 MB)</p>`, req.user)));
 
-const uni = registerUniversityAdmin(app, { videoMimeOf, db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
+const uni = registerUniversityAdmin(app, { applySemester, semesterField, videoMimeOf, db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.
