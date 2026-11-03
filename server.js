@@ -1582,7 +1582,7 @@ function deviceCss(css) {
   const forced = phoneBlock ? prefixRules(phoneBlock.inner, IS_PHONE) : '';
   const tabletBlock = cssBlocks(css, '@media (min-width:768px) and (max-width:1023px){')[0];
   return out + '\n/* phones keep the phone view at any width */\n' + forced
-    + `\n#rotateMsg{display:none}\n@media (orientation:landscape){${IS_PHONE}:not([data-nolock]) #rotateMsg{display:flex;position:fixed;inset:0;z-index:2147483000;background:#12121c;color:#eaf2ff;align-items:center;justify-content:center;text-align:center;padding:24px;font:600 18px system-ui,sans-serif;flex-direction:column;gap:12px}${IS_PHONE}:not([data-nolock]) #rotateMsg div{font-size:56px}}\n`;
+    + '\n';
 }
 const CSS_FINAL = deviceCss(CSS);
 
@@ -1722,9 +1722,7 @@ var mob=/Mobi|iPhone|iPod/.test(ua)||(ud&&ud.mobile===true);
 if(os==="iOS")dev="phone";else if(os==="iPadOS")dev="tablet";else if(os==="Android")dev=(mob||sm<600)?"phone":"tablet";else if(tp>0&&sm<600)dev="phone";else if(tp>0&&sm<1100&&os==="Linux")dev="tablet";else dev="laptop";
 d.setAttribute("data-dev",dev);d.setAttribute("data-os",os);if(/^\\/call/.test(location.pathname))d.setAttribute("data-nolock","1");
 try{if(window.top===window.self){var ck=";path=/;max-age=31536000;SameSite=Lax";document.cookie="dev="+dev+ck;document.cookie="os="+os+ck;document.cookie="wide="+(innerWidth>=1024?1:0)+ck}}catch(e){}
-if(dev==="phone"){try{var o=screen.orientation;if(o&&o.lock)o.lock("portrait").catch(function(){})}catch(e){}}
 if(window.top!==window.self)d.className+=" embed"})()</script><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS_FINAL}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
-<div id="rotateMsg" role="alert"><div>&#128241;</div>Please hold your phone upright.<span style="font-weight:400;font-size:15px;opacity:.8">Studies Hub works in portrait on phones.</span></div>
 <div id="scrim" class="scrim"></div>${tabbar}
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
