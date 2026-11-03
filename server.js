@@ -654,7 +654,7 @@ app.use((req, res, next) => {
 // with the page itself inside the big area, so the list and menu stay in place.
 app.use((req, res, next) => {
   if (req.method !== 'GET' || !req.user || req.query.embed) return next();
-  if (String(req.headers['sec-fetch-dest'] || '') !== 'document' || !/(^|;\s*)wide=1/.test(String(req.headers.cookie || ''))) return next();
+  if (String(req.headers['sec-fetch-dest'] || '') !== 'document' || !isWideScreen(req)) return next();
   if (!/^\/(p|news|chat|settings|admin|lecturer|uni)\/./.test(req.path) || /\/raw$|\.(csv|pdf|zip|png|jpe?g|gif|webp|mp4)$|\/(export|download|avatar|logout)/.test(req.path)) return next();
   const url = req.originalUrl + (req.originalUrl.includes('?') ? '&' : '?') + 'embed=1';
   const pm = /^\/p\/([^/]+)$/.exec(req.path), pg = pm && db.prepare('SELECT title FROM pages WHERE slug=?').get(pm[1]);
@@ -1560,6 +1560,32 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 @media (pointer:coarse){button,.btn,select,.chip,.tabbar a{min-height:44px}input:not([type=checkbox]):not([type=radio]),select{min-height:44px}}
 @media (min-width:768px) and (max-width:1023px){.wrap,.container{max-width:760px;margin-left:auto;margin-right:auto}.grid{grid-template-columns:repeat(2,1fr)}}
 `;
+// Each device gets its own view. The laptop rules only apply when the device is NOT a phone (even if the phone is turned sideways
+// or set to "desktop site"), and the phone rules are forced on for phones at any width.
+const NOT_PHONE = 'html:not([data-dev="phone"])', IS_PHONE = 'html[data-dev="phone"]';
+function cssBlocks(css, head) {
+  const out = []; let i = 0;
+  while ((i = css.indexOf(head, i)) >= 0) {
+    const open = css.indexOf('{', i); let depth = 1, k = open + 1;
+    while (depth && k < css.length) { const c = css[k++]; if (c === '{') depth++; else if (c === '}') depth--; }
+    out.push({ start: i, end: k, inner: css.slice(open + 1, k - 1) }); i = k;
+  }
+  return out;
+}
+function prefixRules(inner, pre) {
+  return inner.replace(/(^|\})\s*([^{}@][^{}]*)\{/g, (m, a, sel) => a + sel.split(',').map(x => { x = x.trim(); return x === ':root' || x === 'html' ? pre : pre + ' ' + x; }).join(',') + '{');
+}
+function deviceCss(css) {
+  let out = css;
+  for (const b of cssBlocks(css, '@media (min-width:1024px){').reverse()) out = out.slice(0, b.start) + '@media (min-width:1024px){' + prefixRules(b.inner, NOT_PHONE) + '}' + out.slice(b.end);
+  const phoneBlock = cssBlocks(css, '@media (max-width:1023px){')[0];
+  const forced = phoneBlock ? prefixRules(phoneBlock.inner, IS_PHONE) : '';
+  const tabletBlock = cssBlocks(css, '@media (min-width:768px) and (max-width:1023px){')[0];
+  return out + '\n/* phones keep the phone view at any width */\n' + forced
+    + `\n#rotateMsg{display:none}\n@media (orientation:landscape){${IS_PHONE}:not([data-nolock]) #rotateMsg{display:flex;position:fixed;inset:0;z-index:2147483000;background:#12121c;color:#eaf2ff;align-items:center;justify-content:center;text-align:center;padding:24px;font:600 18px system-ui,sans-serif;flex-direction:column;gap:12px}${IS_PHONE}:not([data-nolock]) #rotateMsg div{font-size:56px}}\n`;
+}
+const CSS_FINAL = deviceCss(CSS);
+
 
 const canLecturerAdmin = u => !!u && (isCentral(u) || (!!u.lp_inst && u.uni_role !== 'full'));
 const navItems = (user, badge = 0, mode = '') => user ? (user.role === 'uniadmin' && mode !== 'lecturer-admin' ? [
@@ -1690,7 +1716,15 @@ function show(el){hide();tip=document.createElement('div');tip.className='tabtip
 document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>try{document.cookie="wide="+(innerWidth>=1024?1:0)+";path=/;max-age=31536000;SameSite=Lax"}catch(e){}if(window.top!==window.self)document.documentElement.className+=" embed"</script><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>(function(){var d=document.documentElement,ua=navigator.userAgent||"",ud=navigator.userAgentData,tp=navigator.maxTouchPoints||0,sm=Math.min(screen.width,screen.height),os="Unknown",dev;
+if(/iPhone|iPod/.test(ua))os="iOS";else if(/iPad/.test(ua)||(/Macintosh/.test(ua)&&tp>1))os="iPadOS";else if(/Android/.test(ua)||(ud&&ud.platform==="Android"))os="Android";else if(/CrOS/.test(ua))os="ChromeOS";else if(/Windows/.test(ua))os="Windows";else if(/Mac OS X|Macintosh/.test(ua))os="macOS";else if(/Linux|X11/.test(ua))os="Linux";
+var mob=/Mobi|iPhone|iPod/.test(ua)||(ud&&ud.mobile===true);
+if(os==="iOS")dev="phone";else if(os==="iPadOS")dev="tablet";else if(os==="Android")dev=(mob||sm<600)?"phone":"tablet";else if(tp>0&&sm<600)dev="phone";else if(tp>0&&sm<1100&&os==="Linux")dev="tablet";else dev="laptop";
+d.setAttribute("data-dev",dev);d.setAttribute("data-os",os);if(/^\\/call/.test(location.pathname))d.setAttribute("data-nolock","1");
+try{if(window.top===window.self){var ck=";path=/;max-age=31536000;SameSite=Lax";document.cookie="dev="+dev+ck;document.cookie="os="+os+ck;document.cookie="wide="+(innerWidth>=1024?1:0)+ck}}catch(e){}
+if(dev==="phone"){try{var o=screen.orientation;if(o&&o.lock)o.lock("portrait").catch(function(){})}catch(e){}}
+if(window.top!==window.self)d.className+=" embed"})()</script><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS_FINAL}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
+<div id="rotateMsg" role="alert"><div>&#128241;</div>Please hold your phone upright.<span style="font-weight:400;font-size:15px;opacity:.8">Studies Hub works in portrait on phones.</span></div>
 <div id="scrim" class="scrim"></div>${tabbar}
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
@@ -1702,7 +1736,7 @@ ${drawerNav}
 <div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
 ${user && !opts.hideTop ? '<aside id="pane" class="pane"><div class="pane-head" id="paneHead"></div><div class="pane-body" id="paneBody"></div></aside>' : ''}<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}">${esc(topTitle(title))}</a><span style="width:40px"></span></header>
 <main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
-<script>(function(){if(innerWidth<1024||window.top!==window.self)return;
+<script>(function(){if(innerWidth<1024||window.top!==window.self||document.documentElement.getAttribute('data-dev')==='phone')return;
 document.querySelectorAll('.drawer-item').forEach(function(a){a.title=a.textContent.trim()});
 var pane=document.getElementById('pane'),main=document.querySelector('main');if(!pane||!main)return;
 var head=document.getElementById('paneHead'),pbody=document.getElementById('paneBody'),topEl=document.querySelector('header.top .brand'),cur=null,frame=null,lastLabel='';
@@ -4080,7 +4114,7 @@ app.get('/p/:slug', (req, res) => {
     if (p.members_only && !p.paid) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
     return res.send(layout(p.title, paywallBody(p, req), req.user));
   }
-  if (!req.query.embed && req.user && String(req.headers['sec-fetch-dest'] || '') === 'document' && isLaptop(req)) return res.send(layout(p.title, `<iframe class="reader" src="/p/${esc(p.slug)}?embed=1" title="${esc(p.title)}" allow="fullscreen"></iframe>`, req.user));
+  if (!req.query.embed && req.user && String(req.headers['sec-fetch-dest'] || '') === 'document' && isWideScreen(req)) return res.send(layout(p.title, `<iframe class="reader" src="/p/${esc(p.slug)}?embed=1" title="${esc(p.title)}" allow="fullscreen"></iframe>`, req.user));
   res.setHeader('Cache-Control', 'private, no-cache');
   if (p.kind === 'html' || p.kind === 'cbt') {
     // Uploaded pages run in a sealed box: they work normally but cannot reach this site's sign-in or act as the person viewing.
@@ -4436,7 +4470,19 @@ app.post('/lecturer/signup', async (req, res) => {
 const { qrSvg } = require('./qr');
 const isPhoneAgent = req => /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(String(req.headers['user-agent'] || ''));
 // A laptop = a computer browser, or any screen wide enough for the laptop layout (the page tells us its width in a cookie).
-const isLaptop = req => !isPhoneAgent(req) || /(^|;\s*)wide=1/.test(String(req.headers.cookie || ''));
+const cookieOf = (req, name) => { const m = new RegExp('(?:^|;\\s*)' + name + '=([^;]*)').exec(String(req.headers.cookie || '')); return m ? decodeURIComponent(m[1]) : ''; };
+// What kind of device is this? phone | tablet | laptop (the page also reports it in a cookie after its first load, which is how
+// an iPad that pretends to be a Mac, or a phone set to "desktop site", is recognised).
+function deviceOf(req) {
+  const ua = String(req.headers['user-agent'] || '');
+  if (/iPhone|iPod|Windows Phone/i.test(ua) || (/Android/i.test(ua) && /Mobile/i.test(ua))) return 'phone';
+  const c = cookieOf(req, 'dev');
+  if (c === 'phone' || c === 'tablet' || c === 'laptop') return c;
+  if (/iPad|Android/i.test(ua)) return 'tablet';
+  return 'laptop';
+}
+const isLaptop = req => deviceOf(req) === 'laptop';
+const isWideScreen = req => deviceOf(req) !== 'phone' && /(^|;\s*)wide=1/.test(String(req.headers.cookie || ''));
 const deviceLabel = req => {
   const ua = String(req.headers['user-agent'] || '');
   const os = /Windows/i.test(ua) ? 'Windows' : /Mac OS X|Macintosh/i.test(ua) ? 'Mac' : /CrOS/i.test(ua) ? 'Chromebook' : /Linux/i.test(ua) ? 'Linux' : 'Computer';
