@@ -1417,11 +1417,31 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 body.has-tabbar{padding-bottom:calc(66px + env(safe-area-inset-bottom,0px))}
 body.has-tabbar .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:35;background:rgba(14,14,24,.96);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
 :root[data-theme="light"] body.has-tabbar .tabbar{background:rgba(244,247,252,.96)}
-.tabbar a,.tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;margin:0;padding:6px 2px;border:0;background:none;box-shadow:none;border-radius:12px;color:var(--mut);font:600 11px/1.2 system-ui,sans-serif;position:relative;cursor:pointer;min-height:50px;justify-content:center}
+.ico{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.tabbar a,.tabbar button{flex:1;display:flex;align-items:center;justify-content:center;margin:0;padding:0;height:46px;border:0;background:none;box-shadow:none;border-radius:12px;color:var(--mut);position:relative;cursor:pointer;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.tabbar .ico{width:27px;height:27px}
 .tabbar a:hover,.tabbar button:hover{text-decoration:none;filter:none;color:var(--fg)}
-.tabbar .ti{font-size:22px;line-height:1}
-.tabbar a.on{color:var(--blue);background:rgba(56,176,248,.12)}
-.tabbar .nbadge{position:absolute;top:0;right:calc(50% - 26px);margin:0;min-width:18px;height:18px;line-height:18px;font-size:11px;padding:0 5px}
+.tabbar a.on{color:var(--blue)}.tabbar a.on .ico{stroke-width:2.4}
+.tabbar .nbadge{position:absolute;top:2px;left:calc(50% + 6px);right:auto;margin:0;min-width:18px;height:18px;line-height:18px;font-size:11px;padding:0 5px}
+.tabtip{position:fixed;z-index:70;background:rgba(17,24,39,.95);color:#fff;font:600 13px system-ui,sans-serif;padding:6px 12px;border-radius:99px;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+.drawer-item .ico{width:22px;height:22px}
+.drawer-item span{display:flex;align-items:center;justify-content:center;flex:none}
+.drawer-out{background:none!important;box-shadow:none!important;color:inherit}
+a.drawer-user{color:var(--fg)}a.drawer-user:hover{text-decoration:none}
+/* Phone: tapping Menu opens a full-screen menu page (profile first, Settings and Log out at the bottom) instead of a narrow slide-out. */
+@media (max-width:1023px){
+ .drawer{width:100vw;max-width:none;z-index:60;background:var(--bg);border-right:0}
+ .scrim,.scrim.show{display:none}
+ .drawer-arrows,.drawer-arrows.show{display:none!important}
+ .drawer-top{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:14px 16px}
+ .drawer-user{margin:14px 12px 6px;padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}
+ .drawer-label{display:none}
+ .drawer-item{margin:0 12px 2px;padding:16px;background:var(--panel);border-radius:14px;font-size:17px}
+ .drawer-item.active{background:rgba(56,176,248,.16);border-right:0;color:var(--blue)}
+ .drawer-item .ico{width:24px;height:24px}
+ .drawer-bottom{margin:16px 0 0;border-top:0;padding:0 0 12px}
+ .drawer-out{color:#ff8fa3}
+}
 body.has-tabbar .ai-fab{bottom:calc(76px + env(safe-area-inset-bottom,0px));margin-bottom:0}
 body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));margin-bottom:0}
 .chat-bar .ic{border-radius:12px}
@@ -1441,6 +1461,7 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  .drawer-user{margin:4px 14px 10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
  .drawer-label{padding:10px 22px 4px}
  .drawer-item{margin:2px 12px;padding:11px 14px;border-radius:12px}
+ .drawer-out{color:inherit}
  .drawer-item.active{border-right:0;background:rgba(56,176,248,.16)}
  .drawer-bottom{margin:auto 12px 0;padding:10px 0 14px}.drawer-bottom .drawer-item{margin:2px 0}
  main{max-width:1180px;padding:28px 44px 56px}
@@ -1489,6 +1510,50 @@ const navItems = (user, badge = 0, mode = '') => user ? (user.role === 'uniadmin
   { href: '/', icon: '🏠', label: 'Home' },
   { href: '/lecturer/portal', icon: '🎓', label: 'Lecturer portal' },
 ];
+// Plain outline icons (like Facebook / WhatsApp), used in the phone tab bar, the menu and the laptop sidebar.
+const ICON_PATHS = {
+  home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1V10"/>',
+  news: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/>',
+  chat: '<path d="M20 12a8 8 0 0 1-11.7 7.1L4 20l1-4A8 8 0 1 1 20 12z"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  admin: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/>',
+  uni: '<path d="M4 20V9l8-5 8 5v11"/><path d="M9 20v-6h6v6"/>',
+  cap: '<path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11.5V16c0 1.5 3 3 6 3s6-1.5 6-3v-4.5"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 5.5a3 3 0 0 1 0 5.8M18 14.5c2 .7 3 2.6 3 5.5"/>',
+  medal: '<circle cx="12" cy="9" r="5"/><path d="M9 14l-2 7 5-3 5 3-2-7"/>',
+  upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
+  help: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M5.5 5.5l4 4M14.5 14.5l4 4M18.5 5.5l-4 4M9.5 14.5l-4 4"/>',
+  chart: '<path d="M4 19V5M4 19h16"/><path d="M8 15l4-4 3 3 5-6"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1"/>',
+  logout: '<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4"/><path d="M16 8l4 4-4 4M20 12H9"/>',
+  login: '<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 8l-4 4 4 4M6 12h11"/>',
+  signup: '<circle cx="10" cy="8" r="3.5"/><path d="M3 20c0-3.5 3-6 7-6s7 2.5 7 6"/><path d="M19 8v6M16 11h6"/>',
+  back: '<path d="M15 5l-7 7 7 7"/>',
+  profile: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/>',
+  book: '<path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v16H5.5C4.7 20 4 19.3 4 18.5z"/><path d="M20 5.5c0-.8-.7-1.5-1.5-1.5H13v16h5.5c.8 0 1.5-.7 1.5-1.5z"/>',
+  dot: '<circle cx="12" cy="12" r="3"/>',
+};
+const ico = k => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[k] || ICON_PATHS.dot}</svg>`;
+const iconKey = i => {
+  const h = String(i.href || ''), l = String(i.label || '').toLowerCase();
+  if (l.startsWith('back')) return 'back';
+  if (h === '/dashboard' || h === '/') return 'home';
+  if (h.startsWith('/uni/news') || h.startsWith('/news')) return 'news';
+  if (h.startsWith('/chat')) return 'chat';
+  if (h.startsWith('/uni/uploads') || h.includes('tab=uploads')) return 'upload';
+  if (h.startsWith('/uni/support')) return 'help';
+  if (h.includes('tab=students')) return 'cap';
+  if (h.includes('tab=lecturers')) return 'people';
+  if (h.includes('tab=positions')) return 'medal';
+  if (h.includes('tab=levels')) return 'chart';
+  if (h.startsWith('/uni')) return 'uni';
+  if (h.startsWith('/lecturer/admin') || h.startsWith('/admin')) return 'admin';
+  if (h.startsWith('/lecturer/portal')) return 'cap';
+  if (h.startsWith('/lecturer')) return 'book';
+  if (h.startsWith('/settings/profile')) return 'profile';
+  if (h.startsWith('/settings')) return 'gear';
+  return 'dot';
+};
 const badgeText = n => n > 15 ? '15+' : String(n);
 const PUSH_CLIENT_JS = `(function(){
 if(!('serviceWorker' in navigator))return;
@@ -1528,20 +1593,24 @@ const layout = (title, body, user, opts = {}) => {
     ? (user.avatar_mime ? `<img src="/avatar/${user.id}" class="drawer-av-img" alt="">` : `<span class="avatar" style="width:40px;height:40px;font-size:15px">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)
     : '';
   const badge = user ? chatBadge(user.id) : 0;
-  const drawerNav = navItems(user, badge, opts.mode).map(i => `<a class="drawer-item" href="${i.href}"><span>${i.icon}</span>${esc(i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('');
+  const drawerNav = navItems(user, badge, opts.mode).map(i => `<a class="drawer-item" href="${i.href}"><span>${ico(iconKey(i))}</span>${esc(i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('');
   const drawerBottom = user
-    ? `<a class="drawer-item" href="/settings"><span>⚙️</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item" style="width:100%;text-align:left;background:none;color:inherit;box-shadow:none;font:inherit;border:0;cursor:pointer"><span>🚪</span>Log out</button></form>`
-    : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
+    ? `<a class="drawer-item" href="/settings"><span>${ico('gear')}</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item drawer-out" style="width:100%;text-align:left;font:inherit;border:0;cursor:pointer"><span>${ico('logout')}</span>Log out</button></form>`
+    : `<a class="drawer-item" href="/login"><span>${ico('login')}</span>Log in</a><a class="drawer-item" href="/signup"><span>${ico('signup')}</span>Sign up</a>`;
   // Phones get a bottom tab bar for the main places (laptops use the always-open menu on the left instead).
   const tabItems = user && !opts.hideTop ? navItems(user, badge, opts.mode).filter(i => !i.href.includes('?')).slice(0, 3) : [];
-  const tabbar = tabItems.length ? `<div class="tabbar" id="tabbar">${tabItems.map(i => `<a href="${i.href}" data-h="${i.href}"><span class="ti">${i.icon}</span>${esc(i.label.length > 12 ? i.label.split(' ')[0] : i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('')}<button type="button" id="tabMenu"><span class="ti">☰</span>Menu</button></div><script>(function(){var p=location.pathname,as=document.querySelectorAll('#tabbar a'),best=null;[].forEach.call(as,function(a){var h=a.getAttribute('data-h');if(p===h||(h.length>1&&p.indexOf(h+'/')===0))best=a});if(best)best.className='on';document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
+  const tabbar = tabItems.length ? `<div class="tabbar" id="tabbar">${tabItems.map(i => `<a href="${i.href}" data-h="${i.href}" aria-label="${esc(i.label)}" data-tip="${esc(i.label)}">${ico(iconKey(i))}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('')}<button type="button" id="tabMenu" aria-label="Menu" data-tip="Menu">${ico('menu')}</button></div><script>(function(){var p=location.pathname,bar=document.getElementById('tabbar'),as=bar.querySelectorAll('a'),best=null;[].forEach.call(as,function(a){var h=a.getAttribute('data-h');if(p===h||(h.length>1&&p.indexOf(h+'/')===0))best=a});if(best)best.className='on';
+var lp=false,t=null,tip=null;function hide(){if(tip){tip.remove();tip=null}}
+function show(el){hide();tip=document.createElement('div');tip.className='tabtip';tip.textContent=el.getAttribute('data-tip');document.body.appendChild(tip);var r=el.getBoundingClientRect();tip.style.left=Math.min(Math.max(8,r.left+r.width/2-tip.offsetWidth/2),innerWidth-tip.offsetWidth-8)+'px';tip.style.bottom=(innerHeight-r.top+8)+'px';setTimeout(hide,1400)}
+[].forEach.call(bar.children,function(el){el.addEventListener('pointerdown',function(){lp=false;clearTimeout(t);t=setTimeout(function(){lp=true;show(el)},420)});['pointerup','pointercancel','pointerleave'].forEach(function(n){el.addEventListener(n,function(){clearTimeout(t)})});el.addEventListener('contextmenu',function(e){e.preventDefault()});el.addEventListener('click',function(e){if(lp){e.preventDefault();e.stopPropagation();lp=false}},true)});
+document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
   return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
 <div id="scrim" class="scrim"></div>${tabbar}
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
-${user ? `<div class="drawer-user">${avatarBit}<div><b>${esc(user.name)}</b><br><span class="mut" style="font-size:12px">${esc(user.email)}</span></div></div>` : ''}
+${user ? `<a class="drawer-user" href="/settings/profile">${avatarBit}<div><b>${esc(user.name)}</b><br><span class="mut" style="font-size:12px">${esc(user.email)}</span></div></a>` : ''}
 <p class="drawer-label">MAIN MENU</p>
 ${drawerNav}
 <div class="drawer-bottom">${drawerBottom}</div>
