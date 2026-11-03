@@ -1410,6 +1410,55 @@ select{font:inherit;width:100%;padding:11px 13px;margin:6px 0;color:var(--fg);ba
 .react-pick{display:flex;gap:4px;margin-top:6px;background:rgba(0,0,0,.25);border-radius:99px;padding:4px 6px;width:fit-content}
 .react-pick button{background:none;box-shadow:none;padding:2px;margin:0;font-size:18px}
 .sender-name{font-size:12px;font-weight:700;color:var(--blue);margin-bottom:2px}
+
+/* ===== Phone and laptop are two different layouts ===== */
+/* Phone: a simple bottom tab bar for the main places, plus the slide-out menu. */
+.tabbar{display:none}
+body.has-tabbar{padding-bottom:calc(66px + env(safe-area-inset-bottom,0px))}
+body.has-tabbar .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:35;background:rgba(14,14,24,.96);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
+:root[data-theme="light"] body.has-tabbar .tabbar{background:rgba(244,247,252,.96)}
+.tabbar a,.tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;margin:0;padding:6px 2px;border:0;background:none;box-shadow:none;border-radius:12px;color:var(--mut);font:600 11px/1.2 system-ui,sans-serif;position:relative;cursor:pointer;min-height:50px;justify-content:center}
+.tabbar a:hover,.tabbar button:hover{text-decoration:none;filter:none;color:var(--fg)}
+.tabbar .ti{font-size:22px;line-height:1}
+.tabbar a.on{color:var(--blue);background:rgba(56,176,248,.12)}
+.tabbar .nbadge{position:absolute;top:0;right:calc(50% - 26px);margin:0;min-width:18px;height:18px;line-height:18px;font-size:11px;padding:0 5px}
+body.has-tabbar .ai-fab{bottom:calc(76px + env(safe-area-inset-bottom,0px));margin-bottom:0}
+body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));margin-bottom:0}
+.chat-bar .ic{border-radius:12px}
+@media (max-width:520px){.chat-bar{gap:5px;padding-left:8px;padding-right:8px}.chat-bar .ic{min-width:42px;min-height:46px;padding:8px 6px;font-size:21px}.chat-bar>button:not(.ic){padding:10px 14px}.chat-bar textarea,.chat-bar input{min-width:0}}
+/* Laptop (wide screens, or a phone set to "desktop site"): the menu is always open down the left, the content gets room to breathe. */
+@media (min-width:1024px){
+ :root{--side:268px}
+ body{padding-left:var(--side);font-size:17px}
+ body.has-tabbar{padding-bottom:0}.tabbar,body.has-tabbar .tabbar{display:none}
+ body.has-tabbar .ai-fab{bottom:16px}body.has-tabbar .ai-box{bottom:72px}
+ .top{display:none}
+ .scrim,.scrim.show{display:none}
+ .menu-btn,#drawerClose,.drawer-arrows,.drawer-arrows.show{display:none!important}
+ .drawer{transform:none;width:var(--side);z-index:35;background:rgba(10,10,20,.97);padding-right:0}
+ .drawer-top{padding:22px 22px 14px;font-size:19px}
+ .drawer-top .logo-img{width:34px;height:34px;border-radius:9px}
+ .drawer-user{margin:4px 14px 10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+ .drawer-label{padding:10px 22px 4px}
+ .drawer-item{margin:2px 12px;padding:11px 14px;border-radius:12px}
+ .drawer-item.active{border-right:0;background:rgba(56,176,248,.16)}
+ .drawer-bottom{margin:auto 12px 0;padding:10px 0 14px}.drawer-bottom .drawer-item{margin:2px 0}
+ main{max-width:1180px;padding:28px 44px 56px}
+ .site-foot{padding-left:44px;padding-right:44px}
+ h1{font-size:clamp(30px,3vw,42px)}
+ .card{padding:22px;border-radius:18px}
+ .grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+ .tile{padding:22px}
+ .dash-hero{padding:34px 34px;border-radius:24px}
+ .dash-top{gap:20px}
+ .hero{padding:64px 0 36px}.hero h1{font-size:clamp(40px,4.4vw,60px)}.lead{max-width:680px;font-size:20px}
+ .auth{max-width:460px;margin:48px auto}
+ .chat-bar,.chat-panel{left:var(--side);right:0;max-width:1100px}
+ .ai-fab{right:28px;bottom:24px}.ai-box{right:28px}
+ .to-btm{right:28px}
+ .sheet{left:var(--side)}
+ table{font-size:15px}td,th{padding:10px 8px}
+}
 `;
 
 const canLecturerAdmin = u => !!u && (isCentral(u) || (!!u.lp_inst && u.uni_role !== 'full'));
@@ -1483,10 +1532,13 @@ const layout = (title, body, user, opts = {}) => {
   const drawerBottom = user
     ? `<a class="drawer-item" href="/settings"><span>⚙️</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item" style="width:100%;text-align:left;background:none;color:inherit;box-shadow:none;font:inherit;border:0;cursor:pointer"><span>🚪</span>Log out</button></form>`
     : `<a class="drawer-item" href="/login"><span>🔑</span>Log in</a><a class="drawer-item" href="/signup"><span>✨</span>Sign up</a>`;
+  // Phones get a bottom tab bar for the main places (laptops use the always-open menu on the left instead).
+  const tabItems = user && !opts.hideTop ? navItems(user, badge, opts.mode).filter(i => !i.href.includes('?')).slice(0, 3) : [];
+  const tabbar = tabItems.length ? `<div class="tabbar" id="tabbar">${tabItems.map(i => `<a href="${i.href}" data-h="${i.href}"><span class="ti">${i.icon}</span>${esc(i.label.length > 12 ? i.label.split(' ')[0] : i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('')}<button type="button" id="tabMenu"><span class="ti">☰</span>Menu</button></div><script>(function(){var p=location.pathname,as=document.querySelectorAll('#tabbar a'),best=null;[].forEach.call(as,function(a){var h=a.getAttribute('data-h');if(p===h||(h.length>1&&p.indexOf(h+'/')===0))best=a});if(best)best.className='on';document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${opts.footer ? ' class="has-footer"' : ''}>
-<div id="scrim" class="scrim"></div>
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
+<div id="scrim" class="scrim"></div>${tabbar}
 <nav id="drawer" class="drawer">
 <div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
 ${user ? `<div class="drawer-user">${avatarBit}<div><b>${esc(user.name)}</b><br><span class="mut" style="font-size:12px">${esc(user.email)}</span></div></div>` : ''}

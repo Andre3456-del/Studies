@@ -316,3 +316,12 @@ Some departments have parts under them (for example Education: Mathematics, Engl
 - Like the department, the course is fixed once chosen. Students who signed up before a breakdown was added can pick theirs from their profile.
 - It shows beside the department on the dashboard and on profiles. Uploads are still sorted by department and level.
 - Removing a course keeps it for students who already chose it; removing a department removes its courses.
+
+## Phone view and laptop view
+
+The site now has two different layouts, chosen by screen width (so a phone set to "desktop site" gets the laptop layout):
+
+- **Phone (under 1024 px wide):** a simple bottom tab bar with the main places (for students: Dashboard, News, Chat) and a Menu button that slides out the full menu. Chat pages keep their own header and message bar, with no tab bar.
+- **Laptop (1024 px and wider):** the menu is always open down the left as a sidebar (logo, your name, the links, Settings and Log out), the top bar and tab bar are gone, and the content area is wider with roomier cards and more columns. The chat message bar sits beside the sidebar instead of under it.
+
+Also fixed: the chat message box was squeezed on narrow phones after the bigger buttons; it now has room to type.
