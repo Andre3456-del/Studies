@@ -1435,6 +1435,8 @@ a.drawer-user{color:var(--fg)}a.drawer-user:hover{text-decoration:none}
  .drawer-arrows,.drawer-arrows.show{display:none!important}
  .drawer-top{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:14px 16px}
  .drawer-user{margin:14px 12px 6px;padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}
+ body.has-tabbar .menu-btn,body.has-tabbar .top>span{display:none}
+ body.has-tabbar .top{justify-content:center}
  .drawer-label{display:none}
  .drawer-item{margin:0 12px 2px;padding:16px;background:var(--panel);border-radius:14px;font-size:17px}
  .drawer-item.active{background:rgba(56,176,248,.16);border-right:0;color:var(--blue)}
