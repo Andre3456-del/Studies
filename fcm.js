@@ -28,6 +28,23 @@ function register(db) {
   const seen = new Map(); // token -> user id, so we only write when something changed
   return {
     configured: () => !!account(),
+    count: userId => db.prepare(userId ? 'SELECT COUNT(*) n FROM fcm_tokens WHERE user_id=?' : 'SELECT COUNT(*) n FROM fcm_tokens').get(...(userId ? [userId] : [])).n,
+    // For the admin check page: can we sign in to Google with the key?
+    async check() {
+      const a = account(); if (!a) return { configured: false };
+      try { await accessToken(a); return { configured: true, ok: true, project: a.project_id }; } catch (e) { return { configured: true, ok: false, error: e.message, project: a.project_id }; }
+    },
+    // Sends one real test notification to every phone this person has registered and returns what Google answered.
+    async test(userId) {
+      const a = account(); if (!a) return [{ error: 'The Railway variable FIREBASE_SERVICE_ACCOUNT is not set (or is not valid).' }];
+      const rows = db.prepare('SELECT token FROM fcm_tokens WHERE user_id=?').all(userId);
+      if (!rows.length) return [{ error: 'No phone is registered for your account yet. Open the Android app while logged in, then try again.' }];
+      const tk = await accessToken(a);
+      return Promise.all(rows.map(async ({ token }) => {
+        const r = await fetch(`https://fcm.googleapis.com/v1/projects/${a.project_id}/messages:send`, { method: 'POST', headers: { Authorization: 'Bearer ' + tk, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { token, data: { type: 'note', title: 'Studies Hub test', body: 'If you can see this, notifications work.', url: '/', tag: 'test' }, android: { priority: 'HIGH', ttl: '60s' } } }) });
+        return { phone: token.slice(0, 8) + '...', status: r.status, answer: (await r.text()).slice(0, 300) };
+      }));
+    },
     // Remember which phone belongs to which signed-in person.
     remember(token, userId) {
       if (!/^[\w:.\-]{20,400}$/.test(token || '') || seen.get(token) === userId) return;
