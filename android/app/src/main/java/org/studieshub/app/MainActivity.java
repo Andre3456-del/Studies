@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.webkit.GeolocationPermissions;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.ConnectivityManager;
@@ -32,12 +34,14 @@ import java.util.List;
 /** Studies Hub: the website inside its own full-screen app window (no browser bar). */
 public class MainActivity extends Activity {
     private static final String HOME = "https://studieshub.org/";
-    private static final int REQ_FILE = 11, REQ_PERM = 12;
+    private static final int REQ_FILE = 11, REQ_PERM = 12, REQ_GEO = 14, REQ_FIRST = 13;
 
     private WebView web;
     private View splash;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingWebPerm;
+    private GeolocationPermissions.Callback geoCb;
+    private String geoOrigin;
 
     private static boolean ours(Uri u) {
         String h = u.getHost();
@@ -105,6 +109,14 @@ public class MainActivity extends Activity {
                 }
                 return true;
             }
+            @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback cb) {
+                if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                    cb.invoke(origin, true, false);
+                } else {
+                    geoCb = cb; geoOrigin = origin;
+                    requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_GEO);
+                }
+            }
             @Override public void onPermissionRequest(final PermissionRequest req) {
                 runOnUiThread(() -> askForWebPermission(req));
             }
@@ -123,9 +135,17 @@ public class MainActivity extends Activity {
             }
         });
 
-        if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 13);
+        // First time the app opens: ask the PHONE (not the website) for the permissions the app uses.
+        SharedPreferences sp = getSharedPreferences("studieshub", MODE_PRIVATE);
+        if (!sp.getBoolean("asked", false)) {
+            sp.edit().putBoolean("asked", true).apply();
+            List<String> want = new ArrayList<>();
+            want.add(Manifest.permission.CAMERA);
+            want.add(Manifest.permission.RECORD_AUDIO);
+            want.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            want.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+            if (Build.VERSION.SDK_INT >= 33) want.add(Manifest.permission.POST_NOTIFICATIONS);
+            requestPermissions(want.toArray(new String[0]), REQ_FIRST);
         }
 
         String start = HOME;
@@ -149,6 +169,13 @@ public class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
         super.onRequestPermissionsResult(code, perms, res);
+        if (code == REQ_GEO && geoCb != null) {
+            boolean ok = false;
+            for (int r : res) if (r == PackageManager.PERMISSION_GRANTED) ok = true;
+            geoCb.invoke(geoOrigin, ok, false);
+            geoCb = null;
+            return;
+        }
         if (code == REQ_PERM && pendingWebPerm != null) {
             boolean ok = res.length > 0;
             for (int r : res) if (r != PackageManager.PERMISSION_GRANTED) ok = false;

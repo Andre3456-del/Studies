@@ -1858,6 +1858,7 @@ ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><sc
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
 ${user ? `<script>${SEARCHSEL_JS}</script>` : ''}
 ${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
+<script>(function(){try{var ua=navigator.userAgent||'';if(!/Android/i.test(ua)||/StudiesHubApp/.test(ua)||window.top!==window.self)return;if(matchMedia('(display-mode: standalone)').matches)return;if(location.pathname==='/app')return;if(sessionStorage.getItem('appAsk'))return;sessionStorage.setItem('appAsk','1');var t=+localStorage.getItem('appAskAt')||0;if(Date.now()-t<3600000)return;if(Math.random()>.7)return;setTimeout(function(){var b=document.createElement('div');b.setAttribute('role','dialog');b.setAttribute('aria-label','Download the app');b.style.cssText='position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:18px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;gap:12px;align-items:center;font:15px system-ui,sans-serif';b.innerHTML='<img src="/icon-192.png" alt="" width="44" height="44" style="border-radius:11px"><div style="flex:1"><b>Download the Studies Hub app</b><div style="opacity:.7;font-size:13px">Opens full screen, like a real app.</div></div><a href="/app" style="background:#6c63ff;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:600">Get</a><button type="button" aria-label="Close" style="background:none;border:0;color:inherit;font-size:24px;line-height:1;padding:4px 6px;cursor:pointer">&times;</button>';b.querySelector('button').onclick=function(){b.remove();try{localStorage.setItem('appAskAt',Date.now())}catch(e){}};document.body.appendChild(b)},3500)}catch(e){}})()</script>
 </body></html>`;
 };
 
@@ -3964,7 +3965,9 @@ const SETTINGS_PAGES = [
   ['/settings/appearance', '🎨', 'Appearance', 'Light or dark mode'],
   ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
   ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
+  ['/app', '📲', 'Download the app', 'Get Studies Hub as a real Android app'],
 ];
+const wantsApp = req => /Android/i.test(req.headers['user-agent'] || '') && !/StudiesHubApp/.test(req.headers['user-agent'] || '');
 // The tools a university admin gave this person (or that a full admin has by default).
 const UNI_TOOLS = { news: ['/uni/news', '📰', 'University news', 'Post news to everyone in '], uploads: ['/uni/uploads', '📤', 'University uploads', 'Upload files and videos for everyone in '], support: ['/uni/support', '🛟', 'Login help', 'Help students who cannot sign in at '] };
 const uniToolRows = u => {
@@ -3975,7 +3978,7 @@ const uniToolRows = u => {
 };
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.filter(x => x[0] !== '/settings/devices' || canLinkOthers(req)).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
