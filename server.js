@@ -1860,6 +1860,7 @@ document.addEventListener('contextmenu',function(e){var a=pageLink(e.target);if(
 ` : ''}
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
+<script>(function(){if(!window.StudiesApp)return;function fail(m){var b=document.querySelector('a.gbtn');if(b)b.style.opacity='';if(m)alert(m)}window.studiesGoogleFail=fail;window.studiesGoogle=function(t,l){fetch('/auth/google/app',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:t,lecturer:!!l})}).then(function(r){return r.json()}).then(function(j){if(j.ok)location.href=j.url||'/';else fail(j.error)}).catch(function(){fail('No connection. Please try again.')})};document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a.gbtn');if(!a)return;e.preventDefault();a.style.opacity='.6';StudiesApp.google(/as=lecturer/.test(a.getAttribute('href')||''))},true)})()</script>
 ${user ? `<script>${SEARCHSEL_JS}</script>` : ''}
 ${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
 <script>(function(){try{var ua=navigator.userAgent||'';if(!/Android/i.test(ua)||/StudiesHubApp/.test(ua)||window.top!==window.self)return;if(matchMedia('(display-mode: standalone)').matches)return;if(location.pathname==='/app')return;if(sessionStorage.getItem('appAsk'))return;sessionStorage.setItem('appAsk','1');var t=+localStorage.getItem('appAskAt')||0;if(Date.now()-t<3600000)return;if(Math.random()>.7)return;setTimeout(function(){var b=document.createElement('div');b.setAttribute('role','dialog');b.setAttribute('aria-label','Download the app');b.style.cssText='position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:18px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;gap:12px;align-items:center;font:15px system-ui,sans-serif';b.innerHTML='<img src="/icon-192.png" alt="" width="44" height="44" style="border-radius:11px"><div style="flex:1"><b>Download the Studies Hub app</b><div style="opacity:.7;font-size:13px">Opens full screen, like a real app.</div></div><a href="/app" style="background:#6c63ff;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:600">Get</a><button type="button" aria-label="Close" style="background:none;border:0;color:inherit;font-size:24px;line-height:1;padding:4px 6px;cursor:pointer">&times;</button>';b.querySelector('button').onclick=function(){b.remove();try{localStorage.setItem('appAskAt',Date.now())}catch(e){}};document.body.appendChild(b)},3500)}catch(e){}})()</script>
@@ -4719,6 +4720,38 @@ app.get('/auth/google/callback', async (req, res) => {
   } catch (e) {
     console.error('Google sign-in failed:', e.message);
     res.status(400).send(notice('Google sign-in failed', 'Please try again, or use your email and password.', '<p><a class="btn" href="/login">Back to log in</a></p>'));
+  }
+});
+
+// Android app: the phone's own Google account picker gives the app an ID token; we check it with Google and sign the person in.
+const APP_GOOGLE_IDS = (() => {
+  const ids = [process.env.GOOGLE_APP_CLIENT_ID, process.env.GOOGLE_CLIENT_ID].filter(Boolean);
+  try { const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'android', 'app', 'google-services.json'), 'utf8')); for (const c of j.client || []) for (const o of c.oauth_client || []) if (o.client_type === 3 && o.client_id) ids.push(o.client_id); } catch (e) { /* file missing: fine */ }
+  return [...new Set(ids)];
+})();
+app.post('/auth/google/app', async (req, res) => {
+  try {
+    if (!/StudiesHubApp/.test(req.headers['user-agent'] || '') || !APP_GOOGLE_IDS.length) throw new Error('not the app / not set up');
+    if (limited('gapp:' + (req.ip || ''), 20, 10 * 60 * 1000)) throw new Error('too many tries');
+    const idToken = String((req.body && req.body.idToken) || '');
+    if (idToken.length < 100 || idToken.length > 4000) throw new Error('bad token');
+    const gr = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken));
+    const g = await gr.json();
+    if (!gr.ok || !APP_GOOGLE_IDS.includes(g.aud) || !/^(https:\/\/)?accounts\.google\.com$/.test(g.iss || '') || String(g.email_verified) !== 'true' || !g.email) throw new Error('Google did not accept the token');
+    const email = String(g.email).toLowerCase(), rnd = () => bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 10);
+    let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+    if (!u) {
+      const id = insertUser('name,email,hash,verified,is_lecturer', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, req.body.lecturer ? 1 : 0]);
+      u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+    } else if (!u.verified) {
+      db.prepare('UPDATE users SET verified=1, hash=? WHERE id=?').run(rnd(), u.id);
+      db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
+    }
+    startSession(res, u.id);
+    res.json({ ok: true, url: req.body.lecturer ? '/lecturer' : '/' });
+  } catch (e) {
+    console.error('App Google sign-in failed:', e.message);
+    res.status(400).json({ error: 'Google sign-in failed. Please try again, or use your email and password.' });
   }
 });
 

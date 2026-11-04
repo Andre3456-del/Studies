@@ -28,6 +28,21 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
+import android.os.CancellationSignal;
+import android.os.Handler;
+import android.os.Looper;
+import android.webkit.JavascriptInterface;
+import androidx.credentials.Credential;
+import androidx.credentials.CredentialManager;
+import androidx.credentials.CredentialManagerCallback;
+import androidx.credentials.CustomCredential;
+import androidx.credentials.GetCredentialRequest;
+import androidx.credentials.GetCredentialResponse;
+import androidx.credentials.exceptions.GetCredentialException;
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption;
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -76,6 +91,10 @@ public class MainActivity extends Activity {
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, true);
+
+        web.addJavascriptInterface(new Object() {
+            @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
+        }, "StudiesApp");
 
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
@@ -184,6 +203,35 @@ public class MainActivity extends Activity {
         super.onNewIntent(in);
         setIntent(in);
         web.loadUrl(fromIntent(in, HOME));
+    }
+
+    private void googleFail(String msg) {
+        web.evaluateJavascript("window.studiesGoogleFail&&studiesGoogleFail(" + JSONObject.quote(msg == null ? "" : msg) + ")", null);
+    }
+
+    /** "Continue with Google": the phone's own account picker, no browser page. */
+    private void startGoogle(final boolean lecturer) {
+        int rid = getResources().getIdentifier("default_web_client_id", "string", getPackageName());
+        if (rid == 0) { googleFail("Google sign-in is not set up in this app yet."); return; }
+        GetGoogleIdOption opt = new GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false).setAutoSelectEnabled(false).setServerClientId(getString(rid)).build();
+        GetCredentialRequest req = new GetCredentialRequest.Builder().addCredentialOption(opt).build();
+        final Handler h = new Handler(Looper.getMainLooper());
+        CredentialManager.create(this).getCredentialAsync(this, req, new CancellationSignal(), r -> h.post(r),
+            new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
+                @Override public void onResult(GetCredentialResponse res) {
+                    try {
+                        Credential cr = res.getCredential();
+                        if (cr instanceof CustomCredential && cr.getType().equals(GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)) {
+                            String t = GoogleIdTokenCredential.createFrom(((CustomCredential) cr).getData()).getIdToken();
+                            web.evaluateJavascript("window.studiesGoogle&&studiesGoogle(" + JSONObject.quote(t) + "," + lecturer + ")", null);
+                            return;
+                        }
+                    } catch (Exception e) { }
+                    googleFail("Could not read the Google account.");
+                }
+                @Override public void onError(GetCredentialException e) { googleFail(null); }
+            });
     }
 
     private void askForWebPermission(PermissionRequest req) {
