@@ -830,7 +830,7 @@ const profileComplete = u => u.role === 'uniadmin' ? !!u.username && !!u.name : 
 let adminTab = '';
 const TAB_OF = p => /^\/admin\/(payments|sponsors)/.test(p) ? 'payments' : /^\/admin\/(upload|pages)/.test(p) ? 'pages' : /^\/admin\/lecturers/.test(p) ? 'lecturers' : /^\/(admin\/positions|positions|admin\/departments)/.test(p) ? 'positions' : /^\/admin\/news/.test(p) ? 'news' : /^\/admin\/users/.test(p) ? 'users' : '';
 app.use((req, res, next) => { adminTab = TAB_OF(req.path); next(); });
-const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/app', '/StudiesHub.apk', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
   next();
@@ -915,6 +915,25 @@ button{background:#5bc8ff;color:#04101f;border:none;border-radius:10px;padding:1
 <p>This page needs a connection. Reconnect and try again -- anything you already opened recently may still work.</p>
 <button onclick="location.reload()">Try again</button></div></body></html>`;
 app.get('/offline.html', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(OFFLINE_HTML); });
+
+// Android app download: served from our own site so the phone's download finishes cleanly.
+const APK_URL = 'https://github.com/Andre3456-del/Studies/releases/download/app-latest/StudiesHub.apk';
+let apkCache = { buf: null, at: 0 };
+app.get('/StudiesHub.apk', async (req, res) => {
+  try {
+    if (!apkCache.buf || Date.now() - apkCache.at > 10 * 60 * 1000) {
+      const r = await fetch(APK_URL, { redirect: 'follow' });
+      if (!r.ok) throw new Error('apk ' + r.status);
+      apkCache = { buf: Buffer.from(await r.arrayBuffer()), at: Date.now() };
+    }
+    res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': 'attachment; filename="StudiesHub.apk"', 'Content-Length': apkCache.buf.length, 'Cache-Control': 'no-cache' });
+    res.end(apkCache.buf);
+  } catch (e) { res.status(502).send('The app file is not ready yet. Please try again in a minute.'); }
+});
+app.get('/app', (req, res) => {
+  const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
+  res.send(layout('Get the app', body, req.user));
+});
 const UPLOAD_QUEUED_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Saved - Studies Hub</title>
 <style>body{margin:0;background:#04101f;color:#eaf2ff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}
