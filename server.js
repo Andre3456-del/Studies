@@ -655,7 +655,8 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (req.method !== 'GET' || !req.user || req.query.embed) return next();
   if (String(req.headers['sec-fetch-dest'] || '') !== 'document' || !isWideScreen(req)) return next();
-  if (!/^\/(p|news|chat|settings|admin|lecturer|uni)\/./.test(req.path) || /\/raw$|\.(csv|pdf|zip|png|jpe?g|gif|webp|mp4)$|\/(export|download|avatar|logout)/.test(req.path)) return next();
+  const tabbed = /^\/(admin|lecturer|uni)$/.test(req.path) && (req.query.tab || req.query.share), newsShare = req.path === '/news' && req.query.share;
+  if (!(tabbed || newsShare) && !/^\/(p|news|chat|settings|admin|lecturer|uni)\/./.test(req.path) || /\/raw$|\.(csv|pdf|zip|png|jpe?g|gif|webp|mp4)$|\/(export|download|avatar|logout)/.test(req.path)) return next();
   const url = req.originalUrl + (req.originalUrl.includes('?') ? '&' : '?') + 'embed=1';
   const pm = /^\/p\/([^/]+)$/.exec(req.path), pg = pm && db.prepare('SELECT title FROM pages WHERE slug=?').get(pm[1]);
   res.send(layout(pg ? pg.title : 'Studies Hub', `<iframe class="reader" src="${esc(url)}" title="Page"></iframe>`, req.user));
@@ -1546,6 +1547,10 @@ html[data-pv="list"] .pv-body{padding:0;min-width:0}
  .pane-empty-ic{font-size:54px;opacity:.5}
  body.pane-index .site-foot{display:none}
  .dash-hero,.vtoggle{display:none!important}
+ .pane-body .nl{display:block;padding:13px 14px;border-bottom:1px solid var(--line);color:var(--fg);font-weight:600;font-size:15px;line-height:1.35;border-radius:0}
+ .pane-body .nl:hover{background:rgba(56,176,248,.08);text-decoration:none}
+ .pane-body .nl-share{color:var(--blue)}
+ .pane-body a.nl.cur{background:rgba(56,176,248,.16)}
  body.pane-index main>*:not(.pane-empty):not(#pushBar){display:none!important}
 }
 @media (min-width:1024px){
@@ -1749,7 +1754,8 @@ var head=document.getElementById('paneHead'),pbody=document.getElementById('pane
 var S=[[/^\\/(dashboard)?$|^\\/p\\//,'/dashboard','Studies Hub','Pick a course or file from the list.'],[/^\\/news/,'/news','News','Pick a post to read it here.'],[/^\\/chat/,'/chat','Chats','Select a chat to start messaging.'],[/^\\/settings/,'/settings','Settings','Choose a setting.'],[/^\\/admin/,'/admin','Admin','Choose a section.'],[/^\\/lecturer/,'/lecturer','Lecturer portal','Choose a section.'],[/^\\/uni/,'/uni','University','Choose a section.']];
 function norm(p){return p.replace(/\\/+$/,'')||'/'}
 function secOf(p){for(var i=0;i<S.length;i++)if(S[i][0].test(p))return S[i];return null}
-function isIdx(sec,p){return p===sec[1]||(sec[1]==='/dashboard'&&p==='/')}
+function isIdx(sec,p,q){return (p===sec[1]||(sec[1]==='/dashboard'&&p==='/'))&&!/[?&]tab=|[?&]share=/.test(q||'')}
+function simplify(sec){if(sec[1]!=='/news')return;var cs=[].slice.call(pbody.querySelectorAll('a.news-card')),h='<a class="nl nl-share" href="/news?share=1">+ Share something</a>';cs.forEach(function(a){var t=a.querySelector('h3');h+='<a class="nl" href="'+a.getAttribute('href')+'">'+(t?t.innerHTML:'News')+'</a>'});if(!cs.length)h+='<p class="mut" style="padding:8px 14px">No news yet.</p>';pbody.innerHTML=h}
 function tt(t){t=(t||'').replace(/\\s*[|\\-\\u2013\\u2014]\\s*Studies Hub\\s*$/i,'').trim();return(!t||/^(dashboard|home|welcome|studies hub)$/i.test(t))?'Studies Hub':t}
 function setTitle(t){if(topEl)topEl.textContent=tt(t);if(t)document.title=t}
 function runScripts(root){root.querySelectorAll('script').forEach(function(o){var s=document.createElement('script');s.text=o.text;o.replaceWith(s)})}
@@ -1757,18 +1763,18 @@ function mark(){var P=norm(location.pathname);pbody.querySelectorAll('a.cur').fo
 function rail(sec){document.querySelectorAll('.drawer-item[href]').forEach(function(a){var h=a.getAttribute('href');a.classList.toggle('active',h===sec[1]||h===norm(location.pathname))})}
 function loadPane(sec,done){if(cur===sec){if(done)done();return}cur=sec;head.textContent=sec[2];document.body.classList.add('has-pane');pbody.innerHTML='';
 fetch(sec[1],{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){if(cur!==sec)return;var d=new DOMParser().parseFromString(h,'text/html'),m=d.querySelector('main');if(!m)return;var pb=m.querySelector('#pushBar');if(pb)pb.remove();
-[].slice.call(m.childNodes).forEach(function(n){pbody.appendChild(document.importNode(n,true))});runScripts(pbody);mark();if(done)done()}).catch(function(){})}
+[].slice.call(m.childNodes).forEach(function(n){pbody.appendChild(document.importNode(n,true))});runScripts(pbody);simplify(sec);mark();if(done)done()}).catch(function(){})}
 function clearMain(){[].slice.call(main.children).forEach(function(n){if(n.id!=='pushBar')n.remove()})}
 function showEmpty(sec){frame=null;clearMain();var e=document.createElement('div');e.className='pane-empty';e.innerHTML='<div class="pane-empty-ic">&#9776;</div><p>'+sec[3]+'</p>';main.appendChild(e);document.body.classList.add('pane-index');setTitle(sec[2])}
 function onFrame(){try{var w=frame.contentWindow;if(!w||w.location.href==='about:blank')return;var p=norm(w.location.pathname),q=w.location.search.replace(/([?&])embed=1&?/,'$1').replace(/[?&]$/,''),sec=secOf(p);
 var wt=w.document.title;if(wt)setTitle(wt);else if(lastLabel)setTitle(lastLabel);if(!sec)return;
-if(isIdx(sec,p)){go(p+q);return}
+if(isIdx(sec,p,q)){go(p+q);return}
 var url=p+q;if(url!==location.pathname+location.search)history.pushState({},'',url);
 if(cur!==sec)loadPane(sec,mark);else mark();rail(sec)}catch(e){}}
 function showFrame(src){if(!frame){clearMain();frame=document.createElement('iframe');frame.className='reader';frame.addEventListener('load',onFrame);main.appendChild(frame)}document.body.classList.remove('pane-index');if(frame.getAttribute('src')!==src)frame.src=src}
 function go(href,push,label){lastLabel=label||'';var u=new URL(href,location.href),p=norm(u.pathname),sec=secOf(p);if(!sec){location.href=href;return}
 loadPane(sec,mark);
-if(isIdx(sec,p)){showEmpty(sec)}else{showFrame(p+u.search+(u.search?'&':'?')+'embed=1')}
+if(isIdx(sec,p,u.search)){showEmpty(sec)}else{showFrame(p+u.search+(u.search?'&':'?')+'embed=1')}
 if(push!==false&&(p+u.search)!==(location.pathname+location.search))history.pushState({},'',p+u.search);rail(sec);mark()}
 document.addEventListener('click',function(e){if(e.defaultPrevented||e.button||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;var a=e.target.closest&&e.target.closest('a[href]');if(!a||(!a.closest('#pane')&&!a.closest('.drawer')))return;
 var h=a.getAttribute('href')||'';if(!h||h.charAt(0)==='#'||(a.target&&a.target!=='_self')||a.hasAttribute('download'))return;var u=new URL(a.href,location.href);if(u.origin!==location.origin)return;
@@ -1778,7 +1784,7 @@ window.addEventListener('popstate',function(){go(location.href,false)});
 var P0=norm(location.pathname),sec0=secOf(P0);if(!sec0)return;
 cur=sec0;head.textContent=sec0[2];document.body.classList.add('has-pane');
 var fr0=main.querySelector('iframe.reader');
-if(isIdx(sec0,P0)){var keep=main.querySelector('#pushBar');[].slice.call(main.childNodes).forEach(function(n){if(n!==keep)pbody.appendChild(n)});showEmpty(sec0);mark()}
+if(isIdx(sec0,P0,location.search)){var keep=main.querySelector('#pushBar');[].slice.call(main.childNodes).forEach(function(n){if(n!==keep)pbody.appendChild(n)});simplify(sec0);showEmpty(sec0);mark()}
 else{if(fr0){frame=fr0;frame.addEventListener('load',onFrame);document.body.classList.remove('pane-index')}
  cur=null;loadPane(sec0,mark)}
 rail(sec0)})()</script>
