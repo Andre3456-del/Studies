@@ -331,15 +331,31 @@ public class MainActivity extends Activity {
             });
     }
 
-    private void askForWebPermission(PermissionRequest req) {
-        List<String> need = new ArrayList<>();
+    private boolean has(String p) { return checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED; }
+
+    /** The parts of a website's request that the phone has already allowed (microphone, camera). */
+    private String[] allowedParts(PermissionRequest req) {
+        List<String> ok = new ArrayList<>();
         for (String r : req.getResources()) {
-            if (r.equals(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) need.add(Manifest.permission.CAMERA);
-            if (r.equals(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) need.add(Manifest.permission.RECORD_AUDIO);
+            if (r.equals(PermissionRequest.RESOURCE_AUDIO_CAPTURE) && has(Manifest.permission.RECORD_AUDIO)) ok.add(r);
+            else if (r.equals(PermissionRequest.RESOURCE_VIDEO_CAPTURE) && has(Manifest.permission.CAMERA)) ok.add(r);
         }
+        return ok.toArray(new String[0]);
+    }
+
+    private void answerWebPermission(PermissionRequest req) {
+        String[] ok = allowedParts(req);
+        try { if (ok.length > 0) req.grant(ok); else req.deny(); } catch (Throwable t) { /* request already answered */ }
+    }
+
+    private void askForWebPermission(PermissionRequest req) {
         List<String> missing = new ArrayList<>();
-        for (String p : need) if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) missing.add(p);
-        if (missing.isEmpty()) { req.grant(req.getResources()); return; }
+        for (String r : req.getResources()) {
+            if (r.equals(PermissionRequest.RESOURCE_VIDEO_CAPTURE) && !has(Manifest.permission.CAMERA)) missing.add(Manifest.permission.CAMERA);
+            if (r.equals(PermissionRequest.RESOURCE_AUDIO_CAPTURE) && !has(Manifest.permission.RECORD_AUDIO)) missing.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (missing.isEmpty()) { answerWebPermission(req); return; }
+        if (pendingWebPerm != null) answerWebPermission(pendingWebPerm);
         pendingWebPerm = req;
         skipLock = true;
         requestPermissions(missing.toArray(new String[0]), REQ_PERM);
@@ -361,9 +377,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (code == REQ_PERM && pendingWebPerm != null) {
-            boolean ok = res.length > 0;
-            for (int r : res) if (r != PackageManager.PERMISSION_GRANTED) ok = false;
-            if (ok) pendingWebPerm.grant(pendingWebPerm.getResources()); else pendingWebPerm.deny();
+            answerWebPermission(pendingWebPerm);
             pendingWebPerm = null;
         }
     }
