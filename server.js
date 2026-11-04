@@ -3980,6 +3980,8 @@ app.get('/api/username/check', (req, res) => {
   res.json({ ok: !p, message: p || 'That username is available.' });
 });
 
+// Only on the website (a phone or tablet browser). Never inside the Android app, and not on laptops.
+const wantsApp = req => !/StudiesHubApp/.test(req.headers['user-agent'] || '') && deviceOf(req) !== 'laptop';
 const SETTINGS_PAGES = [
   ['/settings/profile', '👤', 'Profile', 'Your picture, name, and details'],
   ['/settings/active-status', '🟢', 'Active status', 'Whether others see when you\u2019re online'],
@@ -3987,6 +3989,7 @@ const SETTINGS_PAGES = [
   ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
   ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
   ['/settings/security', '🔒', 'Security', 'App lock and change your password'],
+  ['/app', '📲', 'Download the app', 'Get Studies Hub as an Android app'],
 ];
 // The tools a university admin gave this person (or that a full admin has by default).
 const UNI_TOOLS = { news: ['/uni/news', '📰', 'University news', 'Post news to everyone in '], uploads: ['/uni/uploads', '📤', 'University uploads', 'Upload files and videos for everyone in '], support: ['/uni/support', '🛟', 'Login help', 'Help students who cannot sign in at '] };
@@ -3998,7 +4001,7 @@ const uniToolRows = u => {
 };
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
