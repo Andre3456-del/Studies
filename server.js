@@ -1852,7 +1852,7 @@ ${login ? '' : '<input name="name" placeholder="Your name" required maxlength="8
 <input name="password" type="password" placeholder="Password${login ? '' : ' (8+ characters)'}" required>
 <button>${login ? 'Log in' : 'Create account'}</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google">Continue with Google</a>' : ''}
-${login ? '<p class="mut"><a href="/forgot">Forgot password?</a></p>' : ''}
+${login ? `<a class="btn ghost" style="display:block;text-align:center;margin:8px 0" href="/login?qr=1${next ? '&next=' + encodeURIComponent(next) : ''}">Log in with a QR code</a><p class="mut"><a href="/forgot">Forgot password?</a></p>` : ''}
 <p class="mut">${login ? 'New here? <a href="/signup">Create an account</a>' : 'Already registered? <a href="/login">Log in</a>'}</p></div>`, null, { footer: true });
 };
 
@@ -3956,7 +3956,7 @@ const uniToolRows = u => {
 };
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.filter(x => !isLaptop(req) || x[0] !== '/settings/devices').concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.filter(x => x[0] !== '/settings/devices' || canLinkOthers(req)).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -4485,10 +4485,13 @@ const isLaptop = req => deviceOf(req) === 'laptop';
 const isWideScreen = req => deviceOf(req) !== 'phone' && /(^|;\s*)wide=1/.test(String(req.headers.cookie || ''));
 const deviceLabel = req => {
   const ua = String(req.headers['user-agent'] || '');
-  const os = /Windows/i.test(ua) ? 'Windows' : /Mac OS X|Macintosh/i.test(ua) ? 'Mac' : /CrOS/i.test(ua) ? 'Chromebook' : /Linux/i.test(ua) ? 'Linux' : 'Computer';
+  const os = /iPhone|iPod/i.test(ua) ? 'iPhone' : /iPad/i.test(ua) ? 'iPad' : /Android/i.test(ua) ? 'Android' : /Windows/i.test(ua) ? 'Windows' : /Mac OS X|Macintosh/i.test(ua) ? 'Mac' : /CrOS/i.test(ua) ? 'Chromebook' : /Linux/i.test(ua) ? 'Linux' : 'Computer';
   const br = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
   return `${os} · ${br}`;
 };
+// A device that was logged in by scanning a code is a "linked" device: it cannot see or use Linked devices (only the main phone can).
+const isLinkedSession = req => !!req.sid && !!db.prepare('SELECT 1 FROM linked_devices WHERE sid=?').get(sidKey(req.sid));
+const canLinkOthers = req => !isLaptop(req) && !isLinkedSession(req);
 const LINK_TTL = 5 * 60 * 1000;
 // A code made on the Lecturer Portal can only be approved by a lecturer / school-staff account; a student code only by a non-lecturer account.
 const linkKindOf = next => /^\/(lecturer|uni)/.test(String(next || '')) ? 'lecturer' : 'student';
@@ -4506,7 +4509,7 @@ function linkPage(req, next, note) {
 ${note ? `<p class="err">${esc(note)}</p>` : ''}
 <div style="display:inline-block;background:#fff;padding:6px;border-radius:14px;max-width:100%"><div id="qrBox" style="width:min(300px,80vw)">${svg.replace(/width="\d+" height="\d+"/, 'width="100%" height="auto"')}</div></div>
 <p id="linkMsg" class="mut" style="margin:10px 0 0">Waiting for your phone&hellip;</p>
-<ol style="text-align:left;line-height:1.7;margin:14px auto 6px;max-width:340px;padding-left:20px"><li>Open Studies Hub on your phone.</li><li>Go to <b>Settings &rarr; Linked devices</b>.</li><li>Tap <b>Link a device</b> and point the phone at this code.</li></ol>
+<ol style="text-align:left;line-height:1.7;margin:14px auto 6px;max-width:340px;padding-left:20px"><li>Open Studies Hub on your ${isLaptop(req) ? 'phone' : 'main phone (already logged in)'}.</li><li>Go to <b>Settings &rarr; Linked devices</b>.</li><li>Tap <b>Link a device</b> and point the phone at this code.</li></ol>${isLaptop(req) ? '' : '<p style="margin:10px 0 0"><a href="/login">Use email and password instead</a></p>'}
 </div>
 <script>(function(){var t=${JSON.stringify(token)},next=${JSON.stringify(next || '/dashboard')},m=document.getElementById('linkMsg'),stop=false;
 function tick(){if(stop)return;fetch('/link/status/'+t,{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
@@ -4528,6 +4531,7 @@ app.get('/link/status/:token', (req, res) => {
 });
 app.get('/link/:token', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl || req.url));
+  if (!canLinkOthers(req)) return res.status(403).send(notice('Not from this device', 'This device was linked by a code, so it cannot link other devices. Use your main phone.', '<p><a href="/">Home</a></p>'));
   const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(sha(String(req.params.token)));
   if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
   const kindNow = row.kind === 'lecturer' ? 'lecturer' : 'student';
@@ -4537,6 +4541,7 @@ app.get('/link/:token', (req, res) => {
 });
 app.post('/link/:token', (req, res) => {
   if (!req.user) return res.sendStatus(401);
+  if (!canLinkOthers(req)) return res.sendStatus(403);
   const h = sha(String(req.params.token));
   const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(h);
   if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
@@ -4546,14 +4551,14 @@ app.post('/link/:token', (req, res) => {
 });
 app.get('/settings/devices', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/devices');
-  if (isLaptop(req)) return res.redirect('/settings');
+  if (!canLinkOthers(req)) return res.redirect('/settings');
   db.prepare('DELETE FROM linked_devices WHERE sid NOT IN (SELECT id FROM sessions WHERE expires>?)').run(Date.now());
   const list = db.prepare('SELECT * FROM linked_devices WHERE user_id=? ORDER BY created DESC').all(req.user.id);
-  const rows = list.length ? list.map(d => `<div class="card row" style="align-items:center;justify-content:space-between;gap:12px"><div><b>${esc(d.label)}</b><br><span class="mut" style="font-size:13px">Linked ${esc(new Date(d.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))}</span></div><form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="${esc(d.sid)}"><button class="ghost">Log out</button></form></div>`).join('') : '<p class="mut">No laptops are linked yet.</p>';
+  const rows = list.length ? list.map(d => `<div class="card row" style="align-items:center;justify-content:space-between;gap:12px"><div><b>${esc(d.label)}</b><br><span class="mut" style="font-size:13px">Linked ${esc(new Date(d.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))}</span></div><form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="${esc(d.sid)}"><button class="ghost">Log out</button></form></div>`).join('') : '<p class="mut">No devices are linked yet.</p>';
   res.send(layout('Linked devices', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Linked devices</h1>
-<div class="card"><p style="margin-top:0">To use Studies Hub on a laptop, open it there and scan the code it shows.</p><button id="scanBtn" type="button">Link a device</button>
+<div class="card"><p style="margin-top:0">To use Studies Hub on a laptop, phone or tablet: open it there, choose <b>Log in with a QR code</b>, then scan the code it shows.</p><button id="scanBtn" type="button">Link a device</button>
 <div id="scanBox" hidden style="margin-top:12px"><video id="scanVid" playsinline muted style="width:100%;max-width:360px;border-radius:12px;background:#000"></video><p id="scanMsg" class="mut"></p></div></div>
-<h2 style="font-size:18px">Logged-in laptops</h2>${rows}${list.length > 1 ? '<form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="all"><button class="ghost">Log out of all laptops</button></form>' : ''}
+<h2 style="font-size:18px">Linked devices</h2>${rows}${list.length > 1 ? '<form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="all"><button class="ghost">Log out of all linked devices</button></form>' : ''}
 <script>(function(){var b=document.getElementById('scanBtn'),box=document.getElementById('scanBox'),v=document.getElementById('scanVid'),m=document.getElementById('scanMsg'),stream=null,go=false;
 function end(){go=false;if(stream)stream.getTracks().forEach(function(t){t.stop()})}
 b.onclick=function(){box.hidden=false;
@@ -4566,6 +4571,7 @@ window.addEventListener('pagehide',end)})()</script>`, req.user));
 });
 app.post('/settings/devices/remove', (req, res) => {
   if (!req.user) return res.sendStatus(401);
+  if (!canLinkOthers(req)) return res.sendStatus(403);
   const sid = String(req.body.sid || '');
   const mine = sid === 'all' ? db.prepare('SELECT sid FROM linked_devices WHERE user_id=?').all(req.user.id).map(r => r.sid) : db.prepare('SELECT sid FROM linked_devices WHERE user_id=? AND sid=?').all(req.user.id, sid).map(r => r.sid);
   for (const k of mine) { db.prepare('DELETE FROM sessions WHERE id=? AND user_id=?').run(k, req.user.id); db.prepare('DELETE FROM linked_devices WHERE sid=?').run(k); }
@@ -4574,7 +4580,7 @@ app.post('/settings/devices/remove', (req, res) => {
 
 app.get('/login', (req, res) => {
   const next = safeNext(req.query.next);
-  if (isLaptop(req) && !req.query.admin) return res.send(linkPage(req, next));
+  if ((isLaptop(req) && !req.query.admin) || req.query.qr) return res.send(linkPage(req, next));
   res.send(authForm('login', '', next));
 });
 app.post('/login', (req, res) => {

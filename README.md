@@ -331,3 +331,6 @@ A laptop cannot log in with a password. It shows a QR code (made by `qr.js`, no 
 
 ## Page names at the top
 Like WhatsApp, the top bar shows the page's own name (News, Settings, Chat…) and "Studies Hub" on the dashboard — text only, no logo.
+
+## Linking a phone or tablet too
+On a phone or tablet the log-in page also has **Log in with a QR code**. The device shows a code and your main phone scans it (Settings → Linked devices → Link a device). A device that was linked this way does not see Linked devices and cannot link others; only the main phone can, and it can log any linked device out.
