@@ -63,6 +63,9 @@ public class MainActivity extends Activity {
     private View overlay;
     private Runnable pendingOk, pendingFail;
     private static final int REQ_LOCK = 16;
+    private long lastUpdateCheck;
+    private int dismissedVersion;
+    private boolean updateAsked;
     private GeolocationPermissions.Callback geoCb;
     private String geoOrigin;
 
@@ -215,6 +218,7 @@ public class MainActivity extends Activity {
         }
 
         CallService.channels(this);
+        checkUpdate();
         com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken()
             .addOnSuccessListener(t -> CallService.rememberToken(this, t));
         String saved = sp.getString("fcm", null);
@@ -355,7 +359,10 @@ public class MainActivity extends Activity {
 
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
     @Override protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); web.onPause(); }
-    @Override protected void onResume() { super.onResume(); web.onResume(); skipLock = false; }
+    @Override protected void onResume() {
+        super.onResume(); web.onResume(); skipLock = false;
+        if (System.currentTimeMillis() - lastUpdateCheck > 3600000L) checkUpdate();
+    }
 
     @Override protected void onStop() {
         super.onStop();
@@ -371,6 +378,76 @@ public class MainActivity extends Activity {
             locked = true; overlay.setVisibility(View.VISIBLE);
         }
         if (lockOn && locked && !authing) unlockNow();
+    }
+
+    /** Asks the site if a newer app is ready; if so, offers to download and install it right here. */
+    private void checkUpdate() {
+        lastUpdateCheck = System.currentTimeMillis();
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://studieshub.org/app/version").openConnection();
+                h.setConnectTimeout(8000); h.setReadTimeout(8000);
+                java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(h.getInputStream()));
+                StringBuilder sb = new StringBuilder(); String ln;
+                while ((ln = br.readLine()) != null) sb.append(ln);
+                final int latest = new JSONObject(sb.toString()).getInt("versionCode");
+                final int mine = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+                if (latest > mine && latest != dismissedVersion && !updateAsked) {
+                    updateAsked = true;
+                    runOnUiThread(() -> askUpdate(latest));
+                }
+            } catch (Exception e) { }
+        }).start();
+    }
+
+    private void askUpdate(final int latest) {
+        new android.app.AlertDialog.Builder(this).setTitle("Update ready")
+            .setMessage("A new version of Studies Hub is ready. Update now? It takes a few seconds.")
+            .setPositiveButton("Update now", (d, w) -> { updateAsked = false; startUpdate(); })
+            .setNegativeButton("Later", (d, w) -> { dismissedVersion = latest; updateAsked = false; })
+            .setOnCancelListener(d -> { dismissedVersion = latest; updateAsked = false; }).show();
+    }
+
+    private void startUpdate() {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            new android.app.AlertDialog.Builder(this).setMessage("To update, allow Studies Hub to install updates. Turn on the switch on the next screen, then come back.")
+                .setPositiveButton("OK", (d, w) -> {
+                    skipLock = true;
+                    try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); } catch (Exception e) { }
+                }).show();
+            return;
+        }
+        try {
+            final java.io.File dir = getExternalFilesDir("updates");
+            final java.io.File f = new java.io.File(dir, "StudiesHub.apk");
+            if (f.exists()) f.delete();
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse("https://studieshub.org/StudiesHub.apk"));
+            r.setTitle("Studies Hub update");
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            r.setDestinationInExternalFilesDir(this, "updates", "StudiesHub.apk");
+            final long id = dm.enqueue(r);
+            android.widget.Toast.makeText(this, "Downloading the update...", android.widget.Toast.LENGTH_LONG).show();
+            android.content.BroadcastReceiver rc = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(android.content.Context c2, Intent i) {
+                    if (i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) != id) return;
+                    try { unregisterReceiver(this); } catch (Exception e) { }
+                    try {
+                        Uri u = androidx.core.content.FileProvider.getUriForFile(MainActivity.this, "org.studieshub.app.fileprovider", f);
+                        Intent in = new Intent(Intent.ACTION_VIEW).setDataAndType(u, "application/vnd.android.package-archive")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        skipLock = true;
+                        startActivity(in);
+                    } catch (Exception e) {
+                        android.widget.Toast.makeText(MainActivity.this, "The update could not be opened. Try again later.", android.widget.Toast.LENGTH_LONG).show();
+                    }
+                }
+            };
+            android.content.IntentFilter flt = new android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(rc, flt, RECEIVER_EXPORTED); else registerReceiver(rc, flt);
+        } catch (Exception e) {
+            android.widget.Toast.makeText(this, "The update could not start. Try again later.", android.widget.Toast.LENGTH_LONG).show();
+        }
     }
 
     private View buildOverlay() {

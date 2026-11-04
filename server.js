@@ -834,7 +834,7 @@ const profileComplete = u => u.role === 'uniadmin' ? !!u.username && !!u.name : 
 let adminTab = '';
 const TAB_OF = p => /^\/admin\/(payments|sponsors)/.test(p) ? 'payments' : /^\/admin\/(upload|pages)/.test(p) ? 'pages' : /^\/admin\/lecturers/.test(p) ? 'lecturers' : /^\/(admin\/positions|positions|admin\/departments)/.test(p) ? 'positions' : /^\/admin\/news/.test(p) ? 'news' : /^\/admin\/users/.test(p) ? 'users' : '';
 app.use((req, res, next) => { adminTab = TAB_OF(req.path); next(); });
-const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/app', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/app', '/app/version', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
   next();
@@ -936,6 +936,18 @@ app.get('/StudiesHub.apk', async (req, res) => {
     res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': 'attachment; filename="StudiesHub.apk"', 'Content-Length': apkCache.buf.length, 'Cache-Control': 'no-cache' });
     res.end(apkCache.buf);
   } catch (e) { res.status(502).send('The app file is not ready yet. Please try again in a minute.'); }
+});
+// The installed Android app asks this on start: "is there a newer version?" (the build number is written in the release notes).
+let appVer = { n: 0, at: 0 };
+app.get('/app/version', async (req, res) => {
+  try {
+    if (Date.now() - appVer.at > 5 * 60 * 1000) {
+      const r = await fetch('https://api.github.com/repos/Andre3456-del/Studies/releases/tags/app-latest', { headers: { 'User-Agent': 'studieshub', Accept: 'application/vnd.github+json' } });
+      const j = r.ok ? await r.json() : null, m = j && /versionCode:\s*(\d+)/.exec(j.body || '');
+      appVer = { n: m ? Number(m[1]) : appVer.n, at: Date.now() };
+    }
+  } catch (e) { /* keep the last known number */ }
+  res.set('Cache-Control', 'no-store').json({ versionCode: appVer.n, url: '/StudiesHub.apk' });
 });
 app.get('/app', (req, res) => {
   const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a id="dlApp" class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><script>(function(){var a=document.getElementById('dlApp');try{navigator.getInstalledRelatedApps&&navigator.getInstalledRelatedApps().then(function(r){if(r&&r.length&&a){a.textContent='Open the app';a.removeAttribute('download');a.href='intent://studieshub.org/#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/StudiesHub.apk')+';end'}}).catch(function(){})}catch(e){}})()</script><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
