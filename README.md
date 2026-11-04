@@ -334,3 +334,11 @@ Like WhatsApp, the top bar shows the page's own name (News, Settings, Chat…) a
 
 ## Linking a phone or tablet too
 On a phone or tablet the log-in page also has **Log in with a QR code**. The device shows a code and your main phone scans it (Settings → Linked devices → Link a device). A device that was linked this way does not see Linked devices and cannot link others; only the main phone can, and it can log any linked device out.
+
+## Android app (APK)
+
+`android/` is a small native Android app that opens studieshub.org in its own full-screen window (no browser bar). Because it loads the live site, website updates show up in the app automatically; the app only needs rebuilding if `android/` changes.
+
+- GitHub builds it (`.github/workflows/android-apk.yml`) and publishes `StudiesHub.apk` at https://github.com/Andre3456-del/studies/releases/download/app-latest/StudiesHub.apk
+- Install on a phone: download the file, open it, allow "install unknown apps" when asked.
+- The signing key in `android/studieshub.keystore` is for direct installs only. Before any Play Store upload, make a private key and keep it out of the repo.
