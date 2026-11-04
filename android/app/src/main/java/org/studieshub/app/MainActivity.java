@@ -64,6 +64,8 @@ public class MainActivity extends Activity {
     private Runnable pendingOk, pendingFail;
     private static final int REQ_LOCK = 16;
     private long lastUpdateCheck;
+    private boolean inCall, frameBusy;
+    private static final int REQ_PROJ = 17;
     private int dismissedVersion;
     private boolean updateAsked;
     private GeolocationPermissions.Callback geoCb;
@@ -84,7 +86,13 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF12121C);
-        web = new WebView(this);
+        web = new WebView(this) {
+            @Override protected void onWindowVisibilityChanged(int v) {
+                // keep the call page alive while sharing the screen or on a call and using other apps
+                if (v != View.VISIBLE && (inCall || ScreenShareService.running)) super.onWindowVisibilityChanged(View.VISIBLE);
+                else super.onWindowVisibilityChanged(v);
+            }
+        };
         web.setBackgroundColor(0xFF12121C);
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
@@ -112,6 +120,18 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
             @JavascriptInterface public void notifications() { runOnUiThread(() -> startNotes()); }
+            @JavascriptInterface public void shareStart() {
+                runOnUiThread(() -> {
+                    try {
+                        skipLock = true;
+                        android.media.projection.MediaProjectionManager pm = (android.media.projection.MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                        startActivityForResult(pm.createScreenCaptureIntent(), REQ_PROJ);
+                    } catch (Throwable t) { shareState("cancelled"); }
+                });
+            }
+            @JavascriptInterface public void shareStop() {
+                runOnUiThread(() -> startService(new Intent(MainActivity.this, ScreenShareService.class).setAction("stop")));
+            }
             @JavascriptInterface public String lockInfo() {
                 android.app.KeyguardManager km = (android.app.KeyguardManager) getSystemService(KEYGUARD_SERVICE);
                 return "{\"on\":" + lockOn + ",\"min\":" + lockMin + ",\"secure\":" + (km != null && km.isDeviceSecure()) + "}";
@@ -138,6 +158,7 @@ public class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView v, String url) {
                 CookieManager.getInstance().flush();
+                inCall = url != null && url.contains("studieshub.org/call/");
                 if (answerCall != null && ours(Uri.parse(url))) {
                     String id = answerCall; answerCall = null;
                     v.evaluateJavascript("fetch('/api/calls/" + id + "/accept',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(r){return r.json()}).then(function(j){if(j&&j.url)location.href=j.url}).catch(function(){})", null);
@@ -218,6 +239,7 @@ public class MainActivity extends Activity {
         }
 
         CallService.channels(this);
+        ScreenShareService.ui = this;
         checkUpdate();
         com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken()
             .addOnSuccessListener(t -> CallService.rememberToken(this, t));
@@ -249,6 +271,15 @@ public class MainActivity extends Activity {
         super.onNewIntent(in);
         setIntent(in);
         web.loadUrl(fromIntent(in, HOME));
+    }
+
+    void shareState(final String st) { web.post(() -> web.evaluateJavascript("window.__scrState&&__scrState('" + st + "')", null)); }
+
+    /** One small picture of the shared screen, for the call page. Skips pictures while the page is still busy with the last one. */
+    void sendFrame(final String dataUrl) {
+        if (frameBusy) return;
+        frameBusy = true;
+        web.post(() -> web.evaluateJavascript("window.__scrFrame&&__scrFrame('" + dataUrl + "')", v -> frameBusy = false));
     }
 
     private void noteResult(boolean ok) { web.evaluateJavascript("window.studiesNote&&studiesNote(" + ok + ")", null); }
@@ -333,6 +364,14 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onActivityResult(int code, int result, Intent data) {
+        if (code == REQ_PROJ) {
+            if (result == RESULT_OK && data != null) {
+                Intent svc = new Intent(this, ScreenShareService.class).putExtra("code", result).putExtra("data", data);
+                try { if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc); else startService(svc); }
+                catch (Throwable t) { shareState("cancelled"); }
+            } else shareState("cancelled");
+            return;
+        }
         if (code == REQ_LOCK) {
             Runnable r = result == RESULT_OK ? pendingOk : pendingFail;
             pendingOk = null; pendingFail = null;
@@ -357,8 +396,10 @@ public class MainActivity extends Activity {
         super.onActivityResult(code, result, data);
     }
 
+    @Override protected void onDestroy() { if (ScreenShareService.ui == this) ScreenShareService.ui = null; super.onDestroy(); }
+
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
-    @Override protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); web.onPause(); }
+    @Override protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
     @Override protected void onResume() {
         super.onResume(); web.onResume(); skipLock = false;
         if (System.currentTimeMillis() - lastUpdateCheck > 3600000L) checkUpdate();

@@ -130,6 +130,11 @@ function registerCalling(app, { db, crypto, notify, logCall }) {
     if(!c||c.status!=='active'||!p||p.status!=='joined')return res.status(404).json({error:'Call not found.'});
     db.prepare("UPDATE call_sessions SET kind='video' WHERE id=?").run(c.id);res.json({ok:true,kind:'video'});
   });
+  app.post('/api/calls/:id/audio',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
+    if(!c||c.status!=='active'||!p||p.status!=='joined')return res.status(404).json({error:'Call not found.'});
+    db.prepare("UPDATE call_sessions SET kind='audio' WHERE id=?").run(c.id);res.json({ok:true,kind:'audio'});
+  });
   app.post('/api/calls/:id/leave',(req,res)=>{
     if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id));
     if(!c||!participant(c.id,req.user.id))return res.status(404).json({error:'Call not found.'});
@@ -215,7 +220,7 @@ function callScreen() {
   function attach(track, p, pub) {
     if (track.kind === 'audio') { const a = track.attach(); a.autoplay = true; a.style.display = 'none'; a.setAttribute('data-aid', track.sid); document.body.appendChild(a); return; }
     const screen = isScreen(pub), key = p.identity + (screen ? '-screen' : ''), box = tile(key, (p.name || p.identity) + (screen ? ' (screen)' : '')), old = box.querySelector('video'); if (old) old.remove();
-    const v = track.attach(); v.autoplay = true; v.playsInline = true; box.insertBefore(v, box.firstChild); box.classList.add('hasvideo'); if (screen) { box.classList.add('screen'); toast((p.name || 'Someone') + ' is sharing their screen'); upgradeToVideo(false); }
+    const v = track.attach(); v.autoplay = true; v.playsInline = true; box.insertBefore(v, box.firstChild); box.classList.add('hasvideo'); if (screen) { box.classList.add('screen'); toast((p.name || 'Someone') + ' is sharing their screen'); upgradeToVideo(false, 'screen'); } else if (C.kind !== 'video') upgradeToVideo(false, 'camera');
     layoutTiles();
   }
   function detach(track, p, pub) {
@@ -233,6 +238,7 @@ function callScreen() {
     $('selfWin').hidden = C.kind !== 'video' || !camOn; $('selfWin').classList.toggle('mirror', facing === 'user');
     $('selfMute').hidden = micOn;
     $('shareQuick').classList.toggle('on', sharing); $('shareQuick').title = sharing ? 'Stop sharing' : 'Share your screen';
+    $('toVideo').hidden = C.kind === 'video'; $('toAudio').hidden = C.kind !== 'video';
     $('shareBar').hidden = !sharing; $('shareBtn').textContent = sharing ? 'Stop sharing your screen' : 'Share your screen';
   }
   async function applyVoice() {
@@ -345,13 +351,58 @@ function callScreen() {
   $('audioDevice').onchange = e => room && e.target.value && room.switchActiveDevice('audioinput', e.target.value).catch(() => {});
   $('videoDevice').onchange = e => room && e.target.value && room.switchActiveDevice('videoinput', e.target.value).catch(() => {});
   // A voice call becomes a video call (for everybody) the moment somebody shares their screen.
-  function upgradeToVideo(tell) {
+  function upgradeToVideo(tell, why) {
     if (C.kind === 'video') return; C.kind = 'video'; document.body.classList.remove('audio'); document.body.classList.add('video');
     $('camBtn').hidden = false; $('videoDevice').hidden = false; if (tell) api('/api/calls/' + C.id + '/video', {}).catch(() => {});
-    updateButtons(); toast(tell ? 'This call is now a video call' : 'The call switched to video for the screen share');
+    updateButtons(); toast(tell ? 'This call is now a video call' : 'The call switched to video' + (why === 'screen' ? ' for the screen share' : ''));
+  }
+  // ----- Android app: screen sharing and voice <-> video switching -----
+  const NATIVE = !!(window.StudiesApp && window.StudiesApp.shareStart);
+  let scr = {};
+  async function stopNativeShare(tellApp) {
+    try { if (tellApp) window.StudiesApp.shareStop(); } catch (e) { /* ignore */ }
+    try { if (scr.track) await lp.unpublishTrack(scr.track); } catch (e) { /* ignore */ }
+    try { if (scr.track) scr.track.stop(); } catch (e) { /* ignore */ }
+    scr = {}; sharing = false; updateButtons();
+  }
+  window.__scrState = async st => {
+    if (st === 'started') {
+      try {
+        const canvas = document.createElement('canvas'); canvas.width = 720; canvas.height = 1280;
+        const ctx = canvas.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 720, 1280);
+        const track = canvas.captureStream(10).getVideoTracks()[0]; scr = { canvas, ctx, track };
+        await lp.publishTrack(track, { source: window.LivekitClient.Track.Source.ScreenShare, name: 'screen' });
+        sharing = true; upgradeToVideo(true, 'screen'); toast('You are sharing your screen. Switch to what you want to show; the call keeps going.', 6000);
+      } catch (e) { try { window.StudiesApp.shareStop(); } catch (e2) { /* ignore */ } scr = {}; sharing = false; toast('Could not share your screen'); }
+      updateButtons();
+    } else if (st === 'cancelled') { sharing = false; toast('Screen sharing was cancelled'); updateButtons(); }
+    else if (st === 'stopped') { await stopNativeShare(false); }
+  };
+  window.__scrFrame = d => {
+    if (!scr.canvas) return; const im = new Image();
+    im.onload = () => { if (scr.canvas.width !== im.width || scr.canvas.height !== im.height) { scr.canvas.width = im.width; scr.canvas.height = im.height; } scr.ctx.drawImage(im, 0, 0); };
+    im.src = d;
+  };
+  async function switchKind(toVideo) {
+    $('moreMenu').hidden = true; if (!lp) return;
+    if (toVideo) {
+      upgradeToVideo(true);
+      try { camOn = true; await lp.setCameraEnabled(true); const pub = lp.getTrackPublication(window.LivekitClient.Track.Source.Camera); if (pub && pub.videoTrack) pub.videoTrack.attach($('selfVid')); }
+      catch (e) { camOn = false; toast('Could not turn on the camera'); }
+    } else {
+      camOn = false; try { await lp.setCameraEnabled(false); } catch (e) { /* ignore */ }
+      if (sharing) await toggleShare();
+      C.kind = 'audio'; document.body.classList.remove('video'); document.body.classList.add('audio');
+      $('camBtn').hidden = true; $('videoDevice').hidden = true; api('/api/calls/' + C.id + '/audio', {}).catch(() => {}); toast('This call is now a voice call');
+    }
+    updateButtons();
   }
   async function toggleShare() {
     if (!lp) return; $('moreMenu').hidden = true;
+    if (NATIVE) { // the Android app: the phone itself captures the screen
+      if (!sharing) { try { window.StudiesApp.shareStart(); } catch (e) { toast('Could not start screen sharing'); } } else await stopNativeShare(true);
+      return;
+    }
     if (!sharing && !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) { toast('This phone’s browser does not allow sharing the screen. Open the call on a laptop or computer to share, or turn on your camera to show something.', 7000); return; }
     try {
       sharing = !sharing;
@@ -362,6 +413,8 @@ function callScreen() {
     updateButtons();
   }
   $('popBtn').onclick = () => { $('moreMenu').hidden = true; popOut(); };
+  $('toVideo').onclick = () => switchKind(true); $('toAudio').onclick = () => switchKind(false);
+  if (!NATIVE && !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) { $('shareBtn').hidden = true; $('shareQuick').hidden = true; } // a phone's browser cannot share its screen; the app can
   $('shareBtn').onclick = toggleShare; $('stopShare').onclick = toggleShare; $('shareQuick').onclick = toggleShare;
   $('endAllBtn').onclick = async () => { if (!confirm('End this call for everyone?')) return; try { await api('/api/calls/' + C.id + '/end', {}); } catch (e) { toast(e.message); } ended = true; if (room) room.disconnect(); goBack(); };
   async function openInvite() {
@@ -502,7 +555,7 @@ function callPage(data) {
     + (video ? '<div id="selfWin" class="selfwin mirror"><video id="selfVid" autoplay playsinline muted></video><span id="selfMute" hidden>🔇</span><button type="button" class="ibtn" id="flipBtn" title="Flip camera">' + ICON.flip + '</button></div>' : '<div id="selfWin" class="selfwin mirror" hidden><video id="selfVid" autoplay playsinline muted></video><span id="selfMute" hidden>🔇</span><button type="button" class="ibtn" id="flipBtn" title="Flip camera">' + ICON.flip + '</button></div>')
     + '<div id="toast"></div>'
     + '<div id="shareBar" hidden><span>You’re sharing your screen</span><button type="button" id="stopShare">Stop</button></div>'
-    + '<div id="moreMenu" hidden><button type="button" class="row" id="inviteMenu">Add people to the call</button><button type="button" class="row" id="shareBtn">Share your screen</button><button type="button" class="row" id="popBtn">Pop out video window</button>' + (data.host && data.group ? '<button type="button" class="row" id="endAllBtn">End call for everyone</button>' : '<button type="button" class="row" id="endAllBtn" hidden>End call for everyone</button>')
+    + '<div id="moreMenu" hidden><button type="button" class="row" id="inviteMenu">Add people to the call</button><button type="button" class="row" id="shareBtn">Share your screen</button><button type="button" class="row" id="toVideo">Switch to video call</button><button type="button" class="row" id="toAudio" hidden>Switch to voice call</button><button type="button" class="row" id="popBtn">Pop out video window</button>' + (data.host && data.group ? '<button type="button" class="row" id="endAllBtn">End call for everyone</button>' : '<button type="button" class="row" id="endAllBtn" hidden>End call for everyone</button>')
     + '<label>Microphone<select id="audioDevice"><option value="">Default</option></select></label>' + (video ? '<label>Camera<select id="videoDevice"><option value="">Default</option></select></label>' : '<select id="videoDevice" hidden></select>') + '</div>'
     + '<div class="pill"><button type="button" class="ibtn" id="moreBtn" title="More">' + ICON.more + '</button><button type="button" class="ibtn" id="shareQuick" title="Share your screen">' + ICON.share + '</button>' + (video ? '<button type="button" class="ibtn" id="camBtn" title="Camera">' + ICON.cam + '</button>' : '<button type="button" class="ibtn" id="camBtn" title="Camera" hidden>' + ICON.cam + '</button>')
     + '<button type="button" class="ibtn" id="micBtn" title="Mute">' + ICON.mic + '</button><button type="button" class="ibtn red" id="endBtn" title="End call">' + ICON.end + '</button></div>'
