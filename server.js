@@ -661,6 +661,7 @@ app.use((req, res, next) => {
   res.send(layout(pg ? pg.title : 'Studies Hub', `<iframe class="reader" src="${esc(url)}" title="Page"></iframe>`, req.user));
 });
 // LiveKit calling module; credentials stay in server-side environment variables.
+const { pdfViewerHtml } = require('./pdf_viewer');
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
 const { registerLecturerAdmin } = require('./lecturer_admin');
 const { registerUniversityAdmin } = require('./university_admin');
@@ -1509,6 +1510,11 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
 html.embed{--side:0px!important}
 .embed .drawer,.embed .pane,.embed .top,.embed .tabbar,.embed .scrim,.embed #drawerArrows,.embed .site-foot,.embed .pushbar{display:none!important}
 .embed body{padding:0!important}.embed main{max-width:none}
+.vtoggle{display:flex;gap:6px;margin:6px 0 4px}.vtoggle button{flex:1;min-height:44px;border-radius:12px;background:var(--panel);color:var(--mut);border:1px solid var(--line);font-weight:600;box-shadow:none}.vtoggle button.on{color:var(--blue);border-color:var(--blue);background:rgba(56,176,248,.14)}
+html[data-pv="list"] .pv-grid{grid-template-columns:1fr;gap:6px}
+html[data-pv="list"] .pv{flex-direction:row;align-items:center;gap:12px;padding:8px;border-radius:14px}
+html[data-pv="list"] .pv-img{width:64px;height:64px;aspect-ratio:1;flex:none;border-radius:12px;font-size:26px}
+html[data-pv="list"] .pv-body{padding:0;min-width:0}
 /* laptop: WhatsApp-Web style — thin icon rail | list pane | reading area */
 @media (min-width:1024px){
  :root{--rail:68px;--pane:380px;--side:68px}
@@ -1539,6 +1545,8 @@ html.embed{--side:0px!important}
  .pane-empty{min-height:65vh;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--mut);text-align:center}
  .pane-empty-ic{font-size:54px;opacity:.5}
  body.pane-index .site-foot{display:none}
+ .dash-hero,.vtoggle{display:none!important}
+ body.pane-index main>*:not(.pane-empty):not(#pushBar){display:none!important}
 }
 @media (min-width:1024px){
  .drawer-out,.drawer-bottom .drawer-item{font-size:0!important}
@@ -4131,25 +4139,7 @@ app.get('/p/:slug', (req, res) => {
   // doc: converted to HTML right in the browser (Mammoth.js). Both fetch through the same authenticated route
   // everything else here uses, so department/level access control still applies either way.
   const embed = p.kind === 'pdf'
-    ? `<div id="pdfViewer" class="doc-viewer"><p class="mut">Loading PDF&hellip;</p></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.min.js"></script>
-<script>(function(){
-  var box=document.getElementById('pdfViewer');
-  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.worker.min.js';
-  fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return pdfjsLib.getDocument({data:buf}).promise}).then(function(doc){
-    box.innerHTML='';
-    var chain=Promise.resolve();
-    var _loop=function(n){chain=chain.then(function(){return doc.getPage(n)}).then(function(page){
-      var scale=Math.min(2,(box.clientWidth||320)/page.getViewport({scale:1}).width);
-      var vp=page.getViewport({scale:scale}),canvas=document.createElement('canvas');
-      canvas.width=vp.width;canvas.height=vp.height;canvas.style.width='100%';canvas.style.marginBottom='10px';canvas.style.borderRadius='8px';
-      box.appendChild(canvas);
-      return page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
-    })};
-    for(var n=1;n<=doc.numPages;n++)_loop(n);
-    return chain;
-  }).catch(function(){box.innerHTML='<p class="mut">Could not preview this PDF here -- try the download link below.</p>'});
-})()</script>`
+    ? pdfViewerHtml(p.slug)
     : `<div id="docViewer" class="doc-viewer"><p class="mut">Loading document&hellip;</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script>fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return mammoth.convertToHtml({arrayBuffer:buf})}).then(function(result){document.getElementById('docViewer').innerHTML=result.value||'<p class="mut">This document has no readable text to preview.</p>'}).catch(function(){document.getElementById('docViewer').innerHTML='<p class="mut">Could not preview this document here -- try the download link below.</p>'})</script>`;
@@ -4757,6 +4747,8 @@ function dashboardBody(req) {
   return `<p class="mut" style="margin:8px 0 0">${SEM.semesterName(SEM.getCurrent(db))}</p>${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="dash-top">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="drawer-av-img" style="width:52px;height:52px" alt="">` : `<span class="avatar">${initial}</span>`}<div><p class="eyebrow" style="margin:0">Dashboard</p><h1 style="margin:.1em 0">Hello, ${esc(u.name)}</h1><p class="mut" style="margin:0">${subtitle}${u.username ? ` &middot; @${esc(u.username)}` : ''}</p></div></div>
 <p style="margin:14px 0 0">${pill}${posPill} <span class="mut">&middot; member since ${esc(String(u.created_at).slice(0, 10))}</span></p></div>
 <h2 class="sec">${rows.length} upload${rows.length === 1 ? '' : 's'} for you</h2>
+<div class="vtoggle" role="group" aria-label="How to show your courses"><button type="button" data-v="grid">&#9638; Files</button><button type="button" data-v="list">&#9776; List</button></div>
+<script>(function(){var d=document.documentElement,b=document.querySelectorAll('.vtoggle button');function set(v){d.setAttribute('data-pv',v);try{localStorage.setItem('pvView',v)}catch(e){}b.forEach(function(x){x.classList.toggle('on',x.getAttribute('data-v')===v)})}var v='grid';try{v=localStorage.getItem('pvView')||'grid'}catch(e){}set(v==='list'?'list':'grid');b.forEach(function(x){x.onclick=function(){set(x.getAttribute('data-v'))}})})()</script>
 <div class="box"><h2>Available to you <span class="count">${available.length}</span></h2><p class="hint">Free to view, plus anything you have paid for.</p>${available.length ? grid(available) : '<p class="mut">Nothing available yet.</p>'}</div>
 ${locked.length ? `<div class="box"><h2>Locked &mdash; pay to view <span class="count">${locked.length}</span></h2><p class="hint">Pay once and it moves up into Available.</p>${grid(locked)}</div>` : ''}`;
 }
