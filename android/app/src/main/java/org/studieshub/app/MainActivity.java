@@ -49,7 +49,7 @@ import java.util.List;
 /** Studies Hub: the website inside its own full-screen app window (no browser bar). */
 public class MainActivity extends Activity {
     private static final String HOME = "https://studieshub.org/";
-    private static final int REQ_FILE = 11, REQ_PERM = 12, REQ_GEO = 14, REQ_FIRST = 13;
+    private static final int REQ_FILE = 11, REQ_PERM = 12, REQ_GEO = 14, REQ_FIRST = 13, REQ_NOTE = 15;
 
     private WebView web;
     private View splash;
@@ -94,6 +94,7 @@ public class MainActivity extends Activity {
 
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
+            @JavascriptInterface public void notifications() { runOnUiThread(() -> startNotes()); }
         }, "StudiesApp");
 
         web.setWebViewClient(new WebViewClient() {
@@ -140,6 +141,17 @@ public class MainActivity extends Activity {
                     geoCb = cb; geoOrigin = origin;
                     requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_GEO);
                 }
+            }
+            @Override public boolean onJsAlert(WebView v, String url, String message, final android.webkit.JsResult r) {
+                new android.app.AlertDialog.Builder(MainActivity.this).setMessage(message)
+                    .setPositiveButton("OK", (d, w) -> r.confirm()).setOnCancelListener(d -> r.cancel()).show();
+                return true;
+            }
+            @Override public boolean onJsConfirm(WebView v, String url, String message, final android.webkit.JsResult r) {
+                new android.app.AlertDialog.Builder(MainActivity.this).setMessage(message)
+                    .setPositiveButton("OK", (d, w) -> r.confirm()).setNegativeButton("Cancel", (d, w) -> r.cancel())
+                    .setOnCancelListener(d -> r.cancel()).show();
+                return true;
             }
             @Override public void onPermissionRequest(final PermissionRequest req) {
                 runOnUiThread(() -> askForWebPermission(req));
@@ -205,6 +217,20 @@ public class MainActivity extends Activity {
         web.loadUrl(fromIntent(in, HOME));
     }
 
+    private void noteResult(boolean ok) { web.evaluateJavascript("window.studiesNote&&studiesNote(" + ok + ")", null); }
+
+    private void startNotes() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTE);
+            return;
+        }
+        boolean on = ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).areNotificationsEnabled();
+        noteResult(on);
+        if (!on) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName())); } catch (Exception e) { }
+        }
+    }
+
     private void googleFail(String msg) {
         web.evaluateJavascript("window.studiesGoogleFail&&studiesGoogleFail(" + JSONObject.quote(msg == null ? "" : msg) + ")", null);
     }
@@ -249,6 +275,7 @@ public class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
         super.onRequestPermissionsResult(code, perms, res);
+        if (code == REQ_NOTE) { noteResult(res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED); return; }
         if (code == REQ_FIRST) {
             // So the phone doesn't put the app to sleep and miss calls.
             try { startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName()))); } catch (Exception e) { }
