@@ -1,5 +1,7 @@
 plugins { id 'com.android.application' }
 
+def vc = (project.hasProperty('verCode') ? project.property('verCode') : '1').toString().toInteger()
+
 android {
     namespace 'org.studieshub.app'
     compileSdk 34
@@ -7,8 +9,8 @@ android {
         applicationId 'org.studieshub.app'
         minSdk 24
         targetSdk 34
-        versionCode (project.findProperty('verCode') ?: '1').toInteger()
-        versionName '1.0.' + (project.findProperty('verCode') ?: '1')
+        versionCode = vc
+        versionName = '1.0.' + vc
     }
     signingConfigs {
         release {
