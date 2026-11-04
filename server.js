@@ -4070,14 +4070,10 @@ app.get('/settings/security', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/security');
   const needPw = hasOwnPw(req.user.id);
   res.send(layout('Security', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Security</h1>
-<div class="card" id="lockCard" hidden><h2 style="margin-top:0">App lock</h2>
-<p class="mut" id="lkState"></p>
-<div id="lkOffBox"><p class="mut">When you leave the app and come back, it asks for your fingerprint, face, or your phone's own lock (PIN, pattern or password). This is your phone's lock, not your Studies Hub password.</p>
-${needPw ? '<input type="password" id="lkPw" placeholder="Your Studies Hub password" autocomplete="current-password" style="margin-bottom:8px">' : ''}
-<label class="mut" for="lkMin">Lock the app</label>
-<select id="lkMin" style="margin:4px 0 10px"><option value="0">Immediately after I leave</option><option value="1">After 1 minute</option><option value="3">After 3 minutes</option><option value="5">After 5 minutes</option></select>
-<button type="button" id="lkOn">Turn on app lock</button></div>
-<div id="lkOnBox" hidden><button type="button" class="ghost" id="lkOff">Turn off app lock</button></div></div>
+<div class="card" id="lockCard" hidden><style>.lkrow{display:flex;align-items:center;gap:14px;cursor:pointer}.lksw{appearance:none;-webkit-appearance:none;flex:none;width:54px;height:32px;border-radius:16px;background:var(--line,#3a3a4a);position:relative;transition:background .2s;border:0;padding:0;margin:0;cursor:pointer}.lksw::before{content:'';position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .2s}.lksw:checked{background:#6c63ff}.lksw:checked::before{transform:translateX(22px)}.lkchips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.lkchips button{border-radius:999px;padding:8px 14px;font-size:14px}.lkchips button.on{background:#6c63ff;color:#fff;border-color:#6c63ff}</style>
+<label class="lkrow" for="lkSw"><span style="flex:1"><b>App lock</b><br><span class="mut" id="lkState" style="font-size:13px"></span></span><input type="checkbox" role="switch" id="lkSw" class="lksw" aria-label="App lock"></label>
+<div id="lkPwBox" hidden style="margin-top:12px"><p class="mut" style="margin:0 0 8px">Type your Studies Hub password to turn this on.</p><input type="password" id="lkPw" placeholder="Your Studies Hub password" autocomplete="current-password" style="margin-bottom:8px"><div class="row" style="gap:8px"><button type="button" id="lkGo">Continue</button><button type="button" class="ghost" id="lkNo">Cancel</button></div></div>
+<div id="lkTime" hidden><p class="mut" style="margin:14px 0 0;font-size:13px">Lock the app</p><div class="lkchips"><button type="button" class="ghost" data-m="0">Right away</button><button type="button" class="ghost" data-m="1">1 minute</button><button type="button" class="ghost" data-m="3">3 minutes</button><button type="button" class="ghost" data-m="5">5 minutes</button></div></div></div>
 <form class="card" id="pwForm"><h2 style="margin-top:0">Change password</h2>
 <p class="mut">${needPw ? 'You stay logged in. The new password must be different from the old one.' : 'You signed up with Google, so you have no password yet. Set one here if you want one.'}</p>
 ${needPw ? '<input type="password" id="pwOld" placeholder="Current password" autocomplete="current-password" required style="margin-bottom:8px">' : ''}
@@ -4087,11 +4083,15 @@ ${needPw ? '<input type="password" id="pwOld" placeholder="Current password" aut
 <script>(function(){var A=window.StudiesApp,$=function(i){return document.getElementById(i)};
 function post(u,b){return fetch(u,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json()})}
 $('pwForm').onsubmit=function(e){e.preventDefault();var n=$('pwNew').value;if(n!==$('pwNew2').value)return alert('The two new passwords are not the same.');post('/settings/security/password',{current:$('pwOld')?$('pwOld').value:'',next:n}).then(function(j){if(j.ok){alert('Your password was changed.');$('pwForm').reset()}else alert(j.error||'Could not change the password.')}).catch(function(){alert('No connection. Please try again.')})};
-if(!A)return;$('lockCard').hidden=false;
-function show(){var s={};try{s=JSON.parse(A.lockInfo())}catch(e){}$('lkOffBox').hidden=!!s.on;$('lkOnBox').hidden=!s.on;$('lkState').textContent=s.on?'App lock is ON ('+(s.min?'after '+s.min+' minute'+(s.min>1?'s':''):'immediately')+').':(s.secure===false?'Set a screen lock (PIN, pattern or fingerprint) in your phone settings first.':'App lock is off.');if(s.on)$('lkMin').value=String(s.min)}
-window.studiesLockDone=function(k,ok){if(ok)alert(k==='on'?'App lock is on.':'App lock is off.');else alert('That was not confirmed, so nothing changed.');show()};
-$('lkOn').onclick=function(){post('/settings/security/verify',{password:$('lkPw')?$('lkPw').value:''}).then(function(j){if(j.ok){if($('lkPw'))$('lkPw').value='';A.lockEnable(+$('lkMin').value)}else alert(j.error||'Wrong password.')}).catch(function(){alert('No connection. Please try again.')})};
-$('lkOff').onclick=function(){A.lockDisable()};show()})()</script>`, req.user));
+if(!A)return;$('lockCard').hidden=false;var NEED=!!$('lkPw'),pick=0,info={};
+function chips(){var c=document.querySelectorAll('#lkTime button');for(var k=0;k<c.length;k++)c[k].className=(+c[k].getAttribute('data-m')===pick)?'on':'ghost'}
+function show(){try{info=JSON.parse(A.lockInfo())}catch(e){info={}}$('lkSw').checked=!!info.on;$('lkTime').hidden=!info.on&&$('lkPwBox').hidden;if(info.on)pick=info.min||0;chips();$('lkState').textContent=info.on?'On. Locks '+(pick?'after '+pick+' minute'+(pick>1?'s':''):'right away')+' after you leave.':(info.secure===false?'Set a screen lock (PIN, pattern or fingerprint) in your phone settings first.':'Off.')}
+window.studiesLockDone=function(k,ok){if(!ok&&k==='on')$('lkSw').checked=false;if(!ok)alert('That was not confirmed, so nothing changed.');$('lkPwBox').hidden=true;show()};
+function go(){post('/settings/security/verify',{password:NEED?$('lkPw').value:''}).then(function(j){if(j.ok){if($('lkPw'))$('lkPw').value='';$('lkPwBox').hidden=true;A.lockEnable(pick)}else{alert(j.error||'Wrong password.');$('lkSw').checked=false}}).catch(function(){alert('No connection. Please try again.');$('lkSw').checked=false})}
+$('lkSw').onchange=function(){if(this.checked){if(info.secure===false){this.checked=false;return alert('Set a screen lock (PIN, pattern or fingerprint) in your phone settings first.')}if(NEED){$('lkPwBox').hidden=false;$('lkTime').hidden=false;$('lkPw').focus()}else go()}else{$('lkPwBox').hidden=true;if(info.on)A.lockDisable();else show()}};
+$('lkGo').onclick=go;$('lkNo').onclick=function(){$('lkPwBox').hidden=true;$('lkSw').checked=false;show()};
+$('lkTime').onclick=function(e){var m=e.target.getAttribute&&e.target.getAttribute('data-m');if(m===null||m===undefined)return;pick=+m;chips();if(info.on)A.lockEnable(pick)};
+show()})()</script>`, req.user));
 });
 app.post('/settings/security/verify', (req, res) => {
   if (!req.user) return res.sendStatus(401);

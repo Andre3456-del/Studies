@@ -413,20 +413,27 @@ public class MainActivity extends Activity {
         android.app.KeyguardManager km = (android.app.KeyguardManager) getSystemService(KEYGUARD_SERVICE);
         if (km == null || !km.isDeviceSecure()) { fail.run(); web.evaluateJavascript("alert('Set a screen lock (PIN, pattern or fingerprint) in your phone settings first.')", null); return; }
         skipLock = true;
+        boolean started = false;
         if (Build.VERSION.SDK_INT >= 30) {
-            android.hardware.biometrics.BiometricPrompt bp = new android.hardware.biometrics.BiometricPrompt.Builder(this)
-                .setTitle("Studies Hub").setSubtitle("Confirm it is you")
-                .setAllowedAuthenticators(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK | android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-                .build();
-            bp.authenticate(new CancellationSignal(), getMainExecutor(), new android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
-                @Override public void onAuthenticationSucceeded(android.hardware.biometrics.BiometricPrompt.AuthenticationResult r) { ok.run(); }
-                @Override public void onAuthenticationError(int code, CharSequence msg) { fail.run(); }
-            });
-        } else {
-            Intent i = km.createConfirmDeviceCredentialIntent("Studies Hub", "Confirm it is you");
-            if (i == null) { ok.run(); return; }
-            pendingOk = ok; pendingFail = fail;
-            startActivityForResult(i, REQ_LOCK);
+            try {
+                android.hardware.biometrics.BiometricPrompt bp = new android.hardware.biometrics.BiometricPrompt.Builder(this)
+                    .setTitle("Studies Hub").setSubtitle("Confirm it is you")
+                    .setAllowedAuthenticators(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK | android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                    .build();
+                bp.authenticate(new CancellationSignal(), getMainExecutor(), new android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                    @Override public void onAuthenticationSucceeded(android.hardware.biometrics.BiometricPrompt.AuthenticationResult r) { ok.run(); }
+                    @Override public void onAuthenticationError(int code, CharSequence msg) { fail.run(); }
+                });
+                started = true;
+            } catch (Throwable t) { started = false; }
+        }
+        if (!started) {
+            try {
+                Intent i = km.createConfirmDeviceCredentialIntent("Studies Hub", "Confirm it is you");
+                if (i == null) { fail.run(); return; }
+                pendingOk = ok; pendingFail = fail;
+                startActivityForResult(i, REQ_LOCK);
+            } catch (Throwable t) { fail.run(); }
         }
     }
 
