@@ -12,7 +12,20 @@
           "package_name": "org.studieshub.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "862355700612-oa375eabm0o5e7n97e3ufvvi7m3i1anc.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "org.studieshub.app",
+            "certificate_hash": "90da214ea3f5590499c6479b1aa0d884a1109995"
+          }
+        },
+        {
+          "client_id": "862355700612-opk4pief6re463em4tdo9qt93pip020t.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAW3sXYqlieAGcmLiYcYQVtbVqSiSKtV5U"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "862355700612-opk4pief6re463em4tdo9qt93pip020t.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
