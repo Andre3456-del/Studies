@@ -4393,7 +4393,7 @@ app.post('/admin/sponsors/:id/reject', admin, (req, res) => {
   res.redirect(back('Sponsor post rejected.'));
 });
 
-app.get('/signup', (req, res) => !isLaptop(req) ? res.send(authForm('signup')) : res.send(linkPage(req, '', 'New here? Create your account on your phone first, then scan this code to open it on this laptop.')));
+app.get('/signup', (req, res) => !isLaptop(req) ? res.send(authForm('signup')) : res.send(linkPage(req, '')));
 app.post('/signup', async (req, res) => {
   if (limited('signup-ip:' + req.ip, 12, 3600e3)) return res.status(429).send('Too many sign-ups from this connection. Please try again later.');
   const name = String(req.body.name || '').trim().slice(0, 80);
@@ -4415,7 +4415,8 @@ app.post('/signup', async (req, res) => {
 
 // Public lecturer portal landing page: discoverable without exposing lecturer-only content.
 app.get('/lecturer/portal', (req, res) => {
-  if (!req.user && isLaptop(req)) return res.send(linkPage(req, '/lecturer', 'Lecturers and school staff log in the same way: scan this code with your phone. New lecturers register on their phone first.'));
+  if (isLaptop(req) && req.user) return res.redirect('/lecturer');
+  if (!req.user && isLaptop(req)) return res.send(linkPage(req, '/lecturer'));
   res.send(layout('Lecturer Portal | Studies Hub', `<div class="auth" style="max-width:720px">
 <h1>Studies Hub Lecturer Portal</h1>
 <p>Lecturers can register, sign in, manage their linked courses, and share learning materials with students through Studies Hub.</p>
@@ -4434,7 +4435,7 @@ app.get('/lecturer/portal', (req, res) => {
 });
 app.get('/lecturer/login', (req, res) => res.redirect('/login?next=%2Flecturer'));
 
-app.get('/lecturer/signup', (req, res) => isLaptop(req) ? res.send(linkPage(req, '/lecturer', 'Register as a lecturer on your phone first, then scan this code to open it on this laptop.')) : res.send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1>
+app.get('/lecturer/signup', (req, res) => isLaptop(req) ? res.send(linkPage(req, '/lecturer')) : res.send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1>
 <p class="mut">For teaching staff only. Students should use the regular <a href="/signup">sign up</a> instead.</p>
 <form method="post" class="card">
 <input name="name" placeholder="Your name" required maxlength="80">
@@ -4501,12 +4502,12 @@ function linkPage(req, next, note) {
   db.prepare('INSERT INTO device_links(token,created,label,kind) VALUES(?,?,?,?)').run(sha(token), Date.now(), deviceLabel(req), kind);
   const origin = baseUrl(req).replace(/\/$/, '');
   const svg = qrSvg(`${origin}/link/${token}`, 6);
-  return layout('Log in', `<div class="card auth" style="text-align:center"><h1 style="margin-top:0">${kind === 'lecturer' ? 'Lecturer Portal: log in with your phone' : 'Log in with your phone'}</h1>${kind === 'lecturer' ? '<p class="mut" style="margin-top:0">For lecturers and school staff. You need a lecturer account on your phone.</p>' : ''}
+  return layout('Log in', `<div class="card auth" style="text-align:center"><h1 style="margin-top:0">${kind === 'lecturer' ? 'Lecturer Portal: log in with your phone' : 'Log in with your phone'}</h1>${kind === 'lecturer' ? '<p class="mut" style="margin-top:0">For lecturers and school staff.</p>' : ''}
 ${note ? `<p class="err">${esc(note)}</p>` : ''}
 <div style="display:inline-block;background:#fff;padding:6px;border-radius:14px;max-width:100%"><div id="qrBox" style="width:min(300px,80vw)">${svg.replace(/width="\d+" height="\d+"/, 'width="100%" height="auto"')}</div></div>
 <p id="linkMsg" class="mut" style="margin:10px 0 0">Waiting for your phone&hellip;</p>
 <ol style="text-align:left;line-height:1.7;margin:14px auto 6px;max-width:340px;padding-left:20px"><li>Open Studies Hub on your phone.</li><li>Go to <b>Settings &rarr; Linked devices</b>.</li><li>Tap <b>Link a device</b> and point the phone at this code.</li></ol>
-<p class="mut" style="font-size:13px;margin-top:10px">New here? Create your account on your phone first.<br><a href="/login?admin=1">Admin sign-in</a></p></div>
+</div>
 <script>(function(){var t=${JSON.stringify(token)},next=${JSON.stringify(next || '/dashboard')},m=document.getElementById('linkMsg'),stop=false;
 function tick(){if(stop)return;fetch('/link/status/'+t,{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
 if(j.state==='ok'){stop=true;m.textContent='Linked! Opening…';location.href=next}
