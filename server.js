@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS pages(id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NU
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, page_id INTEGER NOT NULL, reference TEXT UNIQUE NOT NULL, amount INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, page_id));
 CREATE TABLE IF NOT EXISTS courses(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS lecturer_courses(lecturer_id INTEGER NOT NULL, course_id INTEGER NOT NULL, PRIMARY KEY(lecturer_id, course_id));
-`);
+`);try { db.exec('ALTER TABLE device_links ADD COLUMN kind TEXT'); } catch (e) { /* already there */ }
+
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0'], ['username', 'TEXT'], ['level', 'INTEGER'], ['position', 'TEXT'], ['position_status', 'TEXT'],
@@ -1567,6 +1568,9 @@ html[data-pv="list"] .pv-body{padding:0;min-width:0}
  body.has-pane main:has(iframe.reader){padding:0}
  body.has-pane:has(iframe.reader) .site-foot{display:none}
 }
+/* laptops only (not phones, iPads or tablets): visitors get one person icon at the bottom of the strip, which shows the QR code */
+.lap-only{display:none}
+@media screen and (min-width:1024px){html[data-dev="laptop"] .drawer-bottom .ds-li,html[data-dev="laptop"] .drawer-bottom .ds-su{display:none!important}html[data-dev="laptop"] .drawer-bottom .lap-only{display:flex!important}}
 /* accessibility polish: visible keyboard focus, calmer motion, comfortable touch targets, tablet width */
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:3px solid #fcc419;outline-offset:2px;border-radius:6px}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
@@ -1719,7 +1723,7 @@ const layout = (title, body, user, opts = {}) => {
   const drawerNav = navItems(user, badge, opts.mode).map(i => `<a class="drawer-item" href="${i.href}"><span>${ico(iconKey(i))}</span>${esc(i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('');
   const drawerBottom = user
     ? `<a class="drawer-item" href="/settings"><span>${ico('gear')}</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item drawer-out" style="width:100%;text-align:left;font:inherit;border:0;cursor:pointer"><span>${ico('logout')}</span>Log out</button></form>`
-    : `<a class="drawer-item" href="/login"><span>${ico('login')}</span>Log in</a><a class="drawer-item" href="/signup"><span>${ico('signup')}</span>Sign up</a>`;
+    : `<a class="drawer-item ds-li" href="/login"><span>${ico('login')}</span>Log in</a><a class="drawer-item ds-su" href="/signup"><span>${ico('signup')}</span>Sign up</a><a class="drawer-item lap-only" href="/login" aria-label="Log in with your phone"><span>${ico('profile')}</span>Log in</a>`;
   // Phones get a bottom tab bar for the main places (laptops use the always-open menu on the left instead).
   const tabItems = user && !opts.hideTop ? navItems(user, badge, opts.mode).filter(i => !i.href.includes('?')).slice(0, 3) : [];
   const tabbar = tabItems.length ? `<div class="tabbar" id="tabbar">${tabItems.map(i => `<a href="${i.href}" data-h="${i.href}" aria-label="${esc(i.label)}" data-tip="${esc(i.label)}">${ico(iconKey(i))}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('')}<button type="button" id="tabMenu" aria-label="Menu" data-tip="Menu">${ico('menu')}</button></div><script>(function(){var p=location.pathname,bar=document.getElementById('tabbar'),as=bar.querySelectorAll('a'),best=null;[].forEach.call(as,function(a){var h=a.getAttribute('data-h');if(p===h||(h.length>1&&p.indexOf(h+'/')===0))best=a});if(best)best.className='on';
@@ -4411,6 +4415,7 @@ app.post('/signup', async (req, res) => {
 
 // Public lecturer portal landing page: discoverable without exposing lecturer-only content.
 app.get('/lecturer/portal', (req, res) => {
+  if (!req.user && isLaptop(req)) return res.send(linkPage(req, '/lecturer', 'Lecturers and school staff log in the same way: scan this code with your phone. New lecturers register on their phone first.'));
   res.send(layout('Lecturer Portal | Studies Hub', `<div class="auth" style="max-width:720px">
 <h1>Studies Hub Lecturer Portal</h1>
 <p>Lecturers can register, sign in, manage their linked courses, and share learning materials with students through Studies Hub.</p>
@@ -4429,7 +4434,7 @@ app.get('/lecturer/portal', (req, res) => {
 });
 app.get('/lecturer/login', (req, res) => res.redirect('/login?next=%2Flecturer'));
 
-app.get('/lecturer/signup', (req, res) => res.send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1>
+app.get('/lecturer/signup', (req, res) => isLaptop(req) ? res.send(linkPage(req, '/lecturer', 'Register as a lecturer on your phone first, then scan this code to open it on this laptop.')) : res.send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1>
 <p class="mut">For teaching staff only. Students should use the regular <a href="/signup">sign up</a> instead.</p>
 <form method="post" class="card">
 <input name="name" placeholder="Your name" required maxlength="80">
@@ -4484,13 +4489,19 @@ const deviceLabel = req => {
   return `${os} · ${br}`;
 };
 const LINK_TTL = 5 * 60 * 1000;
+// A code made on the Lecturer Portal can only be approved by a lecturer / school-staff account; a student code only by a non-lecturer account.
+const linkKindOf = next => /^\/(lecturer|uni)/.test(String(next || '')) ? 'lecturer' : 'student';
+const staffAccount = u => !!u && (!!u.is_lecturer || u.role === 'uniadmin' || u.role === 'admin' || canLecturerAdmin(u));
+const studentAccount = u => !!u && !u.is_lecturer && u.role !== 'uniadmin';
+const mayApproveKind = (u, kind) => kind === 'lecturer' ? staffAccount(u) : studentAccount(u);
 function linkPage(req, next, note) {
   db.prepare('DELETE FROM device_links WHERE created<?').run(Date.now() - 3600e3);
   const token = crypto.randomBytes(16).toString('hex');
-  db.prepare('INSERT INTO device_links(token,created,label) VALUES(?,?,?)').run(sha(token), Date.now(), deviceLabel(req));
+  const kind = linkKindOf(next);
+  db.prepare('INSERT INTO device_links(token,created,label,kind) VALUES(?,?,?,?)').run(sha(token), Date.now(), deviceLabel(req), kind);
   const origin = baseUrl(req).replace(/\/$/, '');
   const svg = qrSvg(`${origin}/link/${token}`, 6);
-  return layout('Log in', `<div class="card auth" style="text-align:center"><h1 style="margin-top:0">Log in with your phone</h1>
+  return layout('Log in', `<div class="card auth" style="text-align:center"><h1 style="margin-top:0">${kind === 'lecturer' ? 'Lecturer Portal: log in with your phone' : 'Log in with your phone'}</h1>${kind === 'lecturer' ? '<p class="mut" style="margin-top:0">For lecturers and school staff. You need a lecturer account on your phone.</p>' : ''}
 ${note ? `<p class="err">${esc(note)}</p>` : ''}
 <div style="display:inline-block;background:#fff;padding:6px;border-radius:14px;max-width:100%"><div id="qrBox" style="width:min(300px,80vw)">${svg.replace(/width="\d+" height="\d+"/, 'width="100%" height="auto"')}</div></div>
 <p id="linkMsg" class="mut" style="margin:10px 0 0">Waiting for your phone&hellip;</p>
@@ -4518,6 +4529,8 @@ app.get('/link/:token', (req, res) => {
   if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl || req.url));
   const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(sha(String(req.params.token)));
   if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
+  const kindNow = row.kind === 'lecturer' ? 'lecturer' : 'student';
+  if (!mayApproveKind(req.user, kindNow)) return res.status(403).send(notice(kindNow === 'lecturer' ? 'Lecturer Portal code' : 'Student code', kindNow === 'lecturer' ? 'This laptop is on the Lecturer Portal, which needs a lecturer account. You are logged in with a student account, so you cannot link it.' : 'This laptop is on the student login. You are logged in with a lecturer account, so use the Lecturer Portal code on the laptop instead.', '<p><a href="/settings/devices">Back</a></p>'));
   res.send(layout('Link a device', `<div class="card auth"><h1 style="margin-top:0">Link this laptop?</h1><p>A computer (<b>${esc(row.label || 'Computer')}</b>) wants to log in as <b>${esc(req.user.name)}</b>.</p><p class="mut">Only continue if you are looking at that laptop right now and it is yours. Anyone you link can see your account until you remove them.</p>
 <form method="post" action="/link/${esc(req.params.token)}"><button>Yes, link it</button> <a class="btn ghost" href="/settings/devices" style="margin-left:8px">Cancel</a></form></div>`, req.user));
 });
@@ -4526,6 +4539,7 @@ app.post('/link/:token', (req, res) => {
   const h = sha(String(req.params.token));
   const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(h);
   if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
+  if (!mayApproveKind(req.user, row.kind === 'lecturer' ? 'lecturer' : 'student')) return res.status(403).send(notice('Wrong portal', row.kind === 'lecturer' ? 'This code is for the Lecturer Portal. It needs a lecturer account.' : 'This code is for the student login. Use the Lecturer Portal code with a lecturer account.', '<p><a href="/settings/devices">Back</a></p>'));
   db.prepare('UPDATE device_links SET user_id=?, approved=1 WHERE token=? AND approved IS NULL').run(req.user.id, h);
   res.send(notice('Linked', 'Your laptop is opening Studies Hub now. You can remove it any time from Settings → Linked devices.', '<p><a href="/settings/devices">Linked devices</a></p>'));
 });
