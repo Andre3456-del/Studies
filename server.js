@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS lecturer_courses(lecturer_id INTEGER NOT NULL, course
 
 // Upgrade older databases that predate email verification
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
-for (const [c, def] of [['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0'], ['username', 'TEXT'], ['level', 'INTEGER'], ['position', 'TEXT'], ['position_status', 'TEXT'],
+for (const [c, def] of [['gsignup', 'INTEGER NOT NULL DEFAULT 0'], ['can_promote', 'INTEGER NOT NULL DEFAULT 0'], ['verified', 'INTEGER NOT NULL DEFAULT 0'], ['verify_hash', 'TEXT'], ['verify_expires', 'INTEGER'], ['verify_sent', 'INTEGER'], ['reset_hash', 'TEXT'], ['reset_expires', 'INTEGER'], ['reset_attempts', 'INTEGER NOT NULL DEFAULT 0'], ['last_seen', 'INTEGER'], ['avatar_data', 'BLOB'], ['avatar_mime', 'TEXT'], ['department', 'TEXT'], ['university', 'TEXT'], ['course', 'TEXT'], ['title', 'TEXT'], ['can_set_title', 'INTEGER NOT NULL DEFAULT 0'], ['username', 'TEXT'], ['level', 'INTEGER'], ['position', 'TEXT'], ['position_status', 'TEXT'],
   // A verified position can carry real reach and capability: how far their news posts travel (their own
   // department+level, their whole faculty, or the whole school), what admin capability it grants automatically,
   // and -- for positions that need a specific person's sign-off rather than the general news queue -- who that is.
@@ -834,7 +834,7 @@ const profileComplete = u => u.role === 'uniadmin' ? !!u.username && !!u.name : 
 let adminTab = '';
 const TAB_OF = p => /^\/admin\/(payments|sponsors)/.test(p) ? 'payments' : /^\/admin\/(upload|pages)/.test(p) ? 'pages' : /^\/admin\/lecturers/.test(p) ? 'lecturers' : /^\/(admin\/positions|positions|admin\/departments)/.test(p) ? 'positions' : /^\/admin\/news/.test(p) ? 'news' : /^\/admin\/users/.test(p) ? 'users' : '';
 app.use((req, res, next) => { adminTab = TAB_OF(req.path); next(); });
-const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/app', '/StudiesHub.apk', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/app', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
   next();
@@ -854,6 +854,7 @@ app.get('/manifest.webmanifest', (req, res) => {
     edge_side_panel: { preferred_width: 400 },
     note_taking: { new_note_url: '/news' },
     background_color: '#12121c', theme_color: '#12121c',
+    related_applications: [{ platform: 'play', id: 'org.studieshub.app' }], prefer_related_applications: false,
     icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
     // Shortcuts: long-press the installed icon to jump straight to a section.
     shortcuts: [
@@ -920,6 +921,8 @@ button{background:#5bc8ff;color:#04101f;border:none;border-radius:10px;padding:1
 <button onclick="location.reload()">Try again</button></div></body></html>`;
 app.get('/offline.html', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(OFFLINE_HTML); });
 
+// Lets Android know studieshub.org links belong to the app (opens them in the app) and lets the site see the app is installed.
+app.get('/.well-known/assetlinks.json', (req, res) => res.json([{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: 'org.studieshub.app', sha256_cert_fingerprints: ['86:04:23:C0:3E:E0:80:51:CD:FE:6B:50:B5:05:62:18:38:3B:E2:CC:68:06:03:6F:17:4C:D8:28:19:1F:83:40'] } }]));
 // Android app download: served from our own site so the phone's download finishes cleanly.
 const APK_URL = 'https://github.com/Andre3456-del/Studies/releases/download/app-latest/StudiesHub.apk';
 let apkCache = { buf: null, at: 0 };
@@ -935,7 +938,7 @@ app.get('/StudiesHub.apk', async (req, res) => {
   } catch (e) { res.status(502).send('The app file is not ready yet. Please try again in a minute.'); }
 });
 app.get('/app', (req, res) => {
-  const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
+  const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a id="dlApp" class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><script>(function(){var a=document.getElementById('dlApp');try{navigator.getInstalledRelatedApps&&navigator.getInstalledRelatedApps().then(function(r){if(r&&r.length&&a){a.textContent='Open the app';a.removeAttribute('download');a.href='intent://studieshub.org/#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/StudiesHub.apk')+';end'}}).catch(function(){})}catch(e){}})()</script><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
   res.send(layout('Get the app', body, req.user));
 });
 const UPLOAD_QUEUED_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1864,7 +1867,7 @@ ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><sc
 <script>(function(){window.studiesNote=function(ok){alert(ok?'Notifications are on for this device.':'Notifications are off. Turn them on in your phone settings for Studies Hub.')};if(window.StudiesApp)return;var native=window.alert;window.alert=function(m){try{var o=document.createElement('div');o.setAttribute('role','alertdialog');o.style.cssText='position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';var b=document.createElement('div');b.style.cssText='max-width:420px;width:100%;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:16px;padding:20px;font:16px/1.45 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.45)';var t=document.createElement('div');t.textContent=String(m);t.style.whiteSpace='pre-wrap';var k=document.createElement('button');k.type='button';k.textContent='OK';k.style.cssText='margin-top:16px;float:right;border:0;border-radius:10px;padding:10px 22px;background:#6c63ff;color:#fff;font:600 15px system-ui,sans-serif;cursor:pointer';k.onclick=function(){o.remove()};b.appendChild(t);b.appendChild(k);o.appendChild(b);document.body.appendChild(o);k.focus()}catch(e){native.call(window,m)}}})()</script>
 ${user ? `<script>${SEARCHSEL_JS}</script>` : ''}
 ${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
-<script>(function(){try{var ua=navigator.userAgent||'';if(!/Android/i.test(ua)||/StudiesHubApp/.test(ua)||window.top!==window.self)return;if(matchMedia('(display-mode: standalone)').matches)return;if(location.pathname==='/app')return;if(sessionStorage.getItem('appAsk'))return;sessionStorage.setItem('appAsk','1');var t=+localStorage.getItem('appAskAt')||0;if(Date.now()-t<3600000)return;if(Math.random()>.7)return;setTimeout(function(){var b=document.createElement('div');b.setAttribute('role','dialog');b.setAttribute('aria-label','Download the app');b.style.cssText='position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:18px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;gap:12px;align-items:center;font:15px system-ui,sans-serif';b.innerHTML='<img src="/icon-192.png" alt="" width="44" height="44" style="border-radius:11px"><div style="flex:1"><b>Download the Studies Hub app</b><div style="opacity:.7;font-size:13px">Opens full screen, like a real app.</div></div><a href="/app" style="background:#6c63ff;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:600">Get</a><button type="button" aria-label="Close" style="background:none;border:0;color:inherit;font-size:24px;line-height:1;padding:4px 6px;cursor:pointer">&times;</button>';b.querySelector('button').onclick=function(){b.remove();try{localStorage.setItem('appAskAt',Date.now())}catch(e){}};document.body.appendChild(b)},3500)}catch(e){}})()</script>
+<script>(function(){try{var ua=navigator.userAgent||'';if(!/Android/i.test(ua)||/StudiesHubApp/.test(ua)||window.top!==window.self)return;if(matchMedia('(display-mode: standalone)').matches)return;if(location.pathname==='/app')return;if(sessionStorage.getItem('appAsk'))return;sessionStorage.setItem('appAsk','1');var t=+localStorage.getItem('appAskAt')||0;if(Date.now()-t<3600000)return;if(Math.random()>.7)return;var go='intent://studieshub.org'+location.pathname+location.search+'#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/app')+';end';function show(inst){var b=document.createElement('div');b.setAttribute('role','dialog');b.setAttribute('aria-label','Studies Hub app');b.style.cssText='position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:18px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;gap:12px;align-items:center;font:15px system-ui,sans-serif';b.innerHTML='<img src="/icon-192.png" alt="" width="44" height="44" style="border-radius:11px"><div style="flex:1"><b>'+(inst?'Continue in the Studies Hub app':'Download the Studies Hub app')+'</b><div style="opacity:.7;font-size:13px">'+(inst?'Open this page in the app.':'Opens full screen, like a real app.')+'</div></div><a href="'+go+'" style="background:#6c63ff;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:600">'+(inst?'Open':'Get')+'</a><button type="button" aria-label="Close" style="background:none;border:0;color:inherit;font-size:24px;line-height:1;padding:4px 6px;cursor:pointer">&times;</button>';b.querySelector('button').onclick=function(){b.remove();try{localStorage.setItem('appAskAt',Date.now())}catch(e){}};document.body.appendChild(b)}var p=navigator.getInstalledRelatedApps?navigator.getInstalledRelatedApps():Promise.resolve([]);p.then(function(a){return a&&a.length}).catch(function(){return 0}).then(function(i){setTimeout(function(){show(!!i)},3500)})}catch(e){}})()</script>
 </body></html>`;
 };
 
@@ -3971,6 +3974,7 @@ const SETTINGS_PAGES = [
   ['/settings/appearance', '🎨', 'Appearance', 'Light or dark mode'],
   ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
   ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
+  ['/settings/security', '🔒', 'Security', 'App lock and change your password'],
   ['/app', '📲', 'Download the app', 'Get Studies Hub as a real Android app'],
 ];
 const wantsApp = req => /Android/i.test(req.headers['user-agent'] || '') && !/StudiesHubApp/.test(req.headers['user-agent'] || '');
@@ -4058,6 +4062,57 @@ app.get('/settings/notifications', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/notifications');
   res.send(layout('Notifications', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Notifications</h1>
 <div class="card"><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="if(window.StudiesApp){StudiesApp.notifications();return}window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>`, req.user));
+});
+
+// ---------- Security: app lock (phone app) and change password ----------
+const hasOwnPw = uid => { const r = db.prepare('SELECT gsignup FROM users WHERE id=?').get(uid); return !(r && r.gsignup); };
+app.get('/settings/security', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/settings/security');
+  const needPw = hasOwnPw(req.user.id);
+  res.send(layout('Security', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Security</h1>
+<div class="card" id="lockCard" hidden><h2 style="margin-top:0">App lock</h2>
+<p class="mut" id="lkState"></p>
+<div id="lkOffBox"><p class="mut">When you leave the app and come back, it asks for your fingerprint, face, or your phone's own lock (PIN, pattern or password). This is your phone's lock, not your Studies Hub password.</p>
+${needPw ? '<input type="password" id="lkPw" placeholder="Your Studies Hub password" autocomplete="current-password" style="margin-bottom:8px">' : ''}
+<label class="mut" for="lkMin">Lock the app</label>
+<select id="lkMin" style="margin:4px 0 10px"><option value="0">Immediately after I leave</option><option value="1">After 1 minute</option><option value="3">After 3 minutes</option><option value="5">After 5 minutes</option></select>
+<button type="button" id="lkOn">Turn on app lock</button></div>
+<div id="lkOnBox" hidden><button type="button" class="ghost" id="lkOff">Turn off app lock</button></div></div>
+<form class="card" id="pwForm"><h2 style="margin-top:0">Change password</h2>
+<p class="mut">${needPw ? 'You stay logged in. The new password must be different from the old one.' : 'You signed up with Google, so you have no password yet. Set one here if you want one.'}</p>
+${needPw ? '<input type="password" id="pwOld" placeholder="Current password" autocomplete="current-password" required style="margin-bottom:8px">' : ''}
+<input type="password" id="pwNew" placeholder="New password (8+ characters)" autocomplete="new-password" required minlength="8" style="margin-bottom:8px">
+<input type="password" id="pwNew2" placeholder="New password again" autocomplete="new-password" required minlength="8" style="margin-bottom:10px">
+<button>Change password</button></form>
+<script>(function(){var A=window.StudiesApp,$=function(i){return document.getElementById(i)};
+function post(u,b){return fetch(u,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json()})}
+$('pwForm').onsubmit=function(e){e.preventDefault();var n=$('pwNew').value;if(n!==$('pwNew2').value)return alert('The two new passwords are not the same.');post('/settings/security/password',{current:$('pwOld')?$('pwOld').value:'',next:n}).then(function(j){if(j.ok){alert('Your password was changed.');$('pwForm').reset()}else alert(j.error||'Could not change the password.')}).catch(function(){alert('No connection. Please try again.')})};
+if(!A)return;$('lockCard').hidden=false;
+function show(){var s={};try{s=JSON.parse(A.lockInfo())}catch(e){}$('lkOffBox').hidden=!!s.on;$('lkOnBox').hidden=!s.on;$('lkState').textContent=s.on?'App lock is ON ('+(s.min?'after '+s.min+' minute'+(s.min>1?'s':''):'immediately')+').':(s.secure===false?'Set a screen lock (PIN, pattern or fingerprint) in your phone settings first.':'App lock is off.');if(s.on)$('lkMin').value=String(s.min)}
+window.studiesLockDone=function(k,ok){if(ok)alert(k==='on'?'App lock is on.':'App lock is off.');else alert('That was not confirmed, so nothing changed.');show()};
+$('lkOn').onclick=function(){post('/settings/security/verify',{password:$('lkPw')?$('lkPw').value:''}).then(function(j){if(j.ok){if($('lkPw'))$('lkPw').value='';A.lockEnable(+$('lkMin').value)}else alert(j.error||'Wrong password.')}).catch(function(){alert('No connection. Please try again.')})};
+$('lkOff').onclick=function(){A.lockDisable()};show()})()</script>`, req.user));
+});
+app.post('/settings/security/verify', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  if (limited('lockpw:' + req.user.id, 8, 10 * 60e3)) return res.status(429).json({ error: 'Too many tries. Wait a few minutes.' });
+  if (!hasOwnPw(req.user.id)) return res.json({ ok: true });
+  const u = db.prepare('SELECT hash FROM users WHERE id=?').get(req.user.id);
+  if (!u || !bcrypt.compareSync(String((req.body && req.body.password) || ''), u.hash)) return res.json({ error: 'That is not your password.' });
+  res.json({ ok: true });
+});
+app.post('/settings/security/password', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  if (limited('chpw:' + req.user.id, 8, 10 * 60e3)) return res.status(429).json({ error: 'Too many tries. Wait a few minutes.' });
+  const u = db.prepare('SELECT hash,email FROM users WHERE id=?').get(req.user.id), cur = String((req.body && req.body.current) || ''), pw = String((req.body && req.body.next) || '');
+  if (hasOwnPw(req.user.id) && !bcrypt.compareSync(cur, u.hash)) return res.json({ error: 'Your current password is not right.' });
+  if (pw.length < 8) return res.json({ error: 'Password must be at least 8 characters.' });
+  if (pw.length > 200) return res.json({ error: 'That password is too long.' });
+  if (weakPw(pw, u.email)) return res.json({ error: 'That password is too easy to guess. Please pick something less common.' });
+  if (bcrypt.compareSync(pw, u.hash)) return res.json({ error: 'Pick a different password from the old one.' });
+  db.prepare('UPDATE users SET hash=?, gsignup=0 WHERE id=?').run(bcrypt.hashSync(pw, 12), req.user.id);
+  if (req.sid) db.prepare('DELETE FROM sessions WHERE user_id=? AND id<>?').run(req.user.id, sidKey(req.sid)); // other devices must log in again
+  res.json({ ok: true });
 });
 
 function youtubeId(url) {
@@ -4709,10 +4764,10 @@ app.get('/auth/google/callback', async (req, res) => {
     const asLecturer = (req.headers.cookie || '').split(';').map(x => x.trim()).some(x => x === 'gaslecturer=1');
     let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
     if (!u) {
-      const id = insertUser('name,email,hash,verified,is_lecturer', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, asLecturer ? 1 : 0]);
+      const id = insertUser('name,email,hash,verified,is_lecturer,gsignup', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, asLecturer ? 1 : 0, 1]);
       u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
     } else if (!u.verified) { // drop any password someone set before the real owner proved the email
-      db.prepare('UPDATE users SET verified=1, hash=? WHERE id=?').run(rnd(), u.id);
+      db.prepare('UPDATE users SET verified=1, hash=?, gsignup=1 WHERE id=?').run(rnd(), u.id);
       db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
     }
     if (isLaptop(req) && u.role !== 'admin') return res.redirect('/login');
@@ -4742,10 +4797,10 @@ app.post('/auth/google/app', async (req, res) => {
     const email = String(g.email).toLowerCase(), rnd = () => bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 10);
     let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
     if (!u) {
-      const id = insertUser('name,email,hash,verified,is_lecturer', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, req.body.lecturer ? 1 : 0]);
+      const id = insertUser('name,email,hash,verified,is_lecturer,gsignup', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, req.body.lecturer ? 1 : 0, 1]);
       u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
     } else if (!u.verified) {
-      db.prepare('UPDATE users SET verified=1, hash=? WHERE id=?').run(rnd(), u.id);
+      db.prepare('UPDATE users SET verified=1, hash=?, gsignup=1 WHERE id=?').run(rnd(), u.id);
       db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
     }
     startSession(res, u.id);

@@ -56,6 +56,13 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingWebPerm;
     private String answerCall;
+    // App lock
+    private boolean lockOn, locked, authing, skipLock;
+    private int lockMin;
+    private long leftAt;
+    private View overlay;
+    private Runnable pendingOk, pendingFail;
+    private static final int REQ_LOCK = 16;
     private GeolocationPermissions.Callback geoCb;
     private String geoOrigin;
 
@@ -78,6 +85,13 @@ public class MainActivity extends Activity {
         web.setBackgroundColor(0xFF12121C);
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
+        SharedPreferences lp = getSharedPreferences("studieshub", MODE_PRIVATE);
+        lockOn = lp.getBoolean("lock_on", false);
+        lockMin = lp.getInt("lock_min", 0);
+        overlay = buildOverlay();
+        root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        if (lockOn) { locked = true; getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE); }
+        else overlay.setVisibility(View.GONE);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -95,11 +109,26 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
             @JavascriptInterface public void notifications() { runOnUiThread(() -> startNotes()); }
+            @JavascriptInterface public String lockInfo() {
+                android.app.KeyguardManager km = (android.app.KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+                return "{\"on\":" + lockOn + ",\"min\":" + lockMin + ",\"secure\":" + (km != null && km.isDeviceSecure()) + "}";
+            }
+            @JavascriptInterface public void lockEnable(final int minutes) {
+                runOnUiThread(() -> authenticate(() -> { setLock(true, minutes); lockDone("on", true); }, () -> lockDone("on", false)));
+            }
+            @JavascriptInterface public void lockDisable() {
+                runOnUiThread(() -> authenticate(() -> { setLock(false, 0); lockDone("off", true); }, () -> lockDone("off", false)));
+            }
         }, "StudiesApp");
 
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
+                // Never send Google sign-in to Chrome: use the phone's own account picker instead.
+                if ("accounts.google.com".equals(u.getHost()) || (ours(u) && u.getPath() != null && u.getPath().equals("/auth/google"))) {
+                    startGoogle("lecturer".equals(u.getQueryParameter("as")));
+                    return true;
+                }
                 if (ours(u)) return false;
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception e) { }
                 return true;
@@ -127,6 +156,7 @@ public class MainActivity extends Activity {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = cb;
                 try {
+                    skipLock = true;
                     startActivityForResult(p.createIntent(), REQ_FILE);
                 } catch (Exception e) {
                     fileCallback = null;
@@ -241,6 +271,7 @@ public class MainActivity extends Activity {
         if (rid == 0) { googleFail("Google sign-in is not set up in this app yet."); return; }
         GetGoogleIdOption opt = new GetGoogleIdOption.Builder()
             .setFilterByAuthorizedAccounts(false).setAutoSelectEnabled(false).setServerClientId(getString(rid)).build();
+        skipLock = true;
         GetCredentialRequest req = new GetCredentialRequest.Builder().addCredentialOption(opt).build();
         final Handler h = new Handler(Looper.getMainLooper());
         CredentialManager.create(this).getCredentialAsync(this, req, new CancellationSignal(), r -> h.post(r),
@@ -270,6 +301,7 @@ public class MainActivity extends Activity {
         for (String p : need) if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) missing.add(p);
         if (missing.isEmpty()) { req.grant(req.getResources()); return; }
         pendingWebPerm = req;
+        skipLock = true;
         requestPermissions(missing.toArray(new String[0]), REQ_PERM);
     }
 
@@ -297,6 +329,12 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onActivityResult(int code, int result, Intent data) {
+        if (code == REQ_LOCK) {
+            Runnable r = result == RESULT_OK ? pendingOk : pendingFail;
+            pendingOk = null; pendingFail = null;
+            if (r != null) r.run();
+            return;
+        }
         if (code == REQ_FILE && fileCallback != null) {
             Uri[] r = null;
             if (result == RESULT_OK && data != null) {
@@ -317,9 +355,83 @@ public class MainActivity extends Activity {
 
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
     @Override protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); web.onPause(); }
-    @Override protected void onResume() { super.onResume(); web.onResume(); }
+    @Override protected void onResume() { super.onResume(); web.onResume(); skipLock = false; }
+
+    @Override protected void onStop() {
+        super.onStop();
+        if (lockOn && !skipLock) {
+            leftAt = System.currentTimeMillis();
+            if (lockMin == 0) { locked = true; overlay.setVisibility(View.VISIBLE); }
+        }
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        if (lockOn && !skipLock && !locked && leftAt > 0 && System.currentTimeMillis() - leftAt >= lockMin * 60000L) {
+            locked = true; overlay.setVisibility(View.VISIBLE);
+        }
+        if (lockOn && locked && !authing) unlockNow();
+    }
+
+    private View buildOverlay() {
+        android.widget.LinearLayout l = new android.widget.LinearLayout(this);
+        l.setOrientation(android.widget.LinearLayout.VERTICAL);
+        l.setGravity(android.view.Gravity.CENTER);
+        l.setBackgroundColor(0xFF12121C);
+        l.setClickable(true);
+        android.widget.TextView t = new android.widget.TextView(this);
+        t.setText("Studies Hub"); t.setTextColor(0xFFFFFFFF); t.setTextSize(26);
+        android.widget.TextView s = new android.widget.TextView(this);
+        s.setText("The app is locked"); s.setTextColor(0xB3FFFFFF); s.setTextSize(15); s.setPadding(0, 12, 0, 36);
+        android.widget.Button b = new android.widget.Button(this);
+        b.setText("Unlock"); b.setOnClickListener(v -> unlockNow());
+        l.addView(t); l.addView(s); l.addView(b);
+        return l;
+    }
+
+    private void unlockNow() {
+        if (authing) return;
+        authing = true;
+        authenticate(() -> { authing = false; locked = false; overlay.setVisibility(View.GONE); },
+                     () -> { authing = false; });
+    }
+
+    private void setLock(boolean on, int minutes) {
+        lockOn = on; lockMin = minutes; locked = false; leftAt = 0;
+        getSharedPreferences("studieshub", MODE_PRIVATE).edit().putBoolean("lock_on", on).putInt("lock_min", minutes).apply();
+        if (on) getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        else getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        overlay.setVisibility(View.GONE);
+    }
+
+    private void lockDone(String kind, boolean ok) {
+        web.evaluateJavascript("window.studiesLockDone&&studiesLockDone('" + kind + "'," + ok + ")", null);
+    }
+
+    /** The phone's own lock: fingerprint / face, or the phone PIN, pattern or password. */
+    private void authenticate(final Runnable ok, final Runnable fail) {
+        android.app.KeyguardManager km = (android.app.KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        if (km == null || !km.isDeviceSecure()) { fail.run(); web.evaluateJavascript("alert('Set a screen lock (PIN, pattern or fingerprint) in your phone settings first.')", null); return; }
+        skipLock = true;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.hardware.biometrics.BiometricPrompt bp = new android.hardware.biometrics.BiometricPrompt.Builder(this)
+                .setTitle("Studies Hub").setSubtitle("Confirm it is you")
+                .setAllowedAuthenticators(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK | android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                .build();
+            bp.authenticate(new CancellationSignal(), getMainExecutor(), new android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                @Override public void onAuthenticationSucceeded(android.hardware.biometrics.BiometricPrompt.AuthenticationResult r) { ok.run(); }
+                @Override public void onAuthenticationError(int code, CharSequence msg) { fail.run(); }
+            });
+        } else {
+            Intent i = km.createConfirmDeviceCredentialIntent("Studies Hub", "Confirm it is you");
+            if (i == null) { ok.run(); return; }
+            pendingOk = ok; pendingFail = fail;
+            startActivityForResult(i, REQ_LOCK);
+        }
+    }
 
     @Override public void onBackPressed() {
+        if (locked) { moveTaskToBack(true); return; }
         if (web.canGoBack()) web.goBack(); else super.onBackPressed();
     }
 }
