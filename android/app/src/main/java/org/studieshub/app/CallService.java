@@ -39,7 +39,7 @@ public class CallService extends FirebaseMessagingService {
         if (nm.getNotificationChannel(CH_CALLS) == null) {
             NotificationChannel ch = new NotificationChannel(CH_CALLS, "Incoming calls", NotificationManager.IMPORTANCE_HIGH);
             Uri ring = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
-            ch.setSound(ring, new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_SONIC).build());
+            ch.setSound(ring, new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build());
             ch.enableVibration(true);
             ch.setVibrationPattern(new long[]{0, 800, 600, 800, 600, 800});
             ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
