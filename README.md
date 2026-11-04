@@ -342,3 +342,7 @@ On a phone or tablet the log-in page also has **Log in with a QR code**. The dev
 - GitHub builds it (`.github/workflows/android-apk.yml`) and publishes `StudiesHub.apk` at https://github.com/Andre3456-del/studies/releases/download/app-latest/StudiesHub.apk
 - Install on a phone: download the file, open it, allow "install unknown apps" when asked.
 - The signing key in `android/studieshub.keystore` is for direct installs only. Before any Play Store upload, make a private key and keep it out of the repo.
+
+### Ringing calls and notifications when the app is closed
+
+`fcm.js` sends calls and notifications to the Android app through Firebase Cloud Messaging. Set the Railway variable `FIREBASE_SERVICE_ACCOUNT` to the Firebase service-account key JSON (pasted as is, or base64). Without it nothing changes. The app tells the site its phone ID through a cookie called `fcm`; logging out forgets it. `android/app/google-services.json` is Firebase's public app config (not a secret).

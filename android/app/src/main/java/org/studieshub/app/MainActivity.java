@@ -40,6 +40,7 @@ public class MainActivity extends Activity {
     private View splash;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingWebPerm;
+    private String answerCall;
     private GeolocationPermissions.Callback geoCb;
     private String geoOrigin;
 
@@ -85,6 +86,10 @@ public class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView v, String url) {
                 CookieManager.getInstance().flush();
+                if (answerCall != null && ours(Uri.parse(url))) {
+                    String id = answerCall; answerCall = null;
+                    v.evaluateJavascript("fetch('/api/calls/" + id + "/accept',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(r){return r.json()}).then(function(j){if(j&&j.url)location.href=j.url}).catch(function(){})", null);
+                }
             }
             @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
                 if (r.isForMainFrame()) {
@@ -148,10 +153,37 @@ public class MainActivity extends Activity {
             requestPermissions(want.toArray(new String[0]), REQ_FIRST);
         }
 
+        CallService.channels(this);
+        com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken()
+            .addOnSuccessListener(t -> CallService.rememberToken(this, t));
+        String saved = sp.getString("fcm", null);
+        if (saved != null) CallService.rememberToken(this, saved);
+
         String start = HOME;
         Intent in = getIntent();
         if (in != null && in.getData() != null && ours(in.getData())) start = in.getData().toString();
-        if (b != null) web.restoreState(b); else web.loadUrl(start);
+        start = fromIntent(in, start);
+        if (b != null && answerCall == null) web.restoreState(b); else web.loadUrl(start);
+    }
+
+    /** Opened from a ringing call or a notification: work out where to go. */
+    private String fromIntent(Intent in, String dflt) {
+        if (in == null) return dflt;
+        String callId = in.getStringExtra("callId");
+        if (callId != null) {
+            ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(callId.hashCode());
+            if (in.getBooleanExtra("answer", false)) answerCall = callId;
+            return HOME + "chat";
+        }
+        String u = in.getStringExtra("url");
+        if (u != null && u.startsWith("/")) return "https://studieshub.org" + u;
+        return dflt;
+    }
+
+    @Override protected void onNewIntent(Intent in) {
+        super.onNewIntent(in);
+        setIntent(in);
+        web.loadUrl(fromIntent(in, HOME));
     }
 
     private void askForWebPermission(PermissionRequest req) {
@@ -169,6 +201,11 @@ public class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
         super.onRequestPermissionsResult(code, perms, res);
+        if (code == REQ_FIRST) {
+            // So the phone doesn't put the app to sleep and miss calls.
+            try { startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName()))); } catch (Exception e) { }
+            return;
+        }
         if (code == REQ_GEO && geoCb != null) {
             boolean ok = false;
             for (int r : res) if (r == PackageManager.PERMISSION_GRANTED) ok = true;

@@ -357,12 +357,14 @@ function emailEveryone(subject, heading, message) {
 const MAINT_START = 'Studies Hub is being upgraded right now. The site may be slow or unavailable for a few minutes. Please bear with us. We will email you again the moment we are back.';
 const MAINT_BACK = 'We are back in business. Thank you for your patience. Everything is running normally again.';
 function maintenanceBack() { setSecret('maintenance_since', null); return emailEveryone('Studies Hub is back', 'We are back', MAINT_BACK); }
+const fcm = require('./fcm').register(db);
 // Send a notification to these people (all their devices). Never throws and is never awaited by callers.
 function notify(userIds, payload) {
   const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
   if (!ids.length) return Promise.resolve();
   const p = { icon: '/icon-192.png', ...payload, body: String(payload.body || '').slice(0, 140), title: String(payload.title || 'Studies Hub').slice(0, 80) };
   try { emailAlso(ids, p); } catch (e) { console.error('Email alert failed:', e.message); }
+  try { fcm.send(ids, p).catch(e => console.error('FCM failed:', e.message)); } catch (e) { /* app notifications are best effort */ }
   const subs = db.prepare(`SELECT * FROM push_subscriptions WHERE user_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
   return Promise.allSettled(subs.map(sub => pushTo(sub, p))).catch(() => {});
 }
@@ -648,6 +650,8 @@ app.use((req, res, next) => {
     req.user.last_seen = Date.now();
     markDelivered(req.user.id);
   }
+  // The Android app puts its phone ID in a cookie, so we know where to ring this person.
+  if (req.user) { const f = /(?:^|;\s*)fcm=([\w:.\-]+)/.exec(req.headers.cookie || ''); if (f) { try { fcm.remember(f[1], req.user.id); } catch (e) { /* ignore */ } } }
   next();
 });
 
@@ -4759,6 +4763,7 @@ app.post('/api/chat', async (req, res) => {
 });
 
 app.post('/logout', (req, res) => {
+  { const f = /(?:^|;\s*)fcm=([\w:.\-]+)/.exec(req.headers.cookie || ''); if (f) fcm.forget(f[1]); } // stop ringing this phone for the person who just left
   if (req.sid) db.prepare('DELETE FROM sessions WHERE id=?').run(sidKey(req.sid));
   res.setHeader('Clear-Site-Data', '"cache"'); // nothing from this account stays readable in the browser on a shared phone
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
