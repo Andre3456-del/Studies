@@ -125,6 +125,13 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
             @JavascriptInterface public void notifications() { runOnUiThread(() -> startNotes()); }
+            @JavascriptInterface public boolean presenceOn() { return presenceWanted(); }
+            @JavascriptInterface public void presence(final boolean on) {
+                runOnUiThread(() -> {
+                    getSharedPreferences("studieshub", MODE_PRIVATE).edit().putBoolean("presence", on).apply();
+                    if (on) startPresence(); else stopService(new Intent(MainActivity.this, PresenceService.class));
+                });
+            }
             @JavascriptInterface public void shareStart() {
                 runOnUiThread(() -> {
                     try {
@@ -164,6 +171,8 @@ public class MainActivity extends Activity {
             @Override public void onPageFinished(WebView v, String url) {
                 CookieManager.getInstance().flush();
                 inCall = url != null && url.contains("studieshub.org/call/");
+                String ck = CookieManager.getInstance().getCookie("https://studieshub.org");
+                if (ck != null && ck.contains("sid=")) startPresence();
                 if (answerCall != null && ours(Uri.parse(url))) {
                     String id = answerCall; answerCall = null;
                     v.evaluateJavascript("fetch('/api/calls/" + id + "/accept',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(r){return r.json()}).then(function(j){if(j&&j.url)location.href=j.url}).catch(function(){})", null);
@@ -285,6 +294,17 @@ public class MainActivity extends Activity {
         if (frameBusy) return;
         frameBusy = true;
         web.post(() -> web.evaluateJavascript("window.__scrFrame&&__scrFrame('" + dataUrl + "')", v -> frameBusy = false));
+    }
+
+    private boolean presenceWanted() { return getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("presence", true); }
+
+    /** Starts the "show me online" helper when the person is logged in and has not turned it off. */
+    private void startPresence() {
+        try {
+            if (!presenceWanted() || PresenceService.running) return;
+            Intent s = new Intent(this, PresenceService.class);
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(s); else startService(s);
+        } catch (Throwable t) { /* ignore */ }
     }
 
     private void noteResult(boolean ok) { web.evaluateJavascript("window.studiesNote&&studiesNote(" + ok + ")", null); }

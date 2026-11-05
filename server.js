@@ -636,6 +636,8 @@ function startSession(res, userId) {
 }
 
 app.get('/health', (req, res) => res.type('text').send('ok'));
+// The Android app calls this every ~45 seconds while the phone has internet; the request itself marks the person online (see the presence stamp below).
+app.get('/api/ping', (req, res) => { if (!req.user) return res.sendStatus(401); res.set('Cache-Control', 'no-store').sendStatus(204); });
 
 app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
@@ -4050,7 +4052,9 @@ app.get('/settings/active-status', (req, res) => {
   const hidden = !!db.prepare('SELECT hide_active FROM users WHERE id=?').get(req.user.id).hide_active;
   res.send(layout('Active status', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Active status</h1>
 <p class="mut">When this is on, friends can see when you're online in chat. Turn it off to always appear offline to them.</p>
-<form method="post" action="/settings/active-status" class="card row" style="align-items:center"><div style="flex:1"><b>Show when I'm online</b></div><button name="hide" value="${hidden ? '0' : '1'}">${hidden ? 'Turn on' : 'Turn off'}</button></form>`, req.user));
+<form method="post" action="/settings/active-status" class="card row" style="align-items:center"><div style="flex:1"><b>Show when I'm online</b></div><button name="hide" value="${hidden ? '0' : '1'}">${hidden ? 'Turn on' : 'Turn off'}</button></form>
+<div class="card row" id="bgCard" hidden style="align-items:center;gap:14px"><style>.bgsw{appearance:none;-webkit-appearance:none;flex:none;width:54px;height:32px;border-radius:16px;background:var(--line,#3a3a4a);position:relative;transition:background .2s;border:0;padding:0;margin:0;cursor:pointer}.bgsw::before{content:'';position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .2s}.bgsw:checked{background:#22c55e}.bgsw:checked::before{transform:translateX(22px)}</style><div style="flex:1"><b>Stay online when the app is closed</b><br><span class="mut" style="font-size:13px">Friends see you as online whenever your phone has internet. Android shows a small notification while this is on.</span></div><input type="checkbox" role="switch" id="bgSw" class="bgsw" aria-label="Stay online when the app is closed"></div>
+<script>(function(){var A=window.StudiesApp;if(!A||!A.presenceOn)return;var c=document.getElementById('bgCard'),s=document.getElementById('bgSw');c.hidden=false;s.checked=!!A.presenceOn();s.onchange=function(){A.presence(s.checked)}})()</script>`, req.user));
 });
 app.post('/settings/active-status', (req, res) => {
   if (!req.user) return res.sendStatus(401);
