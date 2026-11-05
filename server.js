@@ -1661,8 +1661,9 @@ const navItems = (user, badge = 0, mode = '') => user ? (user.role === 'uniadmin
   { href: '/lecturer/admin?tab=uploads', icon: '📄', label: 'Uploads' },
   { href: '/dashboard', icon: '⬅️', label: user.role === 'uniadmin' ? 'Back to university home' : 'Back to student portal' },
 ] : user.is_lecturer ? [
-  { href: '/lecturer', icon: '🎓', label: 'My courses' },
-  { href: '/settings/profile', icon: '👤', label: 'Lecturer profile' },
+  { href: '/lecturer', icon: '🏠', label: 'Home' },
+  { href: '/lecturer/course', icon: '📚', label: 'Courses' },
+  { href: '/lecturer/uploads', icon: '📄', label: 'Uploaded documents' },
 ] : [
   { href: '/dashboard', icon: '📊', label: 'Dashboard' },
   { href: '/news', icon: '📰', label: 'News' },
@@ -1692,6 +1693,7 @@ const ICON_PATHS = {
   signup: '<circle cx="10" cy="8" r="3.5"/><path d="M3 20c0-3.5 3-6 7-6s7 2.5 7 6"/><path d="M19 8v6M16 11h6"/>',
   back: '<path d="M15 5l-7 7 7 7"/>',
   profile: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/>',
+  docs: '<path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
   book: '<path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v16H5.5C4.7 20 4 19.3 4 18.5z"/><path d="M20 5.5c0-.8-.7-1.5-1.5-1.5H13v16h5.5c.8 0 1.5-.7 1.5-1.5z"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
 };
@@ -1711,6 +1713,8 @@ const iconKey = i => {
   if (h.startsWith('/uni')) return 'uni';
   if (h.startsWith('/lecturer/admin') || h.startsWith('/admin')) return 'admin';
   if (h.startsWith('/lecturer/portal')) return 'cap';
+  if (h === '/lecturer') return 'home';
+  if (h.startsWith('/lecturer/uploads')) return 'docs';
   if (h.startsWith('/lecturer')) return 'book';
   if (h.startsWith('/settings/profile')) return 'profile';
   if (h.startsWith('/settings')) return 'gear';
@@ -3879,9 +3883,70 @@ ${semesterField('')}
     return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
 <div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
   }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
-  res.send(layout('My courses', `<h1>My courses</h1><p class="mut" style="margin-top:0">${esc(req.user.university)}${req.user.lecturer_reg_no ? ' &middot; ' + esc(req.user.lecturer_reg_no) : ''}</p>
+  const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
+  const first = esc(String(req.user.name || '').replace(/^(dr|prof|mr|mrs|ms|engr)\.?\s+/i, '').split(' ')[0] || 'Lecturer');
+  const recent = myPages.slice(0, 4).map(p => { const [icon, label] = KIND_META[p.kind] || KIND_META.html; return `<a class="lcc" href="/p/${p.slug}"><b>${icon} ${esc(p.title)}</b><span>${esc(p.course_name || '')} &middot; ${label}</span></a>`; }).join('') || '<p class="mut">Nothing uploaded yet. Tap "Upload a document" to start.</p>';
+  res.send(layout('Home', `<style>.lhx{background:linear-gradient(135deg,var(--accent,#6d5efc),#22c1c3);color:#fff;border-radius:20px;padding:22px 20px;margin:4px 0 16px}.lhx h1{margin:0 0 4px;font-size:24px;color:#fff}.lhx p{margin:0;opacity:.9}.lst{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}.lst div{background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:14px 8px;text-align:center}.lst b{display:block;font-size:24px}.lst span{font-size:12px;opacity:.7}.lqa{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}.lqa a{display:block;text-decoration:none;color:inherit;background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:16px 14px;font-weight:600}.lqa a small{display:block;font-weight:400;opacity:.7;margin-top:4px}.lcc{display:block;text-decoration:none;color:inherit;background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:16px;margin-bottom:10px}.lcc b{display:block}.lcc span{font-size:13px;opacity:.7}</style><div class="lhx"><h1>${greet}, ${first} 👋</h1><p>${esc(req.user.university)}</p></div>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-<div>${courseLinks}</div>
+<div class="lst"><div><b>${myCourses.length}</b><span>Courses</span></div><div><b>${myPages.length}</b><span>Uploads</span></div><div><b>${myPages.filter(p => p.kind === 'video').length}</b><span>Videos</span></div></div>
+<div class="lqa"><a href="/lecturer/uploads#upload">⬆️ Upload a document<small>Share with your students</small></a><a href="/lecturer/course">📚 My courses<small>See what others posted</small></a></div>
+<h3>Recently uploaded</h3>${recent}`, req.user));
+});
+app.get('/lecturer/course', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/lecturer');
+  if (!req.user.is_lecturer) return res.redirect(canLecturerAdmin(req.user) ? '/lecturer/admin' : '/dashboard');
+  if (!profileComplete(req.user)) return res.redirect('/lecturer/welcome');
+  if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user));
+  if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
+  const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
+  const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
+  const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
+  const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
+<select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
+<div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
+<div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
+<label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
+<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
+${semesterField('')}
+<button>Publish -- goes live immediately</button></form>
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField');function sync(){var v=k.value==='video';lv.style.display=v?'':'none';fi.required=!v;fi.accept=v?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+  const pagesList = myPages.map(p => {
+    const [icon, label] = KIND_META[p.kind] || KIND_META.html;
+    return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+<div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
+  }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
+  const counts = {};
+  db.prepare('SELECT course_id, COUNT(*) n FROM pages WHERE author_id=? GROUP BY course_id').all(req.user.id).forEach(r => counts[r.course_id] = r.n);
+  const cards = myCourses.map(c => `<a class="lcc" href="/lecturer/course/${c.id}"><b>📚 ${esc(c.name)}</b><span>${counts[c.id] || 0} uploaded by you</span></a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
+  res.send(layout('Courses', `<style>.lhx{background:linear-gradient(135deg,var(--accent,#6d5efc),#22c1c3);color:#fff;border-radius:20px;padding:22px 20px;margin:4px 0 16px}.lhx h1{margin:0 0 4px;font-size:24px;color:#fff}.lhx p{margin:0;opacity:.9}.lst{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}.lst div{background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:14px 8px;text-align:center}.lst b{display:block;font-size:24px}.lst span{font-size:12px;opacity:.7}.lqa{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}.lqa a{display:block;text-decoration:none;color:inherit;background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:16px 14px;font-weight:600}.lqa a small{display:block;font-weight:400;opacity:.7;margin-top:4px}.lcc{display:block;text-decoration:none;color:inherit;background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:16px;margin-bottom:10px}.lcc b{display:block}.lcc span{font-size:13px;opacity:.7}</style><h1>Courses</h1>${cards}`, req.user));
+});
+app.get('/lecturer/uploads', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/lecturer');
+  if (!req.user.is_lecturer) return res.redirect(canLecturerAdmin(req.user) ? '/lecturer/admin' : '/dashboard');
+  if (!profileComplete(req.user)) return res.redirect('/lecturer/welcome');
+  if (req.user.lecturer_status === 'pending') return res.send(layout('My courses', `<h1>My courses</h1><p class="pill pending">Waiting for a full admin to verify you teach at ${esc(req.user.university)}</p><p class="mut">You'll be able to upload once that's done.</p>`, req.user));
+  if (req.user.lecturer_status === 'rejected') return res.send(layout('My courses', `<h1>My courses</h1><p class="err">This wasn't approved.</p><p class="mut"><a href="/lecturer/welcome">Edit your details and try again &rarr;</a></p>`, req.user));
+  const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
+  const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
+  const _unused = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
+  const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
+<select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
+<div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
+<div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
+<label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
+<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
+${semesterField('')}
+<button>Publish -- goes live immediately</button></form>
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField');function sync(){var v=k.value==='video';lv.style.display=v?'':'none';fi.required=!v;fi.accept=v?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+  const pagesList = myPages.map(p => {
+    const [icon, label] = KIND_META[p.kind] || KIND_META.html;
+    return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+<div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
+  }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
+  res.send(layout('Uploaded documents', `<h1>Uploaded documents</h1>
+${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 ${uploadForm}<h3>Your uploads (${myPages.length})</h3>${pagesList}`, req.user));
 });
 app.post('/lecturer/upload', upload.single('file'), (req, res) => {
@@ -3911,13 +3976,13 @@ app.post('/lecturer/upload', upload.single('file'), (req, res) => {
   }
   applySemester({ slug }, req.body.semester);
   announceUpload({ title: title || base, slug, paid: 0, ...aud });
-  res.redirect('/lecturer?msg=' + encodeURIComponent(`Published at /p/${slug}`));
+  res.redirect('/lecturer/uploads?msg=' + encodeURIComponent(`Published at /p/${slug}`));
 });
 app.get('/lecturer/pages/:id/edit', (req, res) => {
   if (!req.user || !req.user.is_lecturer) return res.redirect('/login');
   const p = db.prepare('SELECT * FROM pages WHERE id=? AND author_id=?').get(req.params.id, req.user.id);
-  if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
-  res.send(layout('Edit upload', `<p class="mut"><a href="/lecturer">&larr; Back</a></p><h1 style="font-size:24px">${esc(p.title)}</h1>
+  if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer/uploads">Back</a></p>', req.user));
+  res.send(layout('Edit upload', `<p class="mut"><a href="/lecturer/uploads">&larr; Back</a></p><h1 style="font-size:24px">${esc(p.title)}</h1>
 <form class="card" method="post" action="/lecturer/pages/${p.id}/edit" enctype="multipart/form-data">
 <input name="title" value="${esc(p.title)}" required maxlength="140">
 <label class="mut">Replace the file (optional -- leave blank to keep the current one)</label>
@@ -3931,7 +3996,7 @@ ${semesterField(p.semester)}
 app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
   if (!req.user || !req.user.is_lecturer) return res.redirect('/login');
   const p = db.prepare('SELECT * FROM pages WHERE id=? AND author_id=?').get(req.params.id, req.user.id);
-  if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
+  if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer/uploads">Back</a></p>', req.user));
   const title = (req.body.title || '').trim() || p.title;
   const aud = readAudience(req.body, title);
   const newLink = p.kind === 'video' && !req.file ? youtubeId(req.body.video_url) : null;
@@ -3946,14 +4011,14 @@ app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
     db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
   }
   applySemester({ id: p.id }, req.body.semester);
-  res.redirect('/lecturer?msg=' + encodeURIComponent('Saved.'));
+  res.redirect('/lecturer/uploads?msg=' + encodeURIComponent('Saved.'));
 });
 app.post('/lecturer/pages/:id/delete', (req, res) => {
   if (!req.user || !req.user.is_lecturer) return res.redirect('/login');
   const p = db.prepare('SELECT id FROM pages WHERE id=? AND author_id=?').get(req.params.id, req.user.id);
   if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer">Back</a></p>', req.user));
   db.prepare('DELETE FROM pages WHERE id=?').run(p.id);
-  res.redirect('/lecturer?msg=' + encodeURIComponent('Deleted.'));
+  res.redirect('/lecturer/uploads?msg=' + encodeURIComponent('Deleted.'));
 });
 // Browse a course's uploads folder-style: university, then lecturer, then their files -- so one lecturer
 // never has to wade through a long flat list to find a colleague's (or another institution's) material.
