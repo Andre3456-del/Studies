@@ -1697,6 +1697,55 @@ const ICON_PATHS = {
   book: '<path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v16H5.5C4.7 20 4 19.3 4 18.5z"/><path d="M20 5.5c0-.8-.7-1.5-1.5-1.5H13v16h5.5c.8 0 1.5-.7 1.5-1.5z"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
 };
+const PREVIEW_JS = `(function(){
+var css='#shpv{position:fixed;inset:0;z-index:2147483000;background:#0b0b10;color:#fff;display:flex;flex-direction:column;font:16px system-ui,sans-serif}#shpv .h{display:flex;align-items:center;gap:10px;padding:12px 14px;padding-top:calc(12px + env(safe-area-inset-top,0px))}#shpv .h button{background:none;border:0;color:#fff;font-size:26px;line-height:1;cursor:pointer;padding:0 6px}#shpv .h b{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}#shpv .m{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:10px}#shpv .m img,#shpv .m video{max-width:100%;max-height:100%;border-radius:10px;object-fit:contain}#shpv .doc{text-align:center;padding:30px 24px;border-radius:20px;background:#1b1b26;max-width:320px}#shpv .doc i{display:block;font-style:normal;font-size:72px}#shpv .doc em{display:inline-block;margin-top:8px;padding:2px 10px;border-radius:8px;background:#e5484d;font-style:normal;font-weight:700}#shpv .doc span{display:block;margin-top:10px;opacity:.7;font-size:14px;word-break:break-all}#shpv .f{display:flex;gap:10px;align-items:flex-end;padding:10px 12px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px))}#shpv .f textarea{flex:1;background:#262633;color:#fff;border:0;border-radius:22px;padding:11px 16px;font:inherit;resize:none;max-height:110px;outline:0}#shpv .f button{width:50px;height:50px;border-radius:50%;border:0;background:var(--accent,#6d5efc);color:#fff;font-size:22px;cursor:pointer;flex:none}.bgrow{border:1px solid rgba(127,127,127,.3);border-radius:14px;padding:12px 14px;margin:8px 0}.bgrow .bt{height:6px;border-radius:4px;background:rgba(127,127,127,.25);margin-top:8px;overflow:hidden}.bgrow .bt i{display:block;height:100%;width:0;background:var(--accent,#6d5efc);transition:width .2s}';
+var st=document.createElement('style');st.textContent=css;document.head.appendChild(st);
+function sz(n){return n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB'}
+window.shPreview=function(files,opts,cb){
+  files=Array.prototype.slice.call(files||[]);if(!files.length)return;opts=opts||{};var i=0,url=null;
+  var o=document.createElement('div');o.id='shpv';
+  o.innerHTML='<div class="h"><button type="button" data-x aria-label="Close">&times;</button><b></b><button type="button" data-p aria-label="Previous">&lsaquo;</button><button type="button" data-n aria-label="Next">&rsaquo;</button></div><div class="m"></div><div class="f">'+(opts.caption?'<textarea rows="1" maxlength="1000" placeholder="Add a caption&hellip;"></textarea>':'<div style="flex:1"></div>')+'<button type="button" data-s aria-label="Send">&#10148;</button></div>';
+  document.body.appendChild(o);
+  var m=o.querySelector('.m'),nm=o.querySelector('b');
+  function show(){
+    if(url){URL.revokeObjectURL(url);url=null}
+    var f=files[i];nm.textContent=f.name+(files.length>1?'  ('+(i+1)+'/'+files.length+')':'');
+    o.querySelector('[data-p]').style.display=o.querySelector('[data-n]').style.display=files.length>1?'':'none';
+    m.innerHTML='';var t=f.type||'';
+    if(t.indexOf('image/')===0){url=URL.createObjectURL(f);var im=new Image();im.src=url;m.appendChild(im)}
+    else if(t.indexOf('video/')===0){url=URL.createObjectURL(f);var v=document.createElement('video');v.src=url;v.controls=true;v.muted=true;v.playsInline=true;m.appendChild(v)}
+    else{var e=(f.name.split('.').pop()||'file').slice(0,5).toUpperCase(),d=document.createElement('div');d.className='doc';d.innerHTML='<i>&#128196;</i><em></em><span></span>';d.querySelector('em').textContent=e;d.querySelector('span').textContent=f.name+' \\u00b7 '+sz(f.size);m.appendChild(d)}
+  }
+  function close(){if(url)URL.revokeObjectURL(url);if(o.parentNode)o.parentNode.removeChild(o)}
+  o.addEventListener('click',function(e){var b=e.target.closest?e.target.closest('button'):null;if(!b)return;
+    if(b.hasAttribute('data-x'))close();
+    else if(b.hasAttribute('data-p')){i=(i+files.length-1)%files.length;show()}
+    else if(b.hasAttribute('data-n')){i=(i+1)%files.length;show()}
+    else if(b.hasAttribute('data-s')){var ta=o.querySelector('textarea'),cap=ta?ta.value.trim():'';close();cb(files,cap)}});
+  show();
+};
+function bind(form){
+  form.addEventListener('submit',function(e){
+    var fi=form.querySelector('input[type=file]'),f=fi&&fi.files&&fi.files[0];if(!f||form.__sent)return;
+    e.preventDefault();
+    shPreview([f],{},function(){
+      form.__sent=1;
+      var list=document.querySelector(form.getAttribute('data-bglist')||'#upList'),row=document.createElement('div');row.className='bgrow';
+      var ti=form.querySelector('input[name=title]');
+      row.innerHTML='<b></b><div class="mut" style="font-size:13px">Uploading&hellip; 0%</div><div class="bt"><i></i></div>';
+      row.querySelector('b').textContent=(ti&&ti.value.trim())||f.name;
+      if(list)list.insertBefore(row,list.firstChild);else form.parentNode.insertBefore(row,form.nextSibling);
+      var lbl=row.querySelector('.mut'),bar=row.querySelector('i');
+      var x=new XMLHttpRequest();x.open('POST',form.getAttribute('action')||location.href);
+      x.upload.onprogress=function(ev){if(ev.lengthComputable){var p=Math.round(ev.loaded*100/ev.total);lbl.textContent='Uploading\\u2026 '+p+'%';bar.style.width=p+'%'}};
+      x.onload=function(){if(x.status>=200&&x.status<400){lbl.textContent='Done';bar.style.width='100%';location.href=x.responseURL||location.href}else{row.remove();form.__sent=0;alert('That upload did not go through. Please try again.')}};
+      x.onerror=function(){row.remove();form.__sent=0;alert('That upload did not go through. Check your connection and try again.')};
+      x.send(new FormData(form));
+    });
+  });
+}
+Array.prototype.forEach.call(document.querySelectorAll('form[data-bgup]'),bind);
+})();`;
 const ico = k => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[k] || ICON_PATHS.dot}</svg>`;
 const iconKey = i => {
   const h = String(i.href || ''), l = String(i.label || '').toLowerCase();
@@ -1883,7 +1932,7 @@ ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><sc
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
 <script>(function(){if(!window.StudiesApp)return;function fail(m){var b=document.querySelector('a.gbtn');if(b)b.style.opacity='';if(m)alert(m)}window.studiesGoogleFail=fail;window.studiesGoogle=function(t,l){fetch('/auth/google/app',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:t,lecturer:!!l})}).then(function(r){return r.json()}).then(function(j){if(j.ok)location.href=j.url||'/';else fail(j.error)}).catch(function(){fail('No connection. Please try again.')})};document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a.gbtn');if(!a)return;e.preventDefault();a.style.opacity='.6';StudiesApp.google(/as=lecturer/.test(a.getAttribute('href')||''))},true)})()</script>
 <script>(function(){window.studiesNote=function(ok){alert(ok?'Notifications are on for this device.':'Notifications are off. Turn them on in your phone settings for Studies Hub.')};if(window.StudiesApp)return;var native=window.alert;window.alert=function(m){try{var o=document.createElement('div');o.setAttribute('role','alertdialog');o.style.cssText='position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';var b=document.createElement('div');b.style.cssText='max-width:420px;width:100%;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:16px;padding:20px;font:16px/1.45 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.45)';var t=document.createElement('div');t.textContent=String(m);t.style.whiteSpace='pre-wrap';var k=document.createElement('button');k.type='button';k.textContent='OK';k.style.cssText='margin-top:16px;float:right;border:0;border-radius:10px;padding:10px 22px;background:#6c63ff;color:#fff;font:600 15px system-ui,sans-serif;cursor:pointer';k.onclick=function(){o.remove()};b.appendChild(t);b.appendChild(k);o.appendChild(b);document.body.appendChild(o);k.focus()}catch(e){native.call(window,m)}}})()</script>
-${user ? `<script>${SEARCHSEL_JS}</script>` : ''}
+${user ? `<script>${SEARCHSEL_JS}</script><script>${PREVIEW_JS}</script>` : ''}
 ${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
 <script>(function(){try{var ua=navigator.userAgent||'';if(!/Android/i.test(ua)||/StudiesHubApp/.test(ua)||window.top!==window.self)return;if(matchMedia('(display-mode: standalone)').matches)return;if(location.pathname==='/app')return;if(sessionStorage.getItem('appAsk'))return;sessionStorage.setItem('appAsk','1');var t=+localStorage.getItem('appAskAt')||0;if(Date.now()-t<3600000)return;if(Math.random()>.7)return;var go='intent://studieshub.org'+location.pathname+location.search+'#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/app')+';end';function show(inst){var b=document.createElement('div');b.setAttribute('role','dialog');b.setAttribute('aria-label','Studies Hub app');b.style.cssText='position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:18px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;gap:12px;align-items:center;font:15px system-ui,sans-serif';b.innerHTML='<img src="/icon-192.png" alt="" width="44" height="44" style="border-radius:11px"><div style="flex:1"><b>'+(inst?'Continue in the Studies Hub app':'Download the Studies Hub app')+'</b><div style="opacity:.7;font-size:13px">'+(inst?'Open this page in the app.':'Opens full screen, like a real app.')+'</div></div><a href="'+go+'" style="background:#6c63ff;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:600">'+(inst?'Open':'Get')+'</a><button type="button" aria-label="Close" style="background:none;border:0;color:inherit;font-size:24px;line-height:1;padding:4px 6px;cursor:pointer">&times;</button>';b.querySelector('button').onclick=function(){b.remove();try{localStorage.setItem('appAskAt',Date.now())}catch(e){}};document.body.appendChild(b)}var p=navigator.getInstalledRelatedApps?navigator.getInstalledRelatedApps():Promise.resolve([]);p.then(function(a){return a&&a.length}).catch(function(){return 0}).then(function(i){setTimeout(function(){show(!!i)},3500)})}catch(e){}})()</script>
 </body></html>`;
@@ -3039,7 +3088,7 @@ thread.addEventListener('click',function(e){
   if(/mc-state-(idle|err)/.test(c.className))mDownload(c)});
 Array.prototype.forEach.call(thread.querySelectorAll('.mcard'),mInit);
 Array.prototype.forEach.call(thread.querySelectorAll('.file-chip.pending[data-fid]'),function(n){pend[n.getAttribute('data-fid')]=1});
-function sendFile(f){
+function sendFile(f,cap){
   if(f.size>200*1024*1024){alert('That file is too big (200 MB is the limit).');return}
   var kind=f.type.indexOf('image/')===0?'image':f.type.indexOf('video/')===0?'video':'file',tmp='u'+Date.now()+Math.floor(Math.random()*1000),up={xhr:null,dead:false,id:0};
   startingUps++;ups[tmp]=up;
@@ -3052,7 +3101,8 @@ function sendFile(f){
     delete ups[id];markDl(id);
     if(c){c.setAttribute('data-size',f.size);mShow(c,URL.createObjectURL(f))}
     else{var fc=b.querySelector('.file-chip');if(fc)fc.parentNode.replaceChild(fileChip({id:id,name:f.name,size:f.size}),fc)}
-    updateTick(id,'sent')}
+    updateTick(id,'sent');
+    if(cap){var cb2=Object.assign({body:cap,reply_to_id:null},convType==='group'?{group:convId}:{to:convId});fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cb2)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:cap,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}}).catch(function(){})}}
   var sb=Object.assign({name:f.name,size:f.size,mime:f.type||'application/octet-stream'},convType==='group'?{group:convId}:{to:convId});
   fetch('/api/messages/attachment/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sb)}).then(function(r){return r.json()}).then(function(j){
     startingUps--;if(up.dead)return;
@@ -3067,7 +3117,7 @@ function sendFile(f){
     x.send(fd)
   }).catch(function(){startingUps--;if(up.dead)return;alert('Could not send that file. Check your connection and try again.');clean()})}
 var attachInput=document.getElementById('fileInput');
-attachInput.addEventListener('change',function(){var fs=Array.prototype.slice.call(attachInput.files||[]);attachInput.value='';fs.slice(0,10).forEach(sendFile)});
+attachInput.addEventListener('change',function(){var fs=Array.prototype.slice.call(attachInput.files||[]);attachInput.value='';fs=fs.slice(0,10);if(!fs.length)return;if(window.shPreview)shPreview(fs,{caption:true},function(list,cap){list.forEach(function(f,k){sendFile(f,k===0?cap:'')})});else fs.forEach(function(f){sendFile(f)})});
 thread.addEventListener('click',function(e){
   var save=e.target.closest?e.target.closest('[data-save]'):null;
   if(save){fetch('/api/stickers/from-message/'+save.getAttribute('data-save'),{method:'POST'}).then(function(r){return r.json()}).then(function(j){save.textContent=(j&&j.ok)?'✓ Saved to your stickers':((j&&j.error)||'Could not save');save.disabled=true}).catch(function(){save.textContent='Could not save'});return}
@@ -3868,7 +3918,7 @@ app.get('/lecturer', (req, res) => {
   const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
   const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
   const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
-  const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
+  const uploadForm = `<form class="card" id="upload" data-bgup method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
@@ -3901,7 +3951,7 @@ app.get('/lecturer/course', (req, res) => {
   const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
   const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
   const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
-  const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
+  const uploadForm = `<form class="card" id="upload" data-bgup method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
@@ -3930,7 +3980,7 @@ app.get('/lecturer/uploads', (req, res) => {
   const myCourses = db.prepare('SELECT c.id, c.name FROM courses c JOIN lecturer_courses lc ON lc.course_id=c.id WHERE lc.lecturer_id=? ORDER BY c.name').all(req.user.id);
   const myPages = db.prepare("SELECT p.*, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.author_id=? ORDER BY p.id DESC").all(req.user.id);
   const _unused = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
-  const uploadForm = `<form class="card" id="upload" method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
+  const uploadForm = `<form class="card" id="upload" data-bgup method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
@@ -3947,7 +3997,7 @@ ${semesterField('')}
   }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
   res.send(layout('Uploaded documents', `<h1>Uploaded documents</h1>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-${uploadForm}<h3>Your uploads (${myPages.length})</h3>${pagesList}`, req.user));
+${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesList}</div>`, req.user));
 });
 app.post('/lecturer/upload', upload.single('file'), (req, res) => {
   if (!req.user || !req.user.is_lecturer) return res.sendStatus(403);
@@ -5123,7 +5173,7 @@ app.get('/admin', adminish, (req, res) => {
   const newsSection = cn ? `${pendingNewsSection}<h3 id="news">Post news (${newsItems.length})</h3>
 <form class="card" method="post" action="/admin/news" enctype="multipart/form-data"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="Short summary" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Post</button></form>
 ${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><a href="/admin/news/${n.id}/edit">Edit</a><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
-  const pagesSection = cp ? `<form class="card" id="upload" method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
+  const pagesSection = cp ? `<form class="card" id="upload" data-bgup method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
 ${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">Video (YouTube link or from your phone)</option></select>`
     : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Your role can upload plain HTML pages. PDFs, Word documents, videos and CBT pages need a Files admin or a full admin.</p>'}
