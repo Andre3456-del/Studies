@@ -571,6 +571,10 @@ const clientScript = '(' + function() {
   function stopRing(){if(ringT){clearInterval(ringT);ringT=null}if(navigator.vibrate)try{navigator.vibrate(0)}catch(e){}}
   function startRing(){stopRing();const buzz=()=>{if(navigator.vibrate)try{navigator.vibrate([400,200,400])}catch(e){}try{ring=ring||new (window.AudioContext||window.webkitAudioContext)();if(ring.state==='suspended')ring.resume().catch(()=>{});[0,0.5].forEach(d=>{const o=ring.createOscillator(),g=ring.createGain();o.frequency.value=d?480:440;g.gain.value=0.08;o.connect(g);g.connect(ring.destination);o.start(ring.currentTime+d);o.stop(ring.currentTime+d+0.4)})}catch(e){}};buzz();ringT=setInterval(buzz,2500)}
   function incoming(){fetch('/api/calls/incoming',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():{calls:[]}).then(j=>{const c=(j.calls||[])[0];let b=document.getElementById('incomingCallBar');
+    if(window.StudiesApp&&window.StudiesApp.incomingCall){ /* the Android app: a normal notification banner at the top, no full-screen takeover, no in-page sound */
+      if(!c){if(shownId){try{window.StudiesApp.incomingEnd(shownId)}catch(e){}shownId=null}}
+      else if(shownId!==c.id){shownId=c.id;try{window.StudiesApp.incomingCall(c.id,c.group_name||c.caller_name,(c.group_name?c.caller_name+' \u00b7 ':'')+'Incoming '+(c.kind==='video'?'video':'voice')+' call')}catch(e){}}
+      return}
     if(!c){if(b)b.remove();shownId=null;stopRing();return}
     if(b&&shownId===c.id)return;if(b)b.remove();shownId=c.id;
     b=document.createElement('div');b.id='incomingCallBar';b.style.cssText='position:fixed;left:0;top:0;right:0;bottom:0;z-index:99999;background:#0b141af2;color:#e9edef;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:12vh 24px 12vh;text-align:center;font-family:system-ui,-apple-system,sans-serif';

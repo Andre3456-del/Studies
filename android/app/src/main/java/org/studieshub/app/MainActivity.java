@@ -125,6 +125,12 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
             @JavascriptInterface public void notifications() { runOnUiThread(() -> startNotes()); }
+            @JavascriptInterface public void incomingCall(final String id, final String title, final String body) {
+                try { CallService.showCall(MainActivity.this, id, title, body); } catch (Throwable t) { }
+            }
+            @JavascriptInterface public void incomingEnd(final String id) {
+                try { ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(id.hashCode()); } catch (Throwable t) { }
+            }
             @JavascriptInterface public boolean presenceOn() { return presenceWanted(); }
             @JavascriptInterface public void presence(final boolean on) {
                 runOnUiThread(() -> {

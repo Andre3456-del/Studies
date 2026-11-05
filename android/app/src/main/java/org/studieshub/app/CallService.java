@@ -63,31 +63,36 @@ public class CallService extends FirebaseMessagingService {
         }
         String title = d.get("title") == null ? "Studies Hub" : d.get("title");
         String body = d.get("body") == null ? "" : d.get("body");
-        if (type.equals("ring")) ring(nm, d.get("id"), title, body);
+        if (type.equals("ring")) showCall(this, d.get("id"), title, body);
         else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"));
     }
 
-    private static int flags() { return PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0); }
+    static int flags() { return PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0); }
 
-    private void ring(NotificationManager nm, String id, String title, String body) {
+    /** A call notification with Answer / Decline. While the phone is in use it is a small banner at the top; only a sleeping or locked phone gets the full call screen. */
+    static void showCall(Context c, String id, String title, String body) {
         if (id == null) return;
+        channels(c);
+        NotificationManager nm = (NotificationManager) c.getSystemService(NOTIFICATION_SERVICE);
         int nid = id.hashCode();
-        Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("callId", id).putExtra("answer", false);
-        Intent yes = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("callId", id).putExtra("answer", true);
-        Intent no = new Intent(this, CallActionReceiver.class).putExtra("callId", id);
-        PendingIntent full = PendingIntent.getActivity(this, nid, open, flags());
-        PendingIntent answer = PendingIntent.getActivity(this, nid + 1, yes, flags());
-        PendingIntent decline = PendingIntent.getBroadcast(this, nid + 2, no, flags());
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CH_CALLS) : new Notification.Builder(this);
+        Intent open = new Intent(c, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("callId", id).putExtra("answer", false);
+        Intent yes = new Intent(c, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("callId", id).putExtra("answer", true);
+        Intent no = new Intent(c, CallActionReceiver.class).putExtra("callId", id);
+        PendingIntent tap = PendingIntent.getActivity(c, nid, open, flags());
+        PendingIntent answer = PendingIntent.getActivity(c, nid + 1, yes, flags());
+        PendingIntent decline = PendingIntent.getBroadcast(c, nid + 2, no, flags());
+        android.os.PowerManager pm = (android.os.PowerManager) c.getSystemService(Context.POWER_SERVICE);
+        android.app.KeyguardManager km = (android.app.KeyguardManager) c.getSystemService(Context.KEYGUARD_SERVICE);
+        boolean inUse = pm != null && pm.isInteractive() && km != null && !km.isKeyguardLocked();
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, CH_CALLS) : new Notification.Builder(c);
         b.setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle(title).setContentText(body)
-         .setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(true)
-         .setContentIntent(full).setFullScreenIntent(full, true)
+         .setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(true).setOnlyAlertOnce(true)
+         .setContentIntent(tap)
          .addAction(new Notification.Action.Builder(android.R.drawable.sym_action_call, "Answer", answer).build())
          .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline).build());
+        if (!inUse) b.setFullScreenIntent(tap, true); // screen off or locked: show the call screen
         if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(45000);
-        else {
-            b.setPriority(Notification.PRIORITY_MAX).setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioManager_STREAM_RING()).setVibrate(new long[]{0, 800, 600, 800, 600, 800});
-        }
+        else b.setPriority(Notification.PRIORITY_MAX).setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioManager_STREAM_RING()).setVibrate(new long[]{0, 800, 600, 800, 600, 800});
         Notification n = b.build();
         n.flags |= Notification.FLAG_INSISTENT; // keep ringing until answered, declined or timed out
         nm.notify(nid, n);
