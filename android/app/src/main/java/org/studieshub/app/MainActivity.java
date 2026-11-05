@@ -118,7 +118,7 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) s.setSafeBrowsingEnabled(true);
         s.setBuiltInZoomControls(false);
         s.setSupportZoom(false);
-        s.setUserAgentString(s.getUserAgentString() + " StudiesHubApp/1.0");
+        s.setUserAgentString(s.getUserAgentString() + " StudiesHubApp/1.0 (" + (Build.MANUFACTURER.substring(0, 1).toUpperCase() + Build.MANUFACTURER.substring(1)).replaceAll("[();]", "") + " " + Build.MODEL.replaceAll("[();]", "") + ")");
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, true);
