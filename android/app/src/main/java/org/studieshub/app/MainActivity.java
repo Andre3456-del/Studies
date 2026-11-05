@@ -62,7 +62,8 @@ public class MainActivity extends Activity {
     private long leftAt;
     private View overlay;
     private Runnable pendingOk, pendingFail;
-    private static final int REQ_LOCK = 16;
+    private static final int REQ_LOCK = 16, REQ_SND = 18;
+    private String soundCat;
     private long lastUpdateCheck;
     private boolean inCall, frameBusy;
     private static final int REQ_PROJ = 17;
@@ -131,6 +132,15 @@ public class MainActivity extends Activity {
             @JavascriptInterface public void incomingEnd(final String id) {
                 try { ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(id.hashCode()); } catch (Throwable t) { }
             }
+            @JavascriptInterface public String soundInfo() {
+                try {
+                    JSONObject o = new JSONObject();
+                    for (String k : Sounds.CATS) o.put(k, Sounds.name(MainActivity.this, k));
+                    return o.toString();
+                } catch (Throwable t) { return "{}"; }
+            }
+            @JavascriptInterface public void pickSound(final String cat) { runOnUiThread(() -> pickSoundNow(cat)); }
+            @JavascriptInterface public void playSound(final String cat) { runOnUiThread(() -> playSoundNow(cat)); }
             @JavascriptInterface public boolean presenceOn() { return presenceWanted(); }
             @JavascriptInterface public void presence(final boolean on) {
                 runOnUiThread(() -> {
@@ -302,6 +312,33 @@ public class MainActivity extends Activity {
         web.post(() -> web.evaluateJavascript("window.__scrFrame&&__scrFrame('" + dataUrl + "')", v -> frameBusy = false));
     }
 
+    private void pickSoundNow(String cat) {
+        try {
+            boolean call = "calls".equals(cat);
+            Intent i = new Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER);
+            i.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE, call ? android.media.RingtoneManager.TYPE_RINGTONE : android.media.RingtoneManager.TYPE_NOTIFICATION);
+            i.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true);
+            i.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true);
+            i.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, Sounds.defaultFor(this, cat));
+            i.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Sounds.current(this, cat));
+            i.putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, call ? "Ringing tone for calls" : "Notification sound");
+            soundCat = cat;
+            skipLock = true;
+            startActivityForResult(i, REQ_SND);
+        } catch (Throwable t) { web.evaluateJavascript("alert('This phone cannot open the sound list.')", null); }
+    }
+
+    private void playSoundNow(String cat) {
+        try {
+            Uri u = Sounds.current(this, cat);
+            if (u == null) { android.widget.Toast.makeText(this, "Silent", android.widget.Toast.LENGTH_SHORT).show(); return; }
+            final android.media.Ringtone r = android.media.RingtoneManager.getRingtone(this, u);
+            if (r == null) return;
+            r.play();
+            new Handler(Looper.getMainLooper()).postDelayed(() -> { try { r.stop(); } catch (Throwable t) { } }, 3500);
+        } catch (Throwable t) { /* ignore */ }
+    }
+
     private boolean presenceWanted() { return getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("presence", true); }
 
     /** Starts the "show me online" helper when the person is logged in and has not turned it off. */
@@ -409,6 +446,17 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onActivityResult(int code, int result, Intent data) {
+        if (code == REQ_SND) {
+            if (result == RESULT_OK && soundCat != null && data != null) {
+                Uri picked = data.getParcelableExtra(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
+                if (picked == null) Sounds.save(this, soundCat, "silent");
+                else if (picked.equals(Sounds.defaultFor(this, soundCat))) Sounds.save(this, soundCat, "default");
+                else Sounds.save(this, soundCat, picked.toString());
+                web.evaluateJavascript("window.studiesSoundSet&&studiesSoundSet()", null);
+            }
+            soundCat = null;
+            return;
+        }
         if (code == REQ_PROJ) {
             if (result == RESULT_OK && data != null) {
                 Intent svc = new Intent(this, ScreenShareService.class).putExtra("code", result).putExtra("data", data);

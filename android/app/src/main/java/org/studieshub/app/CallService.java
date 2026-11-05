@@ -64,7 +64,7 @@ public class CallService extends FirebaseMessagingService {
         String title = d.get("title") == null ? "Studies Hub" : d.get("title");
         String body = d.get("body") == null ? "" : d.get("body");
         if (type.equals("ring")) showCall(this, d.get("id"), title, body);
-        else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"));
+        else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"));
     }
 
     static int flags() { return PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0); }
@@ -84,7 +84,7 @@ public class CallService extends FirebaseMessagingService {
         android.os.PowerManager pm = (android.os.PowerManager) c.getSystemService(Context.POWER_SERVICE);
         android.app.KeyguardManager km = (android.app.KeyguardManager) c.getSystemService(Context.KEYGUARD_SERVICE);
         boolean inUse = pm != null && pm.isInteractive() && km != null && !km.isKeyguardLocked();
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, CH_CALLS) : new Notification.Builder(c);
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, Sounds.channel(c, "calls")) : new Notification.Builder(c);
         b.setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle(title).setContentText(body)
          .setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(true).setOnlyAlertOnce(true)
          .setContentIntent(tap)
@@ -92,7 +92,7 @@ public class CallService extends FirebaseMessagingService {
          .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline).build());
         if (!inUse) b.setFullScreenIntent(tap, true); // screen off or locked: show the call screen
         if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(45000);
-        else b.setPriority(Notification.PRIORITY_MAX).setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioManager_STREAM_RING()).setVibrate(new long[]{0, 800, 600, 800, 600, 800});
+        else { b.setPriority(Notification.PRIORITY_MAX).setVibrate(new long[]{0, 800, 600, 800, 600, 800}); Uri ru = Sounds.current(c, "calls"); if (ru != null) b.setSound(ru, AudioManager_STREAM_RING()); }
         Notification n = b.build();
         n.flags |= Notification.FLAG_INSISTENT; // keep ringing until answered, declined or timed out
         nm.notify(nid, n);
@@ -100,11 +100,12 @@ public class CallService extends FirebaseMessagingService {
 
     private static int AudioManager_STREAM_RING() { return android.media.AudioManager.STREAM_RING; }
 
-    private void note(NotificationManager nm, String title, String body, String url, String tag) {
+    private void note(NotificationManager nm, String title, String body, String url, String tag, String cat) {
         Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", url == null ? "/" : url);
         int nid = (tag == null || tag.isEmpty() ? title + body : tag).hashCode();
         PendingIntent pi = PendingIntent.getActivity(this, nid, open, flags());
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CH_NOTES) : new Notification.Builder(this);
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, cat == null ? "general" : cat)) : new Notification.Builder(this);
+        if (Build.VERSION.SDK_INT < 26) { Uri nu = Sounds.current(this, cat == null ? "general" : cat); if (nu != null) b.setSound(nu); }
         b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pi);
         nm.notify(nid, b.build());
     }
