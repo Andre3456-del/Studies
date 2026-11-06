@@ -86,7 +86,7 @@ public class CallService extends FirebaseMessagingService {
         boolean inUse = pm != null && pm.isInteractive() && km != null && !km.isKeyguardLocked();
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, Sounds.channel(c, "calls")) : new Notification.Builder(c);
         b.setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle(title).setContentText(body)
-         .setColor(0xFF6D5EFC).setLargeIcon(android.graphics.BitmapFactory.decodeResource(c.getResources(), R.mipmap.ic_launcher)).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(true).setOnlyAlertOnce(true)
+         .setColor(0xFF000000).setLargeIcon(android.graphics.BitmapFactory.decodeResource(c.getResources(), R.mipmap.ic_launcher)).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(true).setOnlyAlertOnce(true)
          .setContentIntent(tap)
          .addAction(new Notification.Action.Builder(android.R.drawable.sym_action_call, "Answer", answer).build())
          .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline).build());
@@ -107,7 +107,7 @@ public class CallService extends FirebaseMessagingService {
         String c = cat == null || cat.isEmpty() ? "general" : cat;
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, c)) : new Notification.Builder(this);
         if (Build.VERSION.SDK_INT < 26) { Uri nu = Sounds.current(this, c); if (nu != null) b.setSound(nu); }
-        b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF6D5EFC).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pi);
+        b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pi);
         boolean isChat = chat != null && cid != null && !cid.isEmpty();
         android.graphics.Bitmap pic = null;
         if (isChat && av != null) pic = fetchAvatar("https://studieshub.org" + av);
@@ -154,7 +154,7 @@ public class CallService extends FirebaseMessagingService {
         if (isChat) {
             // One "Studies Hub" header that holds all the chats; news, uploads and the rest stay outside it.
             Notification.Builder sb = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, "messages")) : new Notification.Builder(this);
-            sb.setSmallIcon(R.drawable.ic_stat).setColor(0xFF6D5EFC).setContentTitle("Studies Hub").setContentText("New messages").setGroup("sh_chats").setGroupSummary(true).setAutoCancel(true).setContentIntent(PendingIntent.getActivity(this, 7, new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", "/chat"), flags()));
+            sb.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle("Studies Hub").setContentText("New messages").setGroup("sh_chats").setGroupSummary(true).setAutoCancel(true).setContentIntent(PendingIntent.getActivity(this, 7, new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", "/chat"), flags()));
             if (Build.VERSION.SDK_INT >= 26) sb.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN);
             nm.notify(7, sb.build());
         }
