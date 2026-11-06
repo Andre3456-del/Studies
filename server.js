@@ -1999,12 +1999,13 @@ window.__net=function(s,quiet){
 try{var st=A.netState();if(st&&st!=='online')window.__net(st,1)}catch(e){}
 var ob=document.getElementById('offBar');
 if(ob){var slug=ob.getAttribute('data-slug'),btn=document.createElement('button');btn.type='button';btn.className='btn ghost';btn.style.margin='6px 0 10px';ob.appendChild(btn);
+ function viewOnly(){Array.prototype.forEach.call(document.querySelectorAll('a[href*="/raw"]'),function(a){a.style.display='none'});Array.prototype.forEach.call(document.querySelectorAll('video'),function(v){v.setAttribute('controlslist','nodownload')})}
  function draw(){var s=String(A.offStatus(slug));
-  if(s==='saved'){btn.textContent='✓ Saved on this phone. Tap to remove';btn.disabled=false}
-  else if(s.indexOf('saving')===0){btn.textContent='Saving… '+(s.split(':')[1]||'')+'%';btn.disabled=true;setTimeout(draw,700);return}
+  if(s==='saved'){btn.textContent='\u2713 Saved';btn.disabled=true;btn.style.opacity='.85';viewOnly()}
+  else if(s.indexOf('saving')===0){btn.textContent='Saving\u2026 '+(s.split(':')[1]||'')+'%';btn.disabled=true;setTimeout(draw,700);return}
   else if(s.indexOf('error')===0){btn.textContent='Could not save ('+s.slice(6)+'). Tap to try again';btn.disabled=false}
-  else{btn.textContent='⬇ Save for offline';btn.disabled=false}}
- btn.onclick=function(){var s=String(A.offStatus(slug));if(s==='saved'){if(confirm('Remove this from your phone?')){A.offRemove(slug);draw()}}else{A.offSave(slug,ob.getAttribute('data-title'),ob.getAttribute('data-kind'),ob.getAttribute('data-course')||'');draw()}};
+  else{btn.textContent='\u2B07 Save to phone';btn.disabled=false}}
+ btn.onclick=function(){A.offSave(slug,ob.getAttribute('data-title'),ob.getAttribute('data-kind'),ob.getAttribute('data-course')||'');draw()};
  draw()}
 })()</script>`}${`<script>(function(){var A=window.StudiesApp;if(!A||!A.privatePage)return;var last=null;
 function chk(){var p=location.pathname,v=/^\\/(settings\\/(profile|security|devices)|login|signup|forgot|reset|verify|welcome|pay|admin)(\\/|$)/.test(p);if(v!==last){last=v;try{A.privatePage(v)}catch(e){}}}
@@ -4476,20 +4477,49 @@ function paywallBody(p, req) {
 }
 
 const offBarHtml = p0 => { const p = Object.assign({}, p0, { course_name: ((p0.course_id && db.prepare('SELECT name FROM courses WHERE id=?').get(p0.course_id)) || {}).name || '' }); return (p.kind === 'pdf' || p.kind === 'doc' || (p.kind === 'video' && !p.video_id)) ? `<div id="offBar" data-slug="${esc(p.slug)}" data-kind="${esc(p.kind)}" data-title="${esc(p.title)}" data-course="${esc(p.course_name || '')}"></div>` : ''; };
+app.get('/api/saved/available', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const cols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name).filter(c => c !== 'file_data' && c !== 'html');
+  const rows = db.prepare(`SELECT ${cols.map(c => 'p.' + c).join(',')}, length(p.file_data) AS file_len, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.kind IN ('pdf','doc','video') AND length(p.file_data) > 0 ORDER BY p.id DESC LIMIT 600`).all();
+  const out = rows.filter(p => (p.kind !== 'video' || !p.video_id) && sortedFor(p, req.user) && canViewPage(p, req.user))
+    .map(p => ({ slug: p.slug, title: p.title, kind: p.kind, course: p.course_name || '', size: Number(p.file_len) || 0 }));
+  res.json({ items: out });
+});
 app.get('/saved', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/saved');
   res.send(layout('Saved offline', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Saved offline</h1>
-<p class="mut">These stay on this phone. They open with no internet, and without loading again.</p>
+<p class="mut">Saved materials stay on this phone. You can open and read them with no internet, but you cannot download them out of the app.</p>
+<div class="card" id="bulk"><h3 style="margin-top:0">Save materials to this phone</h3><p class="mut" id="bulkInfo">Looking for materials&hellip;</p><div id="bulkBtns"></div></div>
+<h3>On this phone</h3>
 <div id="savedList"><p class="mut">Loading&hellip;</p></div>
-<script>(function(){var A=window.StudiesApp,box=document.getElementById('savedList');
-if(!A||!A.offList){box.innerHTML='<p class="mut">This is only available in the Studies Hub app.</p>';return}
+<script>(function(){var A=window.StudiesApp,box=document.getElementById('savedList'),info=document.getElementById('bulkInfo'),btns=document.getElementById('bulkBtns');
+if(!A||!A.offList){box.innerHTML='<p class="mut">This is only available in the Studies Hub app.</p>';document.getElementById('bulk').hidden=true;return}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
-function draw(){var l=[];try{l=JSON.parse(A.offList())}catch(e){}
- if(!l.length){box.innerHTML='<div class="card"><p class="mut" style="margin:0">Nothing saved yet. Open a material and tap <b>Save for offline</b>.</p></div>';return}
+function mb(n){return (n/1048576).toFixed(1)+' MB'}
+var avail=[],running=false;
+function saved(){var l=[];try{l=JSON.parse(A.offList())}catch(e){}return l}
+function drawSaved(){var l=saved();
+ if(!l.length){box.innerHTML='<div class="card"><p class="mut" style="margin:0">Nothing saved yet.</p></div>';return}
  l.sort(function(a,b){return b.savedAt-a.savedAt});
- box.innerHTML=l.map(function(o){var ic=o.kind==='pdf'?'\u{1F4D5}':o.kind==='video'?'\u{1F3AC}':'\u{1F4C4}';return '<div class="card row"><div><a href="/p/'+esc(o.slug)+'">'+ic+' '+esc(o.title)+'</a><br><span class="mut">'+esc(o.course||'')+(o.course?' &middot; ':'')+(o.size/1048576).toFixed(1)+' MB</span></div><button type="button" class="ghost" data-rm="'+esc(o.slug)+'">Remove</button></div>'}).join('')}
-box.onclick=function(e){var b=e.target.closest('[data-rm]');if(b&&confirm('Remove this from your phone?')){A.offRemove(b.getAttribute('data-rm'));draw()}};
-draw()})()</script>`, req.user));
+ box.innerHTML=l.map(function(o){var ic=o.kind==='pdf'?'\u{1F4D5}':o.kind==='video'?'\u{1F3AC}':'\u{1F4C4}';return '<div class="card row"><div><a href="/p/'+esc(o.slug)+'">'+ic+' '+esc(o.title)+'</a><br><span class="mut">'+esc(o.course||'')+(o.course?' &middot; ':'')+mb(o.size)+'</span></div><button type="button" class="ghost" data-rm="'+esc(o.slug)+'">Remove</button></div>'}).join('')}
+function todo(){var have={};saved().forEach(function(o){have[o.slug]=1});return avail.filter(function(p){return !have[p.slug]})}
+function drawBulk(){var t=todo();
+ if(running)return;
+ if(!avail.length){info.textContent='No materials found for you yet.';btns.innerHTML='';return}
+ if(!t.length){info.textContent='Everything available to you is already on this phone.';btns.innerHTML='';return}
+ var tot=t.reduce(function(s,p){return s+p.size},0);
+ info.textContent=t.length+' material'+(t.length>1?'s':'')+' not on this phone yet, about '+mb(tot)+' in all. Or open any material and tap Save to phone.';
+ btns.innerHTML='<button type="button" id="saveAll">Save all ('+t.length+')</button>'+t.slice(0,60).map(function(p){return '<div class="card row" style="margin-top:8px"><div>'+esc(p.title)+'<br><span class="mut">'+esc(p.course||'')+(p.course?' &middot; ':'')+mb(p.size)+'</span></div><button type="button" class="ghost" data-one="'+esc(p.slug)+'">Save</button></div>'}).join('')}
+function saveOne(p,done){A.offSave(p.slug,p.title,p.kind,p.course||'');(function w(){var s=String(A.offStatus(p.slug));if(s==='saved'||s.indexOf('error')===0){done(s==='saved');return}setTimeout(w,700)})()}
+function runAll(list){running=true;var i=0,ok=0,bad=0;(function next(){if(i>=list.length){running=false;info.textContent='Done. '+ok+' saved'+(bad?', '+bad+' could not be saved.':'.');drawSaved();setTimeout(drawBulk,2500);return}
+ info.textContent='Saving '+(i+1)+' of '+list.length+': '+list[i].title;btns.innerHTML='';
+ saveOne(list[i],function(g){if(g)ok++;else bad++;i++;drawSaved();next()})})()}
+document.getElementById('bulk').onclick=function(e){var b=e.target.closest('button');if(!b||running)return;
+ if(b.id==='saveAll'){var t=todo(),tot=t.reduce(function(s,p){return s+p.size},0);if(confirm('Save '+t.length+' materials (about '+mb(tot)+') on this phone? Keep the app open while it saves.'))runAll(t)}
+ else if(b.getAttribute('data-one')){var p=avail.filter(function(x){return x.slug===b.getAttribute('data-one')})[0];if(p)runAll([p])}};
+box.onclick=function(e){var b=e.target.closest('[data-rm]');if(b&&confirm('Remove this from your phone?')){A.offRemove(b.getAttribute('data-rm'));drawSaved();drawBulk()}};
+fetch('/api/saved/available',{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){avail=j.items||[];drawBulk()}).catch(function(){info.textContent='Could not look for materials. Check your connection.'});
+drawSaved()})()</script>`, req.user));
 });
 app.get('/p/:slug', (req, res) => {
   const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);

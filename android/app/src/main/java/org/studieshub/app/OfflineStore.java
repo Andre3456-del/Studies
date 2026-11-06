@@ -184,6 +184,10 @@ final class OfflineStore {
                 String slug = m.group(1);
                 File d = slugDir(c, slug);
                 if (new File(d, "meta.json").exists()) {
+                    if (m.group(2) != null && mainFrame) {
+                        // Saved materials are for reading inside the app. Opening the file on its own (a download) is not allowed.
+                        return resp("text/html", "utf-8", 403, "Forbidden", new HashMap<String, String>(), new ByteArrayInputStream("<html><body style='font-family:sans-serif;padding:24px'><h3>View only</h3><p>Saved materials can be read inside Studies Hub, but not downloaded.</p></body></html>".getBytes(StandardCharsets.UTF_8)));
+                    }
                     if (m.group(2) != null && new File(d, "raw.bin").exists()) {
                         JSONObject meta = new JSONObject(readLine(new File(d, "meta.json")));
                         File raw = new File(d, "raw.bin");
