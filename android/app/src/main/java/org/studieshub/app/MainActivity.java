@@ -195,7 +195,11 @@ public class MainActivity extends Activity {
             }
             @JavascriptInterface public String lockInfo() {
                 android.app.KeyguardManager km = (android.app.KeyguardManager) getSystemService(KEYGUARD_SERVICE);
-                return "{\"on\":" + lockOn + ",\"min\":" + lockMin + ",\"secure\":" + (km != null && km.isDeviceSecure()) + "}";
+                android.content.pm.PackageManager pm = getPackageManager();
+                boolean fp = pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_FINGERPRINT);
+                boolean face = Build.VERSION.SDK_INT >= 29 && pm.hasSystemFeature("android.hardware.biometrics.face");
+                boolean iris = Build.VERSION.SDK_INT >= 29 && pm.hasSystemFeature("android.hardware.biometrics.iris");
+                return "{\"on\":" + lockOn + ",\"min\":" + lockMin + ",\"secure\":" + (km != null && km.isDeviceSecure()) + ",\"fp\":" + fp + ",\"face\":" + face + ",\"iris\":" + iris + "}";
             }
             @JavascriptInterface public void lockEnable(final int minutes) {
                 runOnUiThread(() -> authenticate(() -> { setLock(true, minutes); lockDone("on", true); }, () -> lockDone("on", false)));
