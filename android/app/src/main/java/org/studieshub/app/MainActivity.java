@@ -159,6 +159,10 @@ public class MainActivity extends Activity {
                 UploadService.Job j = UploadService.ALL.get(id);
                 if (j != null) j.cancel = true;
             }
+            @JavascriptInterface public void privatePage(final boolean p) {
+                priv = p;
+                runOnUiThread(() -> secure(lockOn && locked));
+            }
             @JavascriptInterface public boolean notifOn() {
                 try {
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
@@ -685,7 +689,9 @@ public class MainActivity extends Activity {
     }
 
     /** Hide the screen from screenshots, recordings and the recent-apps picture, but only while the lock screen is up or the app is out of sight. Once you are in, everything shows normally. */
+    private volatile boolean priv = false;
     private void secure(boolean on) {
+        on = on || priv;
         if (on) getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE);
         else getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
     }
