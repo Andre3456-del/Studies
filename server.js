@@ -1730,6 +1730,17 @@ window.shPreview=function(files,opts,cb){
     else if(b.hasAttribute('data-s')){var ta=o.querySelector('textarea'),cap=ta?ta.value.trim():'';close();cb(files,cap)}});
   show();
 };
+window.shNativeUp=function(file,o,onProg,onDone){
+  var A=window.StudiesApp,id='j'+Date.now()+Math.floor(Math.random()*1000000),pos=0,CH=393216,dead=false,tm=null;
+  A.upBegin(id);
+  function poll(){if(dead)return;var s=String(A.upStatus(id)).split('|'),st=+s[0],p=+s[1]||0;
+    if(st===3){onProg(100);onDone(true)}else if(st===4){onDone(false)}else{onProg(p);tm=setTimeout(poll,500)}}
+  function go(){var ok=A.upStart(id,o.url,JSON.stringify(o.fields||[]),o.afterUrl||'',o.afterJson||'',o.title||file.name,file.name,file.type||'');if(!ok){onDone(false);return}poll()}
+  function next(){if(dead)return;if(pos>=file.size){go();return}
+    var r=new FileReader();r.onload=function(){var d=String(r.result),i=d.indexOf(',');if(!A.upChunk(id,d.slice(i+1))){onDone(false);return}pos+=CH;onProg(0);setTimeout(next,0)};r.onerror=function(){onDone(false)};r.readAsDataURL(file.slice(pos,pos+CH))}
+  next();
+  return {cancel:function(){dead=true;if(tm)clearTimeout(tm);try{A.upCancel(id)}catch(e){}}};
+};
 function bind(form){
   form.addEventListener('submit',function(e){
     var fi=form.querySelector('input[type=file]'),f=fi&&fi.files&&fi.files[0];if(!f||form.__sent)return;
@@ -1742,6 +1753,12 @@ function bind(form){
       row.querySelector('b').textContent=(ti&&ti.value.trim())||f.name;
       if(list)list.insertBefore(row,list.firstChild);else form.parentNode.insertBefore(row,form.nextSibling);
       var lbl=row.querySelector('.mut'),bar=row.querySelector('i');
+      if(window.StudiesApp&&StudiesApp.upBegin){
+        var fl=[],fe=new FormData(form);fe.forEach(function(v,k){if(typeof v==='string')fl.push([k,v])});fl.push(['__file',fi.name||'file']);
+        shNativeUp(f,{url:(form.getAttribute('action')||location.pathname),fields:fl,title:(ti&&ti.value.trim())||f.name},function(p){lbl.textContent=(p?'Uploading\\u2026 '+p+'%':'Getting ready\\u2026');bar.style.width=p+'%'},function(ok){if(ok){lbl.textContent='Done';location.reload()}else{row.remove();form.__sent=0;alert('That upload did not go through. Please try again.')}});
+        lbl.textContent='Uploading \\u2014 you can leave this page, it keeps going.';
+        return;
+      }
       var x=new XMLHttpRequest();x.open('POST',form.getAttribute('action')||location.href);
       x.upload.onprogress=function(ev){if(ev.lengthComputable){var p=Math.round(ev.loaded*100/ev.total);lbl.textContent='Uploading\\u2026 '+p+'%';bar.style.width=p+'%'}};
       x.onload=function(){if(x.status>=200&&x.status<400){lbl.textContent='Done';bar.style.width='100%';location.href=x.responseURL||location.href}else{row.remove();form.__sent=0;alert('That upload did not go through. Please try again.')}};
@@ -3103,18 +3120,23 @@ function sendFile(f,cap){
   function prog(pct){if(c)mProg(c,pct,'Sending… '+pct+'%');else if(b){var t=b.querySelector('.fc-size'),bi=b.querySelector('.fc-bar i');if(t)t.textContent=fmtBytes(f.size)+' · Sending… '+pct+'%';if(bi)bi.style.width=pct+'%'}}
   function clean(){delete ups[tmp];if(up.id)delete ups[up.id];if(b&&b.parentNode)b.parentNode.removeChild(b)}
   up.cancel=function(){up.dead=true;if(up.xhr)up.xhr.abort();if(up.id)fetch('/api/messages/'+up.id+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:'everyone'})}).catch(function(){});clean()};
-  function finish(id){
+  function finish(id,nocap){
     delete ups[id];markDl(id);
     if(c){c.setAttribute('data-size',f.size);mShow(c,URL.createObjectURL(f))}
     else{var fc=b.querySelector('.file-chip');if(fc)fc.parentNode.replaceChild(fileChip({id:id,name:f.name,size:f.size}),fc)}
     updateTick(id,'sent');
-    if(cap){var cb2=Object.assign({body:cap,reply_to_id:null},convType==='group'?{group:convId}:{to:convId});fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cb2)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:cap,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}}).catch(function(){})}}
+    if(cap&&!nocap){var cb2=Object.assign({body:cap,reply_to_id:null},convType==='group'?{group:convId}:{to:convId});fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cb2)}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:cap,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id}}).catch(function(){})}}
   var sb=Object.assign({name:f.name,size:f.size,mime:f.type||'application/octet-stream'},convType==='group'?{group:convId}:{to:convId});
   fetch('/api/messages/attachment/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sb)}).then(function(r){return r.json()}).then(function(j){
     startingUps--;if(up.dead)return;
     if(!j||!j.id){alert((j&&j.error)||'Could not send that file.');clean();return}
     up.id=j.id;ups[j.id]=up;seen[j.id]=1;if(j.id>lastId)lastId=j.id;
     if(b){b.setAttribute('data-id',j.id);if(c)c.setAttribute('data-mid',j.id)}
+    if(window.StudiesApp&&StudiesApp.upBegin){
+      var cj=Object.assign({body:cap||'',reply_to_id:null},convType==='group'?{group:convId}:{to:convId});
+      var nu=shNativeUp(f,{url:'/api/messages/attachment/'+j.id,fields:[['__file','file']],title:f.name,afterUrl:cap?'/api/messages/send':'',afterJson:cap?JSON.stringify(cj):''},function(p){if(!up.dead)prog(p)},function(ok){if(up.dead)return;if(ok)finish(j.id,true);else{alert('Could not send that file. Check your connection and try again.');up.cancel()}});
+      var oc=up.cancel;up.cancel=function(){nu.cancel();oc()};
+      return}
     var x=new XMLHttpRequest(),fd=new FormData();up.xhr=x;fd.append('file',f,f.name);
     x.open('POST','/api/messages/attachment/'+j.id);
     x.upload.onprogress=function(e){if(e.lengthComputable)prog(Math.min(100,Math.round(e.loaded*100/e.total)))};

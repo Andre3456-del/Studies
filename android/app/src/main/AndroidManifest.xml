@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -60,5 +61,6 @@
         </receiver>
         <receiver android:name=".CallActionReceiver" android:exported="false" />
         <receiver android:name=".ChatActionReceiver" android:exported="false" />
+        <service android:name=".UploadService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

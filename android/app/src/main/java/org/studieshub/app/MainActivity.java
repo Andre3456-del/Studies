@@ -126,6 +126,32 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
             @JavascriptInterface public void notifications() { runOnUiThread(() -> startNotes()); }
+            @JavascriptInterface public void upBegin(String id) {
+                try { UploadService.cacheFile(MainActivity.this, id).delete(); } catch (Throwable t) { }
+            }
+            @JavascriptInterface public boolean upChunk(String id, String b64) {
+                try (java.io.FileOutputStream o = new java.io.FileOutputStream(UploadService.cacheFile(MainActivity.this, id), true)) {
+                    o.write(android.util.Base64.decode(b64, android.util.Base64.DEFAULT));
+                    return true;
+                } catch (Throwable t) { return false; }
+            }
+            @JavascriptInterface public boolean upStart(String id, String url, String fields, String afterUrl, String afterJson, String title, String name, String mime) {
+                try {
+                    if (url == null || !url.startsWith("/")) return false;
+                    UploadService.Job j = new UploadService.Job();
+                    j.id = id; j.url = url; j.fields = fields; j.afterUrl = afterUrl; j.afterJson = afterJson; j.title = title == null || title.isEmpty() ? name : title; j.name = name; j.mime = mime == null || mime.isEmpty() ? "application/octet-stream" : mime;
+                    UploadService.enqueue(MainActivity.this, j);
+                    return true;
+                } catch (Throwable t) { return false; }
+            }
+            @JavascriptInterface public String upStatus(String id) {
+                int[] st = UploadService.STATUS.get(id);
+                return st == null ? "0|0" : st[0] + "|" + st[1];
+            }
+            @JavascriptInterface public void upCancel(String id) {
+                UploadService.Job j = UploadService.ALL.get(id);
+                if (j != null) j.cancel = true;
+            }
             @JavascriptInterface public boolean notifOn() {
                 try {
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
