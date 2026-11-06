@@ -14,6 +14,38 @@ const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH |
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'site.db'));
+
+// Big files arrive in small numbered pieces (the Android app sends them this way so a weak network can
+// pause and carry on). When the final request says X-Assembled, the pieces are joined and handed to the
+// same handler a normal upload would reach.
+const UP_DIR = path.join(DATA_DIR, 'up_chunks');
+fs.mkdirSync(UP_DIR, { recursive: true });
+const upDir = (uid, id) => path.join(UP_DIR, `${Number(uid)}_${String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60)}`);
+setInterval(() => { try { for (const d of fs.readdirSync(UP_DIR)) { const p = path.join(UP_DIR, d); if (Date.now() - fs.statSync(p).mtimeMs > 48 * 3600e3) fs.rmSync(p, { recursive: true, force: true }); } } catch (e) {} }, 3600e3).unref();
+const b64txt = s => Buffer.from(String(s || ''), 'base64').toString('utf8');
+function assembledUpload(req, res, next) {
+  if (!req.user) return res.sendStatus(401);
+  try {
+    const d = upDir(req.user.id, req.headers['x-assembled']), total = Number(req.headers['x-chunks']);
+    if (!Number.isInteger(total) || total < 1 || total > 4000) return res.status(400).json({ error: 'Upload incomplete.' });
+    const parts = [];
+    let size = 0;
+    for (let k = 0; k < total; k++) {
+      const f = path.join(d, k + '.part');
+      if (!fs.existsSync(f)) return res.status(409).json({ error: 'Upload incomplete.' });
+      const b = fs.readFileSync(f); size += b.length; parts.push(b);
+      if (size > 200 * 1024 * 1024) return res.status(413).json({ error: 'That file is too big (200 MB is the limit).' });
+    }
+    const fields = {};
+    for (const [k, v] of JSON.parse(b64txt(req.headers['x-fields']) || '[]')) { if (k in fields) fields[k] = [].concat(fields[k], v); else fields[k] = v; }
+    req.file = { fieldname: 'file', originalname: b64txt(req.headers['x-filename']) || 'file', mimetype: String(req.headers['x-mime'] || 'application/octet-stream').slice(0, 100), buffer: Buffer.concat(parts), size };
+    req.body = Object.assign({}, req.body, fields);
+    fs.rmSync(d, { recursive: true, force: true });
+    next();
+  } catch (e) { res.status(400).json({ error: 'Upload incomplete.' }); }
+}
+const _single = upload.single.bind(upload);
+upload.single = name => { const mw = _single(name); return (req, res, next) => req.headers['x-assembled'] ? assembledUpload(req, res, next) : mw(req, res, next); };
 db.exec('PRAGMA journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', created_at TEXT DEFAULT CURRENT_TIMESTAMP, verified INTEGER NOT NULL DEFAULT 0, verify_hash TEXT, verify_expires INTEGER, verify_sent INTEGER);
@@ -1731,10 +1763,10 @@ window.shPreview=function(files,opts,cb){
   show();
 };
 window.shNativeUp=function(file,o,onProg,onDone){
-  var A=window.StudiesApp,id='j'+Date.now()+Math.floor(Math.random()*1000000),pos=0,CH=393216,dead=false,tm=null;
+  var A=window.StudiesApp,id=o.id||('j'+Date.now()+Math.floor(Math.random()*1000000)),pos=0,CH=393216,dead=false,tm=null;
   A.upBegin(id);
   function poll(){if(dead)return;var s=String(A.upStatus(id)).split('|'),st=+s[0],p=+s[1]||0;
-    if(st===3){onProg(100);onDone(true)}else if(st===4){onDone(false)}else{onProg(p);tm=setTimeout(poll,500)}}
+    if(st===3){onProg(100);onDone(true)}else if(st===4){onDone(false,s[2]||'')}else{onProg(p);tm=setTimeout(poll,500)}}
   function go(){var ok=A.upStart(id,o.url,JSON.stringify(o.fields||[]),o.afterUrl||'',o.afterJson||'',o.title||file.name,file.name,file.type||'');if(!ok){onDone(false);return}poll()}
   function next(){if(dead)return;if(pos>=file.size){go();return}
     var r=new FileReader();r.onload=function(){var d=String(r.result),i=d.indexOf(',');if(!A.upChunk(id,d.slice(i+1))){onDone(false);return}pos+=CH;onProg(0);setTimeout(next,0)};r.onerror=function(){onDone(false)};r.readAsDataURL(file.slice(pos,pos+CH))}
@@ -1755,7 +1787,7 @@ function bind(form){
       var lbl=row.querySelector('.mut'),bar=row.querySelector('i');
       if(window.StudiesApp&&StudiesApp.upBegin){
         var fl=[],fe=new FormData(form);fe.forEach(function(v,k){if(typeof v==='string')fl.push([k,v])});fl.push(['__file',fi.name||'file']);
-        var nu2=shNativeUp(f,{url:(form.getAttribute('action')||location.pathname),fields:fl,title:(ti&&ti.value.trim())||f.name},function(p){lbl.textContent=(p?'Uploading\\u2026 '+p+'%':'Getting ready\\u2026');bar.style.width=p+'%'},function(ok){if(ok){lbl.textContent='Done';location.reload()}else{lbl.textContent='Paused \\u2014 network problem. Tap here to retry.';row.style.cursor='pointer';row.onclick=function(){if(nu2.retry()){row.onclick=null;row.style.cursor='';lbl.textContent='Uploading\\u2026'}}}});
+        var nu2=shNativeUp(f,{url:(form.getAttribute('action')||location.pathname),fields:fl,title:(ti&&ti.value.trim())||f.name},function(p){lbl.textContent=(p?'Uploading\\u2026 '+p+'%':'Getting ready\\u2026');bar.style.width=p+'%'},function(ok,why){if(ok){lbl.textContent='Done';location.reload()}else{lbl.textContent='Paused'+(why?' ('+why+')':'')+'. Tap here to retry.';row.style.cursor='pointer';row.onclick=function(){if(nu2.retry()){row.onclick=null;row.style.cursor='';lbl.textContent='Uploading\\u2026'}}}});
         lbl.textContent='Uploading \\u2014 you can leave this page, it keeps going.';
         return;
       }
@@ -3134,7 +3166,7 @@ function sendFile(f,cap){
     if(b){b.setAttribute('data-id',j.id);if(c)c.setAttribute('data-mid',j.id)}
     if(window.StudiesApp&&StudiesApp.upBegin){
       var cj=Object.assign({body:cap||'',reply_to_id:null},convType==='group'?{group:convId}:{to:convId});
-      var nu=shNativeUp(f,{url:'/api/messages/attachment/'+j.id,fields:[['__file','file']],title:f.name,afterUrl:cap?'/api/messages/send':'',afterJson:cap?JSON.stringify(cj):''},function(p){if(!up.dead)prog(p)},function(ok){if(up.dead)return;if(ok)finish(j.id,true);else{if(c)mProg(c,0,'Not sent. Tap to retry');else if(b){var t2=b.querySelector('.fc-size');if(t2)t2.textContent='Not sent. Tap to retry'}if(b){b.style.cursor='pointer';b.onclick=function(){if(nu.retry()){b.onclick=null;b.style.cursor='';prog(0)}}}}});
+      var nu=shNativeUp(f,{id:'m'+j.id,url:'/api/messages/attachment/'+j.id,fields:[['__file','file']],title:f.name,afterUrl:cap?'/api/messages/send':'',afterJson:cap?JSON.stringify(cj):''},function(p){if(!up.dead)prog(p)},function(ok,why){if(up.dead)return;if(ok)finish(j.id,true);else{if(c)mProg(c,0,'Not sent'+(why?' ('+why+')':'')+'. Tap to retry');else if(b){var t2=b.querySelector('.fc-size');if(t2)t2.textContent='Not sent. Tap to retry'}if(b){b.style.cursor='pointer';b.onclick=function(){if(nu.retry()){b.onclick=null;b.style.cursor='';prog(0)}}}}});
       var oc=up.cancel;up.cancel=function(){nu.cancel();oc()};
       return}
     var x=new XMLHttpRequest(),fd=new FormData();up.xhr=x;fd.append('file',f,f.name);
@@ -3144,6 +3176,22 @@ function sendFile(f,cap){
     x.onerror=function(){if(up.dead)return;alert('Could not send that file. Check your connection and try again.');up.cancel()};
     x.send(fd)
   }).catch(function(){startingUps--;if(up.dead)return;alert('Could not send that file. Check your connection and try again.');clean()})}
+
+(function(){var A=window.StudiesApp;if(!A||!A.upStatus)return;
+function watch(mid,ui){var id='m'+mid,lost=0;(function t(){if(!document.querySelector('[data-id="'+mid+'"]'))return;var s=String(A.upStatus(id)).split('|'),st=+s[0],p=+s[1]||0;
+ if(st===1||st===2){lost=0;ui('run',p);setTimeout(t,600)}else if(st===3){ui('done')}else if(st===4||st===5){lost=0;ui('paused',0,s[2]||'');setTimeout(t,2500)}else{if(++lost>=3){ui('lost');return}setTimeout(t,2000)}})()}
+function lostFix(mid){fetch('/api/messages/'+mid+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:'everyone'})}).catch(function(){});var b=thread.querySelector('[data-id="'+mid+'"]');if(b&&b.parentNode)b.parentNode.removeChild(b)}
+Array.prototype.forEach.call(thread.querySelectorAll('.bubble.me,.sticker-msg.me'),function(b){var mid=b.getAttribute('data-id');if(!/^\\d+$/.test(mid||''))return;var c=b.querySelector('.mcard.mc-state-wait'),fc=b.querySelector('.file-chip.pending');if(!c&&!fc)return;
+ var st0=b.getAttribute('data-nw');if(st0)return;b.setAttribute('data-nw','1');
+ watch(mid,function(kind,p,why){
+  if(c){if(kind==='run'){if(!/mc-state-up/.test(c.className))mSet(c,'up',p,'Sending… '+p+'%');else mProg(c,p,'Sending… '+p+'%')}
+   else if(kind==='paused'){if(!/mc-state-err/.test(c.className)){mSet(c,'err');c.setAttribute('data-nretry',mid)}var bt=c.querySelector('.mc-dl');if(bt)bt.textContent='⟳ Not sent'+(why?' ('+why+')':'')+'. Tap to retry'}
+   else if(kind==='lost')lostFix(mid)}
+  else if(fc){var sz=fc.querySelector('.fc-size');if(kind==='run'){if(sz)sz.textContent='Sending… '+p+'%'}else if(kind==='paused'){if(sz)sz.textContent='Not sent'+(why?' ('+why+')':'')+'. Tap to retry';fc.setAttribute('data-nretry',mid);fc.style.cursor='pointer'}else if(kind==='lost')lostFix(mid)}})});
+thread.addEventListener('click',function(e){var n=e.target.closest?e.target.closest('[data-nretry]'):null;if(!n)return;e.stopPropagation();var mid=n.getAttribute('data-nretry');if(A.upRetry('m'+mid)){n.removeAttribute('data-nretry');if(n.classList.contains('mcard'))mSet(n,'up',0,'Sending… 0%');var b=n.closest('[data-id]');if(b){b.removeAttribute('data-nw');
+ // re-arm the watcher by reloading the status loop
+ setTimeout(function(){location.reload()},300)}}},true);
+})();
 var attachInput=document.getElementById('fileInput');
 attachInput.addEventListener('change',function(){var fs=Array.prototype.slice.call(attachInput.files||[]);attachInput.value='';fs=fs.slice(0,10);if(!fs.length)return;if(window.shPreview)shPreview(fs,{caption:true},function(list,cap){list.forEach(function(f,k){sendFile(f,k===0?cap:'')})});else fs.forEach(function(f){sendFile(f)})});
 thread.addEventListener('click',function(e){
@@ -3528,6 +3576,21 @@ app.post('/api/messages/attachment/start', (req, res) => {
   const t = encryptMsg('');
   const info = db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,kind,media_mime,media_name,media_size) VALUES(?,?,?,?,?,?,?,?,?)').run(req.user.id, target.recipient_id, target.group_id, t.body_enc, t.iv, kind, mime, name, size);
   res.json({ id: Number(info.lastInsertRowid), kind, created_at: db.prepare('SELECT created_at FROM messages WHERE id=?').get(info.lastInsertRowid).created_at });
+});
+app.post('/api/upload/chunk/:id/:idx', express.raw({ type: () => true, limit: '3mb' }), (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  const idx = Number(req.params.idx);
+  if (!Number.isInteger(idx) || idx < 0 || idx > 3999 || !Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Bad piece.' });
+  const d = upDir(req.user.id, req.params.id);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, idx + '.part'), req.body);
+  res.json({ ok: true });
+});
+app.get('/api/upload/status/:id', (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  let have = [];
+  try { have = fs.readdirSync(upDir(req.user.id, req.params.id)).filter(n => /^\d+\.part$/.test(n)).map(n => parseInt(n, 10)); } catch (e) {}
+  res.json({ have });
 });
 app.post('/api/messages/attachment/:id', upload.single('file'), (req, res) => {
   if (!req.user) return res.sendStatus(401);

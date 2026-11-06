@@ -146,7 +146,13 @@ public class MainActivity extends Activity {
             }
             @JavascriptInterface public String upStatus(String id) {
                 int[] st = UploadService.STATUS.get(id);
-                return st == null ? "0|0" : st[0] + "|" + st[1];
+                if (st == null) {
+                    // The app was closed since: a saved file means it is paused, nothing saved means it is gone.
+                    boolean saved = UploadService.metaFile(MainActivity.this, id).exists() && UploadService.cacheFile(MainActivity.this, id).exists();
+                    return saved ? "5|0|Paused" : "0|0";
+                }
+                String why = UploadService.ERR.get(id);
+                return st[0] + "|" + st[1] + (why == null ? "" : "|" + why);
             }
             @JavascriptInterface public boolean upRetry(String id) { return UploadService.retry(MainActivity.this, id); }
             @JavascriptInterface public void upCancel(String id) {

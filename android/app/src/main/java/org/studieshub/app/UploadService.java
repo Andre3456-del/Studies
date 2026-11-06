@@ -90,83 +90,159 @@ public class UploadService extends Service {
     }
 
     private void loop() {
-        Job j;
-        while ((j = QUEUE.poll()) != null) {
-            if (j.cancel) { STATUS.put(j.id, new int[]{4, 0}); cacheFile(this, j.id).delete(); continue; }
-            run(j);
+        while (true) {
+            Job j;
+            while ((j = QUEUE.poll()) != null) {
+                if (j.cancel) { STATUS.put(j.id, new int[]{4, 0}); cacheFile(this, j.id).delete(); continue; }
+                run(j);
+            }
+            synchronized (UploadService.class) { if (QUEUE.isEmpty()) { running = false; break; } }
         }
-        synchronized (UploadService.class) { running = false; }
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE); else stopForeground(true);
         stopSelf();
+    }
+
+    static final ConcurrentHashMap<String, String> ERR = new ConcurrentHashMap<>();
+    private static final int PIECE = 1024 * 1024;
+
+    private static String b64(String x) { return android.util.Base64.encodeToString(x.getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP); }
+
+    private String readAll(HttpURLConnection h) {
+        try {
+            InputStream in = h.getResponseCode() >= 400 ? h.getErrorStream() : h.getInputStream();
+            if (in == null) return "";
+            java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+            byte[] b = new byte[4096]; int r;
+            while ((r = in.read(b)) > 0 && o.size() < 20000) o.write(b, 0, r);
+            return o.toString("UTF-8");
+        } catch (Exception e) { return ""; }
+    }
+
+    private static String jsonError(String body) {
+        try { return new JSONObject(body).optString("error", ""); } catch (Exception e) { return ""; }
+    }
+
+    private HttpURLConnection open(String path, String method, String ck) throws Exception {
+        HttpURLConnection h = (HttpURLConnection) new URL(BASE + path).openConnection();
+        h.setRequestMethod(method);
+        h.setConnectTimeout(15000); h.setReadTimeout(60000);
+        if (ck != null) h.setRequestProperty("Cookie", ck);
+        return h;
     }
 
     private void run(Job j) {
         File f = cacheFile(this, j.id);
         STATUS.put(j.id, new int[]{2, 0});
+        ERR.remove(j.id);
         update(j, 0);
-        boolean ok = false;
+        boolean ok = false, hard = false;
+        String why = "";
+        android.os.PowerManager.WakeLock wl = null;
         try {
-            if (!f.exists()) throw new Exception("missing");
-            String boundary = "----sh" + System.nanoTime();
-            StringBuilder head = new StringBuilder();
-            String fileField = "file";
-            JSONArray fl = new JSONArray(j.fields == null || j.fields.isEmpty() ? "[]" : j.fields);
-            for (int k = 0; k < fl.length(); k++) {
-                JSONArray p = fl.getJSONArray(k);
-                if ("__file".equals(p.getString(0))) { fileField = p.getString(1).replaceAll("[^A-Za-z0-9_-]", ""); continue; }
-                head.append("--").append(boundary).append("\r\nContent-Disposition: form-data; name=\"").append(p.getString(0).replace("\"", "")).append("\"\r\n\r\n").append(p.getString(1)).append("\r\n");
-            }
-            head.append("--").append(boundary).append("\r\nContent-Disposition: form-data; name=\"").append(fileField).append("\"; filename=\"").append(j.name.replace("\"", "").replace("\r", "").replace("\n", "")).append("\"\r\nContent-Type: ").append(j.mime).append("\r\n\r\n");
-            byte[] hb = head.toString().getBytes(StandardCharsets.UTF_8), tb = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
-            long total = f.length();
-            HttpURLConnection h = (HttpURLConnection) new URL(BASE + j.url).openConnection();
-            h.setRequestMethod("POST");
-            h.setConnectTimeout(20000); h.setReadTimeout(120000);
-            h.setDoOutput(true);
-            h.setFixedLengthStreamingMode(hb.length + total + tb.length);
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            wl = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "studieshub:upload");
+            wl.acquire(2 * 3600 * 1000L);
+        } catch (Throwable t) { wl = null; }
+        try {
+            if (!f.exists()) throw new Exception("The file is no longer on this phone.");
             String ck = CookieManager.getInstance().getCookie(BASE);
-            if (ck != null) h.setRequestProperty("Cookie", ck);
-            h.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-            OutputStream os = h.getOutputStream();
-            os.write(hb);
-            byte[] buf = new byte[65536];
-            long sent = 0;
-            try (InputStream in = new FileInputStream(f)) {
-                int r;
-                while ((r = in.read(buf)) > 0) {
-                    if (j.cancel) { h.disconnect(); throw new Exception("cancelled"); }
-                    os.write(buf, 0, r);
-                    sent += r;
-                    int pct = total == 0 ? 100 : (int) Math.min(100, sent * 100 / total);
-                    STATUS.put(j.id, new int[]{2, pct});
-                    update(j, pct);
+            long total = f.length();
+            int pieces = (int) Math.max(1, (total + PIECE - 1) / PIECE);
+            // What has the site already got from an earlier try?
+            java.util.HashSet<Integer> have = new java.util.HashSet<>();
+            try {
+                HttpURLConnection h = open("/api/upload/status/" + j.id, "GET", ck);
+                if (h.getResponseCode() == 200) {
+                    JSONArray a = new JSONObject(readAll(h)).getJSONArray("have");
+                    for (int k = 0; k < a.length(); k++) have.add(a.getInt(k));
+                } else if (h.getResponseCode() == 401) { hard = true; throw new Exception("You are signed out. Open the app and sign in again."); }
+                h.disconnect();
+            } catch (java.io.IOException e) { /* offline: the piece loop below will retry */ }
+            java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r");
+            byte[] buf = new byte[PIECE];
+            for (int k = 0; k < pieces; k++) {
+                if (j.cancel) throw new Exception("cancelled");
+                if (!have.contains(k)) {
+                    raf.seek((long) k * PIECE);
+                    int n = raf.read(buf, 0, (int) Math.min(PIECE, total - (long) k * PIECE));
+                    if (n <= 0) throw new Exception("Could not read the file.");
+                    boolean sent = false;
+                    String last = "";
+                    for (int attempt = 0; attempt < 8 && !sent; attempt++) {
+                        if (j.cancel) throw new Exception("cancelled");
+                        try {
+                            HttpURLConnection h = open("/api/upload/chunk/" + j.id + "/" + k, "POST", ck);
+                            h.setDoOutput(true);
+                            h.setRequestProperty("Content-Type", "application/octet-stream");
+                            h.setFixedLengthStreamingMode(n);
+                            OutputStream os = h.getOutputStream();
+                            os.write(buf, 0, n); os.flush();
+                            int code = h.getResponseCode();
+                            String body = readAll(h);
+                            h.disconnect();
+                            if (code == 200) sent = true;
+                            else if (code == 401) { hard = true; throw new Exception("You are signed out. Open the app and sign in again."); }
+                            else last = "The site answered " + code;
+                        } catch (java.io.IOException e) { last = "No connection to the site"; }
+                        if (!sent) { try { Thread.sleep(Math.min(15000, 1000L << attempt)); } catch (InterruptedException ie) { } }
+                    }
+                    if (!sent) throw new Exception(last.isEmpty() ? "Network problem" : last);
                 }
+                long done = Math.min(total, (long) (k + 1) * PIECE);
+                int pct = (int) Math.min(99, done * 100 / Math.max(1, total));
+                STATUS.put(j.id, new int[]{2, pct});
+                update(j, pct);
             }
-            os.write(tb);
-            os.flush();
-            int code = h.getResponseCode();
-            ok = code >= 200 && code < 400;
-            h.disconnect();
-            if (ok && j.afterUrl != null && !j.afterUrl.isEmpty()) {
+            raf.close();
+            // Tell the site to join the pieces and finish the job, same as a normal upload would.
+            JSONArray fl = new JSONArray(j.fields == null || j.fields.isEmpty() ? "[]" : j.fields), keep = new JSONArray();
+            for (int k = 0; k < fl.length(); k++) { JSONArray p = fl.getJSONArray(k); if (!"__file".equals(p.getString(0))) keep.put(p); }
+            String lastErr = "";
+            for (int attempt = 0; attempt < 5 && !ok; attempt++) {
                 try {
-                    HttpURLConnection a = (HttpURLConnection) new URL(BASE + j.afterUrl).openConnection();
-                    a.setRequestMethod("POST"); a.setDoOutput(true);
-                    if (ck != null) a.setRequestProperty("Cookie", ck);
+                    HttpURLConnection h = open(j.url, "POST", ck);
+                    h.setDoOutput(true);
+                    h.setFixedLengthStreamingMode(0);
+                    h.setRequestProperty("X-Assembled", j.id);
+                    h.setRequestProperty("X-Chunks", String.valueOf(pieces));
+                    h.setRequestProperty("X-Fields", b64(keep.toString()));
+                    h.setRequestProperty("X-Filename", b64(j.name));
+                    h.setRequestProperty("X-Mime", j.mime);
+                    h.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                    h.getOutputStream().close();
+                    int code = h.getResponseCode();
+                    String body = readAll(h);
+                    h.disconnect();
+                    if (code >= 200 && code < 400) ok = true;
+                    else if (code == 409 || code >= 500 || code == 408 || code == 429) lastErr = "The site answered " + code;
+                    else { hard = true; String m = jsonError(body); throw new Exception(m.isEmpty() ? "The site refused the file (" + code + ")" : m); }
+                } catch (java.io.IOException e) { lastErr = "No connection to the site"; }
+                if (!ok) { try { Thread.sleep(2000L * (attempt + 1)); } catch (InterruptedException ie) { } }
+            }
+            if (!ok) throw new Exception(lastErr.isEmpty() ? "Network problem" : lastErr);
+            if (j.afterUrl != null && !j.afterUrl.isEmpty()) {
+                try {
+                    HttpURLConnection a = open(j.afterUrl, "POST", ck);
+                    a.setDoOutput(true);
                     a.setRequestProperty("Content-Type", "application/json");
                     a.getOutputStream().write((j.afterJson == null ? "{}" : j.afterJson).getBytes(StandardCharsets.UTF_8));
                     a.getResponseCode(); a.disconnect();
                 } catch (Exception e) { /* caption is best effort */ }
             }
-        } catch (Exception e) { ok = false; }
-        if (ok || j.cancel) { f.delete(); metaFile(this, j.id).delete(); }
+        } catch (Exception e) { ok = false; if (!j.cancel) why = e.getMessage() == null ? "Network problem" : e.getMessage(); }
+        finally { try { if (wl != null && wl.isHeld()) wl.release(); } catch (Throwable t) { } }
+        if (ok || j.cancel || hard) { f.delete(); metaFile(this, j.id).delete(); }
+        if (!ok) ERR.put(j.id, why.replace("|", " "));
         STATUS.put(j.id, new int[]{ok ? 3 : 4, ok ? 100 : 0});
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (!ok && !j.cancel) {
             Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CH) : new Notification.Builder(this);
-            Intent ri = new Intent(this, UploadRetryReceiver.class).putExtra("id", j.id);
-            b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle("Upload paused").setContentText(j.title + " stopped, probably a network problem. Tap Retry to continue.").setAutoCancel(true)
-             .setContentIntent(PendingIntent.getActivity(this, 11, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
-             .addAction(new Notification.Action.Builder(R.drawable.ic_stat, "Retry", PendingIntent.getBroadcast(this, 9100 + (j.id.hashCode() & 0xff), ri, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)).build());
+            b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle(hard ? "Upload failed" : "Upload paused").setContentText(j.title + ": " + why + (hard ? "" : ". Tap Retry to continue.")).setAutoCancel(true)
+             .setContentIntent(PendingIntent.getActivity(this, 11, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+            if (!hard) {
+                Intent ri = new Intent(this, UploadRetryReceiver.class).putExtra("id", j.id);
+                b.addAction(new Notification.Action.Builder(R.drawable.ic_stat, "Retry", PendingIntent.getBroadcast(this, 9100 + (j.id.hashCode() & 0xff), ri, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)).build());
+            }
             nm.notify(9100 + (j.id.hashCode() & 0xff), b.build());
         }
     }
