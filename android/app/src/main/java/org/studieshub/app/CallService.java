@@ -111,7 +111,7 @@ public class CallService extends FirebaseMessagingService {
         boolean isChat = chat != null && cid != null && !cid.isEmpty();
         android.graphics.Bitmap pic = null;
         if (isChat && av != null) pic = fetchAvatar("https://studieshub.org" + av);
-        if (pic == null) pic = android.graphics.BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher);
+        if (pic == null) pic = isChat ? initials(title) : android.graphics.BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher);
         b.setLargeIcon(round(pic));
         if (isChat) {
             // Like WhatsApp: the last few messages of this chat stack up in one conversation notification.
@@ -151,6 +151,27 @@ public class CallService extends FirebaseMessagingService {
             b.addAction(reply).addAction(read).addAction(mute);
         }
         nm.notify(nid, b.build());
+        if (isChat) {
+            // One "Studies Hub" header that holds all the chats; news, uploads and the rest stay outside it.
+            Notification.Builder sb = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, "messages")) : new Notification.Builder(this);
+            sb.setSmallIcon(R.drawable.ic_stat).setColor(0xFF6D5EFC).setContentTitle("Studies Hub").setContentText("New messages").setGroup("sh_chats").setGroupSummary(true).setAutoCancel(true).setContentIntent(PendingIntent.getActivity(this, 7, new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", "/chat"), flags()));
+            if (Build.VERSION.SDK_INT >= 26) sb.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN);
+            nm.notify(7, sb.build());
+        }
+    }
+
+    private android.graphics.Bitmap initials(String name) {
+        int sz = 128;
+        android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(sz, sz, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas cv = new android.graphics.Canvas(bm);
+        int[] cols = {0xFF6D5EFC, 0xFF0EA5E9, 0xFF10B981, 0xFFF59E0B, 0xFFEF4444, 0xFFEC4899, 0xFF8B5CF6};
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        p.setColor(cols[Math.abs(name.hashCode()) % cols.length]);
+        cv.drawRect(0, 0, sz, sz, p);
+        p.setColor(0xFFFFFFFF); p.setTextSize(64); p.setTextAlign(android.graphics.Paint.Align.CENTER); p.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        String t = name == null || name.trim().isEmpty() ? "?" : name.trim().substring(0, name.trim().offsetByCodePoints(0, 1)).toUpperCase();
+        cv.drawText(t, sz / 2f, sz / 2f + 22, p);
+        return bm;
     }
 
     private android.graphics.Bitmap fetchAvatar(String u) {
