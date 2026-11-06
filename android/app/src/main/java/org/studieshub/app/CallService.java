@@ -43,7 +43,6 @@ public class CallService extends FirebaseMessagingService {
             ch.enableVibration(true);
             ch.setVibrationPattern(new long[]{0, 800, 600, 800, 600, 800});
             ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-            ch.setBypassDnd(true);
             nm.createNotificationChannel(ch);
         }
         if (nm.getNotificationChannel(CH_NOTES) == null) {
@@ -86,15 +85,22 @@ public class CallService extends FirebaseMessagingService {
         boolean inUse = pm != null && pm.isInteractive() && km != null && !km.isKeyguardLocked();
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, Sounds.channel(c, "calls")) : new Notification.Builder(c);
         b.setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle(title).setContentText(body)
-         .setColor(0xFF000000).setLargeIcon(android.graphics.BitmapFactory.decodeResource(c.getResources(), R.mipmap.ic_launcher)).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(true).setOnlyAlertOnce(true)
-         .setContentIntent(tap)
-         .addAction(new Notification.Action.Builder(android.R.drawable.sym_action_call, "Answer", answer).build())
-         .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline).build());
-        if (!inUse) b.setFullScreenIntent(tap, true); // screen off or locked: show the call screen
-        if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(45000);
-        else { b.setPriority(Notification.PRIORITY_MAX).setVibrate(new long[]{0, 800, 600, 800, 600, 800}); Uri ru = Sounds.current(c, "calls"); if (ru != null) b.setSound(ru, AudioManager_STREAM_RING()); }
+         .setColor(0xFF000000).setLargeIcon(android.graphics.BitmapFactory.decodeResource(c.getResources(), R.mipmap.ic_launcher)).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(false).setOnlyAlertOnce(false)
+         .setVisibility(Notification.VISIBILITY_PUBLIC)
+         .setContentIntent(tap);
+        // The banner stays up, with Answer and Decline, until the call is answered, declined or really over (the site tells us when it ends).
+        b.setFullScreenIntent(tap, true); // phone in use: this shows as the banner. Screen off or locked: the call screen opens.
+        if (Build.VERSION.SDK_INT >= 31) {
+            android.app.Person caller = new android.app.Person.Builder().setName(title).setImportant(true).build();
+            b.setStyle(Notification.CallStyle.forIncomingCall(caller, decline, answer));
+        } else {
+            b.addAction(new Notification.Action.Builder(android.R.drawable.sym_action_call, "Answer", answer).build())
+             .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline).build());
+        }
+        if (Build.VERSION.SDK_INT >= 26) b.setTimeoutAfter(120000);
+        else { b.setPriority(Notification.PRIORITY_MAX).setVibrate(new long[]{0, 800, 600, 800, 600, 800}); Uri ru = Sounds.current(c, "calls"); if (ru == null) ru = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE); b.setSound(ru, AudioManager_STREAM_RING()); }
         Notification n = b.build();
-        n.flags |= Notification.FLAG_INSISTENT; // keep ringing until answered, declined or timed out
+        n.flags |= Notification.FLAG_INSISTENT; // keep ringing until answered, declined or over
         nm.notify(nid, n);
     }
 

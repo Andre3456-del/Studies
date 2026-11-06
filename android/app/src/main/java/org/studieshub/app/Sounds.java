@@ -28,7 +28,7 @@ final class Sounds {
     static Uri current(Context c, String cat) {
         String v = pref(c, cat);
         if ("default".equals(v)) return defaultFor(c, cat);
-        if ("silent".equals(v)) return null;
+        if ("silent".equals(v)) return "calls".equals(cat) ? defaultFor(c, cat) : null;
         try { return Uri.parse(v); } catch (Throwable t) { return defaultFor(c, cat); }
     }
 
@@ -62,7 +62,6 @@ final class Sounds {
                     ch.enableVibration(true);
                     ch.setVibrationPattern(new long[]{0, 800, 600, 800, 600, 800});
                     ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-                    ch.setBypassDnd(true);
                 }
                 nm.createNotificationChannel(ch);
             }
