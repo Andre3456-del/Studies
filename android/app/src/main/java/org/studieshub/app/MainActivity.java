@@ -100,6 +100,7 @@ public class MainActivity extends Activity {
         SharedPreferences lp = getSharedPreferences("studieshub", MODE_PRIVATE);
         lockOn = lp.getBoolean("lock_on", false);
         lockMin = lp.getInt("lock_min", 0);
+        startNetWatch();
         overlay = buildOverlay();
         root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         if (lockOn) { locked = true; secure(true); }
@@ -163,6 +164,21 @@ public class MainActivity extends Activity {
                 priv = p;
                 runOnUiThread(() -> secure(lockOn && locked));
             }
+            @JavascriptInterface public void offUser(String id) { OfflineStore.userId = id == null ? "0" : id; }
+            @JavascriptInterface public boolean offSave(String slug, String title, String kind, String course) {
+                try {
+                    OfflineStore.save(MainActivity.this, web.getSettings().getUserAgentString(), CookieManager.getInstance().getCookie("https://studieshub.org"), slug, title, kind, course);
+                    return true;
+                } catch (Throwable t) { return false; }
+            }
+            @JavascriptInterface public String offStatus(String slug) {
+                String st = OfflineStore.STATUS.get(slug);
+                if (st != null && !st.equals("saved")) return st;
+                return OfflineStore.has(MainActivity.this, slug) ? "saved" : "none";
+            }
+            @JavascriptInterface public void offRemove(String slug) { OfflineStore.remove(MainActivity.this, slug); }
+            @JavascriptInterface public String offList() { return OfflineStore.list(MainActivity.this); }
+            @JavascriptInterface public String netState() { return net; }
             @JavascriptInterface public boolean notifOn() {
                 try {
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
@@ -231,8 +247,12 @@ public class MainActivity extends Activity {
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception e) { }
                 return true;
             }
+            @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                return OfflineStore.serve(MainActivity.this, r.getUrl(), r.getMethod(), r.getRequestHeaders(), r.isForMainFrame());
+            }
             @Override public void onPageFinished(WebView v, String url) {
                 CookieManager.getInstance().flush();
+                if (!"online".equals(net)) v.evaluateJavascript("window.__net&&__net('" + net + "',1)", null);
                 inCall = url != null && url.contains("studieshub.org/call/");
                 String ck = CookieManager.getInstance().getCookie("https://studieshub.org");
                 if (ck != null && ck.contains("sid=")) startPresence();
@@ -539,9 +559,9 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() { if (ScreenShareService.ui == this) ScreenShareService.ui = null; super.onDestroy(); }
 
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
-    @Override protected void onPause() { super.onPause(); if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
+    @Override protected void onPause() { super.onPause(); fg = false; if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
     @Override protected void onResume() {
-        super.onResume(); web.onResume(); skipLock = false; if (!locked) secure(false);
+        super.onResume(); fg = true; web.onResume(); skipLock = false; if (!locked) secure(false);
         if (System.currentTimeMillis() - lastUpdateCheck > 3600000L) checkUpdate();
     }
 
@@ -679,6 +699,63 @@ public class MainActivity extends Activity {
         authing = true;
         authenticate(() -> { authing = false; locked = false; overlay.setVisibility(View.GONE); secure(false); },
                      () -> { authing = false; });
+    }
+
+
+    // ---- network watching: online, offline, or "not steady" (which also switches to offline mode) ----
+    private volatile String net = "online";
+    private volatile boolean fg = false;
+    private int pingOk = 0, pingBad = 0;
+    private final java.util.ArrayList<Long> flips = new java.util.ArrayList<>();
+
+    private void setNet(final String n) {
+        if (n.equals(net)) return;
+        String old = net;
+        net = n;
+        OfflineStore.offline = !"online".equals(n);
+        synchronized (flips) { flips.add(System.currentTimeMillis()); }
+        runOnUiThread(() -> { try { web.evaluateJavascript("window.__net&&__net('" + n + "')", null); } catch (Throwable t) { } });
+    }
+
+    private boolean hasNetwork() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            return nc != null && nc.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET);
+        } catch (Throwable t) { return true; }
+    }
+
+    private void startNetWatch() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            cm.registerDefaultNetworkCallback(new android.net.ConnectivityManager.NetworkCallback() {
+                @Override public void onLost(android.net.Network n) { pingOk = 0; pingBad = 3; setNet("offline"); }
+            });
+        } catch (Throwable t) { }
+        new Thread(() -> {
+            while (true) {
+                try { Thread.sleep(fg ? 5000 : 20000); } catch (InterruptedException e) { return; }
+                long t0 = System.currentTimeMillis();
+                boolean ok = false;
+                if (hasNetwork()) {
+                    try {
+                        java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://studieshub.org/health").openConnection();
+                        h.setConnectTimeout(4000); h.setReadTimeout(4000);
+                        ok = h.getResponseCode() < 500;
+                        h.disconnect();
+                    } catch (Exception e) { ok = false; }
+                }
+                long ms = System.currentTimeMillis() - t0;
+                if (ok && ms < 2500) { pingOk++; pingBad = 0; } else { pingBad++; pingOk = 0; }
+                // many ups and downs in a minute count as unsteady even if each ping works
+                long now = System.currentTimeMillis();
+                boolean flappy;
+                synchronized (flips) { for (int k = flips.size() - 1; k >= 0; k--) if (now - flips.get(k) > 60000) flips.remove(k); flappy = flips.size() >= 4; }
+                if (pingBad >= 2 || (ok && ms >= 2500 && pingBad >= 1)) setNet(hasNetwork() ? "unstable" : "offline");
+                else if (!hasNetwork()) setNet("offline");
+                else if (pingOk >= 2 && !flappy) setNet("online");
+            }
+        }).start();
     }
 
     private void setLock(boolean on, int minutes) {

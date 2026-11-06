@@ -1987,7 +1987,26 @@ ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><sc
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
 <script>(function(){if(!window.StudiesApp)return;function fail(m){var b=document.querySelector('a.gbtn');if(b)b.style.opacity='';if(m)alert(m)}window.studiesGoogleFail=fail;window.studiesGoogle=function(t,l){fetch('/auth/google/app',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:t,lecturer:!!l})}).then(function(r){return r.json()}).then(function(j){if(j.ok)location.href=j.url||'/';else fail(j.error)}).catch(function(){fail('No connection. Please try again.')})};document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a.gbtn');if(!a)return;e.preventDefault();a.style.opacity='.6';StudiesApp.google(/as=lecturer/.test(a.getAttribute('href')||''))},true)})()</script>
 <script>(function(){window.studiesNote=function(ok){alert(ok?'Notifications are on for this device.':'Notifications are off. Turn them on in your phone settings for Studies Hub.')};if(window.StudiesApp)return;var native=window.alert;window.alert=function(m){try{var o=document.createElement('div');o.setAttribute('role','alertdialog');o.style.cssText='position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';var b=document.createElement('div');b.style.cssText='max-width:420px;width:100%;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:16px;padding:20px;font:16px/1.45 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.45)';var t=document.createElement('div');t.textContent=String(m);t.style.whiteSpace='pre-wrap';var k=document.createElement('button');k.type='button';k.textContent='OK';k.style.cssText='margin-top:16px;float:right;border:0;border-radius:10px;padding:10px 22px;background:#6c63ff;color:#fff;font:600 15px system-ui,sans-serif;cursor:pointer';k.onclick=function(){o.remove()};b.appendChild(t);b.appendChild(k);o.appendChild(b);document.body.appendChild(o);k.focus()}catch(e){native.call(window,m)}}})()</script>
-${`<script>(function(){var A=window.StudiesApp;if(!A||!A.privatePage)return;var last=null;
+${`<script>(function(){var A=window.StudiesApp;if(!A||!A.offUser)return;
+try{A.offUser('${user ? user.id : 0}')}catch(e){}
+var bar=null,tm=null;
+function toast(msg,kind){if(!bar){bar=document.createElement('div');bar.style.cssText='position:fixed;left:12px;right:12px;top:calc(10px + env(safe-area-inset-top,0px));z-index:2147482000;border-radius:14px;padding:12px 14px;font:600 14px system-ui,sans-serif;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.4);text-align:center';document.body.appendChild(bar)}
+ bar.style.background=kind==='ok'?'#16a34a':kind==='warn'?'#b45309':'#334155';bar.textContent=msg;bar.hidden=false;if(tm)clearTimeout(tm);if(kind==='ok')tm=setTimeout(function(){bar.hidden=true},3000);else tm=setTimeout(function(){bar.hidden=true},9000)}
+window.__net=function(s,quiet){
+ if(s==='offline'){toast('You are offline. Only materials you saved on this phone are available.','off')}
+ else if(s==='unstable'){toast('Your network is not steady. Switching to offline mode, so saved materials stay available.','warn')}
+ else{if(!quiet)toast('Back online','ok');if(document.title==='Offline')setTimeout(function(){location.href='/'},600)}};
+try{var st=A.netState();if(st&&st!=='online')window.__net(st,1)}catch(e){}
+var ob=document.getElementById('offBar');
+if(ob){var slug=ob.getAttribute('data-slug'),btn=document.createElement('button');btn.type='button';btn.className='btn ghost';btn.style.margin='6px 0 10px';ob.appendChild(btn);
+ function draw(){var s=String(A.offStatus(slug));
+  if(s==='saved'){btn.textContent='✓ Saved on this phone. Tap to remove';btn.disabled=false}
+  else if(s.indexOf('saving')===0){btn.textContent='Saving… '+(s.split(':')[1]||'')+'%';btn.disabled=true;setTimeout(draw,700);return}
+  else if(s.indexOf('error')===0){btn.textContent='Could not save ('+s.slice(6)+'). Tap to try again';btn.disabled=false}
+  else{btn.textContent='⬇ Save for offline';btn.disabled=false}}
+ btn.onclick=function(){var s=String(A.offStatus(slug));if(s==='saved'){if(confirm('Remove this from your phone?')){A.offRemove(slug);draw()}}else{A.offSave(slug,ob.getAttribute('data-title'),ob.getAttribute('data-kind'),ob.getAttribute('data-course')||'');draw()}};
+ draw()}
+})()</script>`}${`<script>(function(){var A=window.StudiesApp;if(!A||!A.privatePage)return;var last=null;
 function chk(){var p=location.pathname,v=/^\\/(settings\\/(profile|security|devices)|login|signup|forgot|reset|verify|welcome|pay|admin)(\\/|$)/.test(p);if(v!==last){last=v;try{A.privatePage(v)}catch(e){}}}
 chk();setInterval(chk,600)})()</script>`}${user ? `<script>${SEARCHSEL_JS}</script><script>${PREVIEW_JS}</script>` : ''}
 ${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
@@ -4199,6 +4218,7 @@ const SETTINGS_PAGES = [
   ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
   ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
   ['/settings/security', '🔒', 'Security', 'App lock and change your password'],
+  ['/saved', '📥', 'Saved offline', 'Materials kept on this phone, open without internet'],
   ['/app', '📲', 'Download the app', 'Get Studies Hub as an Android app'],
 ];
 // The tools a university admin gave this person (or that a full admin has by default).
@@ -4211,7 +4231,7 @@ const uniToolRows = u => {
 };
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
-  const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req)) && (x[0] !== '/saved' || /StudiesHubApp/.test(req.headers['user-agent'] || ''))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -4455,6 +4475,22 @@ function paywallBody(p, req) {
 <div class="card" style="text-align:center"><p style="font-size:32px;font-weight:700;margin:8px 0">₦${priceNgn.toFixed(0)}</p>${action}</div>`;
 }
 
+const offBarHtml = p0 => { const p = Object.assign({}, p0, { course_name: ((p0.course_id && db.prepare('SELECT name FROM courses WHERE id=?').get(p0.course_id)) || {}).name || '' }); return (p.kind === 'pdf' || p.kind === 'doc' || (p.kind === 'video' && !p.video_id)) ? `<div id="offBar" data-slug="${esc(p.slug)}" data-kind="${esc(p.kind)}" data-title="${esc(p.title)}" data-course="${esc(p.course_name || '')}"></div>` : ''; };
+app.get('/saved', (req, res) => {
+  if (!req.user) return res.redirect('/login?next=/saved');
+  res.send(layout('Saved offline', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Saved offline</h1>
+<p class="mut">These stay on this phone. They open with no internet, and without loading again.</p>
+<div id="savedList"><p class="mut">Loading&hellip;</p></div>
+<script>(function(){var A=window.StudiesApp,box=document.getElementById('savedList');
+if(!A||!A.offList){box.innerHTML='<p class="mut">This is only available in the Studies Hub app.</p>';return}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function draw(){var l=[];try{l=JSON.parse(A.offList())}catch(e){}
+ if(!l.length){box.innerHTML='<div class="card"><p class="mut" style="margin:0">Nothing saved yet. Open a material and tap <b>Save for offline</b>.</p></div>';return}
+ l.sort(function(a,b){return b.savedAt-a.savedAt});
+ box.innerHTML=l.map(function(o){var ic=o.kind==='pdf'?'\u{1F4D5}':o.kind==='video'?'\u{1F3AC}':'\u{1F4C4}';return '<div class="card row"><div><a href="/p/'+esc(o.slug)+'">'+ic+' '+esc(o.title)+'</a><br><span class="mut">'+esc(o.course||'')+(o.course?' &middot; ':'')+(o.size/1048576).toFixed(1)+' MB</span></div><button type="button" class="ghost" data-rm="'+esc(o.slug)+'">Remove</button></div>'}).join('')}
+box.onclick=function(e){var b=e.target.closest('[data-rm]');if(b&&confirm('Remove this from your phone?')){A.offRemove(b.getAttribute('data-rm'));draw()}};
+draw()})()</script>`, req.user));
+});
 app.get('/p/:slug', (req, res) => {
   const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
   if (!p) return res.status(404).send(layout('Not found', '<h2>Page not found</h2>', req.user));
@@ -4475,7 +4511,7 @@ app.get('/p/:slug', (req, res) => {
   }
   if (p.kind === 'video' && !p.video_id && p.file_data) {
     // Uploaded from a phone: played right here with the browser's own player (it fetches pieces as needed, so it starts quickly and can be skipped around).
-    return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><video controls playsinline preload="metadata" style="width:100%;max-height:78vh;border-radius:12px;background:#000" src="/p/${esc(p.slug)}/raw"></video><p class="mut" style="margin:10px 0 0">If it does not start, <a href="/p/${esc(p.slug)}/raw?dl=1">download it</a> and play it on your phone.</p></div>`, req.user));
+    return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${offBarHtml(p)}<video controls playsinline preload="metadata" style="width:100%;max-height:78vh;border-radius:12px;background:#000" src="/p/${esc(p.slug)}/raw"></video><p class="mut" style="margin:10px 0 0">If it does not start, <a href="/p/${esc(p.slug)}/raw?dl=1">download it</a> and play it on your phone.</p></div>`, req.user));
   }
   if (p.kind === 'video') {
     return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
@@ -4489,7 +4525,7 @@ app.get('/p/:slug', (req, res) => {
     : `<div id="docViewer" class="doc-viewer"><p class="mut">Loading document&hellip;</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script>fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return mammoth.convertToHtml({arrayBuffer:buf})}).then(function(result){document.getElementById('docViewer').innerHTML=result.value||'<p class="mut">This document has no readable text to preview.</p>'}).catch(function(){document.getElementById('docViewer').innerHTML='<p class="mut">Could not preview this document here -- try the download link below.</p>'})</script>`;
-  res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
+  res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${offBarHtml(p)}${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
 });
 
 app.get('/p/:slug/raw', (req, res) => {
