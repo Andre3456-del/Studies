@@ -1346,6 +1346,10 @@ body.msg-selecting .chat-head{display:none}
 .fw-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--line);cursor:pointer}
 .fw-row input{width:auto;margin:0}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:70;background:rgba(17,24,39,.92);color:#fff;padding:8px 16px;border-radius:99px;font-size:14px}
+.shsw{appearance:none!important;-webkit-appearance:none!important;display:block!important;flex:none!important;width:54px!important;min-width:54px!important;max-width:54px!important;height:32px!important;border-radius:16px!important;background:#5d5d70!important;position:relative!important;transition:background .2s;border:0!important;padding:0!important;margin:0!important;box-shadow:none!important;cursor:pointer}
+.shsw::before{content:'';position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .2s}
+.shsw:checked{background:#6c63ff!important}.shsw:checked::before{transform:translateX(22px)}
+.swrow{display:flex;align-items:center;gap:14px;cursor:pointer}.swrow>span{flex:1}
 .msg-text{white-space:pre-wrap;overflow-wrap:anywhere}
 .bubble{max-width:78%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;word-wrap:break-word}
 .bubble.me{align-self:flex-end;background:linear-gradient(135deg,#5bc8ff,var(--blue) 60%);color:#04101f;border-bottom-right-radius:4px}
@@ -4169,7 +4173,7 @@ app.get('/settings/active-status', (req, res) => {
   const hidden = !!db.prepare('SELECT hide_active FROM users WHERE id=?').get(req.user.id).hide_active;
   res.send(layout('Active status', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Active status</h1>
 <p class="mut">When this is on, friends can see when you're online in chat. Turn it off to always appear offline to them.</p>
-<form method="post" action="/settings/active-status" class="card row" style="align-items:center"><div style="flex:1"><b>Show when I'm online</b></div><button name="hide" value="${hidden ? '0' : '1'}">${hidden ? 'Turn on' : 'Turn off'}</button></form>
+<form method="post" action="/settings/active-status" class="card" id="actForm"><input type="hidden" name="hide" id="actHide" value="${hidden ? '0' : '1'}"><label class="swrow"><span><b>Show when I'm online</b><br><span class="mut" style="font-size:13px">${hidden ? 'Off. You always appear offline.' : 'On. Friends can see when you are online.'}</span></span><input type="checkbox" role="switch" class="shsw" id="actSw" aria-label="Show when I'm online"${hidden ? '' : ' checked'}></label></form><script>document.getElementById('actSw').onchange=function(){document.getElementById('actHide').value=this.checked?'0':'1';document.getElementById('actForm').submit()}</script>
 <div class="card row" id="bgCard" hidden style="align-items:center;gap:14px"><style>#bgCard input.bgsw{appearance:none!important;-webkit-appearance:none!important;display:block!important;flex:none!important;width:54px!important;min-width:54px!important;max-width:54px!important;height:32px!important;border-radius:16px!important;background:#5d5d70!important;position:relative!important;transition:background .2s;border:0!important;padding:0!important;margin:0!important;box-shadow:none!important;cursor:pointer}#bgCard input.bgsw::before{content:'';position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .2s}#bgCard input.bgsw:checked{background:#22c55e!important}#bgCard input.bgsw:checked::before{transform:translateX(22px)}</style><div style="flex:1"><b>Stay online when the app is closed</b><br><span class="mut" style="font-size:13px">Friends see you as online whenever your phone has internet. Android shows a small notification while this is on.</span></div><input type="checkbox" role="switch" id="bgSw" class="bgsw" aria-label="Stay online when the app is closed"></div>
 <script>(function(){var A=window.StudiesApp;if(!A||!A.presenceOn)return;var c=document.getElementById('bgCard'),s=document.getElementById('bgSw');c.hidden=false;s.checked=!!A.presenceOn();s.onchange=function(){A.presence(s.checked)}})()</script>`, req.user));
 });
@@ -4195,7 +4199,12 @@ app.post('/settings/appearance', (req, res) => {
 app.get('/settings/notifications', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/notifications');
   res.send(layout('Notifications', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Notifications</h1>
-<div class="card"><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="if(window.StudiesApp){StudiesApp.notifications();return}window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>
+<div class="card"><label class="swrow"><span><b>Notifications on this device</b><br><span class="mut" id="ntState" style="font-size:13px">Messages, calls, friend requests and new uploads.</span></span><input type="checkbox" role="switch" class="shsw" id="ntSw" aria-label="Notifications"></label></div>
+<script>(function(){var A=window.StudiesApp,sw=document.getElementById('ntSw'),st=document.getElementById('ntState');
+function cur(){try{if(A&&A.notifOn)return !!A.notifOn();if(A)return null;return window.Notification&&Notification.permission==='granted'}catch(e){return false}}
+function show(){var c=cur();if(c!==null)sw.checked=c;st.textContent=sw.checked?'On. You will be told about messages, calls and new uploads.':'Off. Turn it on to get messages, calls and new uploads.'}
+sw.onchange=function(){if(sw.checked){if(A){A.notifications();setTimeout(show,1500)}else if(window.enablePush)window.enablePush().then(function(ok){if(!ok){sw.checked=false;alert('Notifications were not allowed. You can allow them in your browser settings.')}show()});else{sw.checked=false}}else{if(A){A.notifications()}else alert('To turn notifications off, use your browser settings for this site.');setTimeout(show,1500)}};
+show();document.addEventListener('visibilitychange',function(){setTimeout(show,500)});window.addEventListener('focus',function(){setTimeout(show,500)})})()</script>
 <div class="card" id="sndCard" hidden><h2 style="margin-top:0">Sounds</h2><p class="mut" style="margin:0 0 6px">Pick a sound for each kind of notification, and a ringing tone for calls.</p><div id="sndRows"></div></div>
 <style>.sndr{display:flex;align-items:center;gap:10px;padding:12px 0;border-top:1px solid rgba(127,127,127,.25)}.sndr:first-child{border-top:0}.sndr .t{flex:1;min-width:0}.sndr .t span{display:block;font-size:13px;opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sndr button{padding:8px 12px}</style>
 <script>(function(){var A=window.StudiesApp;if(!A||!A.soundInfo)return;var L=[['messages','Chat messages'],['news','News'],['uploads','New uploads'],['general','Other notifications'],['calls','Call ringing tone']];
@@ -5104,7 +5113,7 @@ app.get('/admin', adminish, (req, res) => {
 <select name="auto_role"><option value="">Nothing extra -- just show the title</option><option value="news">News admin -- can post news directly</option><option value="content">Files admin -- can upload course content</option><option value="observer">Observer -- read-only view of Admin, no posting power</option></select>
 <label class="mut">Their news must be approved by</label>
 <select name="approver_id">${approverOpts}</select>
-<label class="row" style="gap:8px;margin-top:8px;cursor:pointer"><input type="checkbox" name="can_verify" value="1" style="width:auto">Let them verify other position claims within their own scope (e.g. a president verifying their reps)</label>
+<label class="row" style="gap:8px;margin-top:8px;cursor:pointer"><input type="checkbox" class="shsw" name="can_verify" value="1" style="width:auto">Let them verify other position claims within their own scope (e.g. a president verifying their reps)</label>
 <div class="row" style="gap:6px;margin-top:8px"><button>Verify</button></div>
 </form>
 <form method="post" action="/admin/positions/${p.id}/reject" style="margin-top:4px"><button class="link">Reject instead</button></form>
@@ -5132,7 +5141,7 @@ app.get('/admin', adminish, (req, res) => {
 <form method="post" action="/positions/${p.id}/verify" style="margin-top:8px">
 <select name="scope">${scopeOpts}</select>
 <select name="auto_role"><option value="">Nothing extra</option><option value="news">News admin</option><option value="content">Files admin</option></select>
-<label class="row" style="gap:8px;margin-top:6px;cursor:pointer"><input type="checkbox" name="can_verify" value="1" style="width:auto">Let them verify others too</label>
+<label class="row" style="gap:8px;margin-top:6px;cursor:pointer"><input type="checkbox" class="shsw" name="can_verify" value="1" style="width:auto">Let them verify others too</label>
 <div class="row" style="gap:6px;margin-top:8px"><button>Verify</button></div>
 </form>
 <form method="post" action="/positions/${p.id}/verify-reject" style="margin-top:4px"><button class="link">Reject</button></form>
@@ -5187,7 +5196,7 @@ ${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</opti
     : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Your role can upload plain HTML pages. PDFs, Word documents, videos and CBT pages need a Files admin or a full admin.</p>'}
 <div id="fileField"><input type="file" name="file" accept=".html,.htm,text/html"></div>
 ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."><p class="hint" style="margin:4px 0 0">Paste a YouTube link here, <b>or</b> choose a video from your phone above. Either one works.</p></div>` : ''}
-<label><input type="checkbox" name="members_only" value="1"> Members only (login required)</label><br>
+<label><input type="checkbox" class="shsw" name="members_only" value="1"> Members only (login required)</label><br>
 <label class="hint" style="display:block;margin-top:8px">Who is this for?</label>
 <details><summary>Which departments? (leave all unchecked for every department)</summary>${departmentCheckboxes([])}</details>
 <select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>

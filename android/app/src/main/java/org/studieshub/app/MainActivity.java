@@ -126,6 +126,12 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void google(final boolean lecturer) { runOnUiThread(() -> startGoogle(lecturer)); }
             @JavascriptInterface public void notifications() { runOnUiThread(() -> startNotes()); }
+            @JavascriptInterface public boolean notifOn() {
+                try {
+                    if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
+                    return ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).areNotificationsEnabled();
+                } catch (Throwable t) { return false; }
+            }
             @JavascriptInterface public void incomingCall(final String id, final String title, final String body) {
                 try { CallService.showCall(MainActivity.this, id, title, body); } catch (Throwable t) { }
             }
