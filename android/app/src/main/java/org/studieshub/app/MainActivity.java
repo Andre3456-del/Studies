@@ -657,6 +657,17 @@ public class MainActivity extends Activity {
                     if (i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) != id) return;
                     try { unregisterReceiver(this); } catch (Exception e) { }
                     try {
+                        // only install if the download really finished and is a newer build
+                        DownloadManager.Query q = new DownloadManager.Query().setFilterById(id);
+                        android.database.Cursor cu = dm.query(q);
+                        boolean ok = false;
+                        if (cu != null) { if (cu.moveToFirst()) ok = cu.getInt(cu.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) == DownloadManager.STATUS_SUCCESSFUL; cu.close(); }
+                        android.content.pm.PackageInfo pi = ok && f.length() > 1000000 ? getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0) : null;
+                        if (pi == null || pi.versionCode <= getPackageManager().getPackageInfo(getPackageName(), 0).versionCode) {
+                            f.delete();
+                            android.widget.Toast.makeText(MainActivity.this, pi == null ? "The update did not download fully. Please try again." : "The update is not ready yet. Please try again in a minute.", android.widget.Toast.LENGTH_LONG).show();
+                            return;
+                        }
                         Uri u = androidx.core.content.FileProvider.getUriForFile(MainActivity.this, "org.studieshub.app.fileprovider", f);
                         Intent in = new Intent(Intent.ACTION_VIEW).setDataAndType(u, "application/vnd.android.package-archive")
                             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);

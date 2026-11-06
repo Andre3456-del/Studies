@@ -960,29 +960,39 @@ app.get('/offline.html', (req, res) => { res.setHeader('Content-Type', 'text/htm
 app.get('/.well-known/assetlinks.json', (req, res) => res.json([{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: 'org.studieshub.app', sha256_cert_fingerprints: ['86:04:23:C0:3E:E0:80:51:CD:FE:6B:50:B5:05:62:18:38:3B:E2:CC:68:06:03:6F:17:4C:D8:28:19:1F:83:40'] } }]));
 // Android app download: served from our own site so the phone's download finishes cleanly.
 const APK_URL = 'https://github.com/Andre3456-del/Studies/releases/download/app-latest/StudiesHub.apk';
-let apkCache = { buf: null, at: 0 };
+// The release is looked up fresh (every 30 s) and the cached file is only reused if it is that same build, so the version the app is told about and the file it downloads can never disagree.
+let apkCache = { buf: null, n: 0 };
+let appVer = { n: 0, assetId: null, at: 0 };
+async function latestApp() {
+  if (appVer.n && Date.now() - appVer.at < 30 * 1000) return appVer;
+  try {
+    const r = await fetch('https://api.github.com/repos/Andre3456-del/Studies/releases/tags/app-latest', { headers: { 'User-Agent': 'studieshub', Accept: 'application/vnd.github+json' } });
+    const j = r.ok ? await r.json() : null, m = j && /versionCode:\s*(\d+)/.exec(j.body || '');
+    const asset = j && (j.assets || []).find(x => x.name === 'StudiesHub.apk');
+    if (m && asset) appVer = { n: Number(m[1]), assetId: asset.id, at: Date.now() };
+  } catch (e) { /* keep the last known build */ }
+  return appVer;
+}
 app.get('/StudiesHub.apk', async (req, res) => {
   try {
-    if (!apkCache.buf || Date.now() - apkCache.at > 10 * 60 * 1000) {
+    const v = await latestApp();
+    if (!v.n) throw new Error('no release');
+    if (!apkCache.buf || apkCache.n !== v.n) {
       const r = await fetch(APK_URL, { redirect: 'follow' });
       if (!r.ok) throw new Error('apk ' + r.status);
-      apkCache = { buf: Buffer.from(await r.arrayBuffer()), at: Date.now() };
+      const buf = Buffer.from(await r.arrayBuffer());
+      // a real app file is a zip (starts with "PK") and is well over 1 MB; anything else is a half-published or error page
+      if (buf.length < 1000000 || buf[0] !== 0x50 || buf[1] !== 0x4b) throw new Error('bad apk');
+      apkCache = { buf, n: v.n };
     }
-    res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': 'attachment; filename="StudiesHub.apk"', 'Content-Length': apkCache.buf.length, 'Cache-Control': 'no-cache' });
+    res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Content-Disposition': 'attachment; filename="StudiesHub.apk"', 'Content-Length': apkCache.buf.length, 'Cache-Control': 'no-store', 'X-App-Version': String(apkCache.n) });
     res.end(apkCache.buf);
-  } catch (e) { res.status(502).send('The app file is not ready yet. Please try again in a minute.'); }
+  } catch (e) { apkCache = { buf: null, n: 0 }; res.status(502).send('The app file is not ready yet. Please try again in a minute.'); }
 });
 // The installed Android app asks this on start: "is there a newer version?" (the build number is written in the release notes).
-let appVer = { n: 0, at: 0 };
 app.get('/app/version', async (req, res) => {
-  try {
-    if (Date.now() - appVer.at > 5 * 60 * 1000) {
-      const r = await fetch('https://api.github.com/repos/Andre3456-del/Studies/releases/tags/app-latest', { headers: { 'User-Agent': 'studieshub', Accept: 'application/vnd.github+json' } });
-      const j = r.ok ? await r.json() : null, m = j && /versionCode:\s*(\d+)/.exec(j.body || '');
-      appVer = { n: m ? Number(m[1]) : appVer.n, at: Date.now() };
-    }
-  } catch (e) { /* keep the last known number */ }
-  res.set('Cache-Control', 'no-store').json({ versionCode: appVer.n, url: '/StudiesHub.apk' });
+  const v = await latestApp();
+  res.set('Cache-Control', 'no-store').json({ versionCode: v.n, url: '/StudiesHub.apk' });
 });
 app.get('/app', (req, res) => {
   const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a id="dlApp" class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><script>(function(){var a=document.getElementById('dlApp');try{navigator.getInstalledRelatedApps&&navigator.getInstalledRelatedApps().then(function(r){if(r&&r.length&&a){a.textContent='Open the app';a.removeAttribute('download');a.href='intent://studieshub.org/#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/StudiesHub.apk')+';end'}}).catch(function(){})}catch(e){}})()</script><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
