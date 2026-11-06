@@ -40,7 +40,33 @@ public class UploadService extends Service {
 
     static File cacheFile(Context c, String id) { return new File(c.getCacheDir(), "up_" + id.replaceAll("[^A-Za-z0-9_-]", "") + ".bin"); }
 
+    static File metaFile(Context c, String id) { return new File(c.getCacheDir(), "up_" + id.replaceAll("[^A-Za-z0-9_-]", "") + ".json"); }
+
+    static void save(Context c, Job j) {
+        try {
+            JSONObject o = new JSONObject().put("id", j.id).put("url", j.url).put("fields", j.fields).put("afterUrl", j.afterUrl).put("afterJson", j.afterJson).put("title", j.title).put("name", j.name).put("mime", j.mime);
+            java.io.FileWriter w = new java.io.FileWriter(metaFile(c, j.id)); w.write(o.toString()); w.close();
+        } catch (Exception e) { }
+    }
+
+    static boolean retry(Context c, String id) {
+        Job j = ALL.get(id);
+        try {
+            if (j == null) {
+                java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(metaFile(c, id)));
+                JSONObject o = new JSONObject(r.readLine()); r.close();
+                j = new Job(); j.id = id; j.url = o.getString("url"); j.fields = o.optString("fields"); j.afterUrl = o.optString("afterUrl"); j.afterJson = o.optString("afterJson"); j.title = o.optString("title"); j.name = o.optString("name"); j.mime = o.optString("mime");
+            }
+        } catch (Exception e) { return false; }
+        if (!cacheFile(c, id).exists()) return false;
+        j.cancel = false;
+        ((NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE)).cancel(9100 + (id.hashCode() & 0xff));
+        enqueue(c, j);
+        return true;
+    }
+
     static void enqueue(Context c, Job j) {
+        save(c, j);
         STATUS.put(j.id, new int[]{1, 0});
         ALL.put(j.id, j);
         QUEUE.add(j);
@@ -53,6 +79,7 @@ public class UploadService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         Notification n = build("Getting your upload ready", "", -1);
         if (Build.VERSION.SDK_INT >= 29) startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC); else startForeground(NID, n);
+        try { for (File x : getCacheDir().listFiles()) if (x.getName().startsWith("up_") && System.currentTimeMillis() - x.lastModified() > 3L * 86400000L) x.delete(); } catch (Throwable t) { }
         synchronized (UploadService.class) {
             if (!running) {
                 running = true;
@@ -131,13 +158,15 @@ public class UploadService extends Service {
                 } catch (Exception e) { /* caption is best effort */ }
             }
         } catch (Exception e) { ok = false; }
-        f.delete();
+        if (ok || j.cancel) { f.delete(); metaFile(this, j.id).delete(); }
         STATUS.put(j.id, new int[]{ok ? 3 : 4, ok ? 100 : 0});
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (!ok && !j.cancel) {
             Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CH) : new Notification.Builder(this);
-            b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle("Upload did not finish").setContentText(j.title + " could not be uploaded. Open the app and try again.").setAutoCancel(true)
-             .setContentIntent(PendingIntent.getActivity(this, 11, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+            Intent ri = new Intent(this, UploadRetryReceiver.class).putExtra("id", j.id);
+            b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle("Upload paused").setContentText(j.title + " stopped, probably a network problem. Tap Retry to continue.").setAutoCancel(true)
+             .setContentIntent(PendingIntent.getActivity(this, 11, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
+             .addAction(new Notification.Action.Builder(R.drawable.ic_stat, "Retry", PendingIntent.getBroadcast(this, 9100 + (j.id.hashCode() & 0xff), ri, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT)).build());
             nm.notify(9100 + (j.id.hashCode() & 0xff), b.build());
         }
     }

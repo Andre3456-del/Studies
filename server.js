@@ -1739,7 +1739,7 @@ window.shNativeUp=function(file,o,onProg,onDone){
   function next(){if(dead)return;if(pos>=file.size){go();return}
     var r=new FileReader();r.onload=function(){var d=String(r.result),i=d.indexOf(',');if(!A.upChunk(id,d.slice(i+1))){onDone(false);return}pos+=CH;onProg(0);setTimeout(next,0)};r.onerror=function(){onDone(false)};r.readAsDataURL(file.slice(pos,pos+CH))}
   next();
-  return {cancel:function(){dead=true;if(tm)clearTimeout(tm);try{A.upCancel(id)}catch(e){}}};
+  return {cancel:function(){dead=true;if(tm)clearTimeout(tm);try{A.upCancel(id)}catch(e){}},retry:function(){if(A.upRetry(id)){dead=false;poll();return true}return false}};
 };
 function bind(form){
   form.addEventListener('submit',function(e){
@@ -1755,7 +1755,7 @@ function bind(form){
       var lbl=row.querySelector('.mut'),bar=row.querySelector('i');
       if(window.StudiesApp&&StudiesApp.upBegin){
         var fl=[],fe=new FormData(form);fe.forEach(function(v,k){if(typeof v==='string')fl.push([k,v])});fl.push(['__file',fi.name||'file']);
-        shNativeUp(f,{url:(form.getAttribute('action')||location.pathname),fields:fl,title:(ti&&ti.value.trim())||f.name},function(p){lbl.textContent=(p?'Uploading\\u2026 '+p+'%':'Getting ready\\u2026');bar.style.width=p+'%'},function(ok){if(ok){lbl.textContent='Done';location.reload()}else{row.remove();form.__sent=0;alert('That upload did not go through. Please try again.')}});
+        var nu2=shNativeUp(f,{url:(form.getAttribute('action')||location.pathname),fields:fl,title:(ti&&ti.value.trim())||f.name},function(p){lbl.textContent=(p?'Uploading\\u2026 '+p+'%':'Getting ready\\u2026');bar.style.width=p+'%'},function(ok){if(ok){lbl.textContent='Done';location.reload()}else{lbl.textContent='Paused \\u2014 network problem. Tap here to retry.';row.style.cursor='pointer';row.onclick=function(){if(nu2.retry()){row.onclick=null;row.style.cursor='';lbl.textContent='Uploading\\u2026'}}}});
         lbl.textContent='Uploading \\u2014 you can leave this page, it keeps going.';
         return;
       }
@@ -3134,7 +3134,7 @@ function sendFile(f,cap){
     if(b){b.setAttribute('data-id',j.id);if(c)c.setAttribute('data-mid',j.id)}
     if(window.StudiesApp&&StudiesApp.upBegin){
       var cj=Object.assign({body:cap||'',reply_to_id:null},convType==='group'?{group:convId}:{to:convId});
-      var nu=shNativeUp(f,{url:'/api/messages/attachment/'+j.id,fields:[['__file','file']],title:f.name,afterUrl:cap?'/api/messages/send':'',afterJson:cap?JSON.stringify(cj):''},function(p){if(!up.dead)prog(p)},function(ok){if(up.dead)return;if(ok)finish(j.id,true);else{alert('Could not send that file. Check your connection and try again.');up.cancel()}});
+      var nu=shNativeUp(f,{url:'/api/messages/attachment/'+j.id,fields:[['__file','file']],title:f.name,afterUrl:cap?'/api/messages/send':'',afterJson:cap?JSON.stringify(cj):''},function(p){if(!up.dead)prog(p)},function(ok){if(up.dead)return;if(ok)finish(j.id,true);else{if(c)mProg(c,0,'Not sent. Tap to retry');else if(b){var t2=b.querySelector('.fc-size');if(t2)t2.textContent='Not sent. Tap to retry'}if(b){b.style.cursor='pointer';b.onclick=function(){if(nu.retry()){b.onclick=null;b.style.cursor='';prog(0)}}}}});
       var oc=up.cancel;up.cancel=function(){nu.cancel();oc()};
       return}
     var x=new XMLHttpRequest(),fd=new FormData();up.xhr=x;fd.append('file',f,f.name);

@@ -61,6 +61,7 @@
         </receiver>
         <receiver android:name=".CallActionReceiver" android:exported="false" />
         <receiver android:name=".ChatActionReceiver" android:exported="false" />
+        <receiver android:name=".UploadRetryReceiver" android:exported="false" />
         <service android:name=".UploadService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

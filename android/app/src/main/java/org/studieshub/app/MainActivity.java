@@ -148,6 +148,7 @@ public class MainActivity extends Activity {
                 int[] st = UploadService.STATUS.get(id);
                 return st == null ? "0|0" : st[0] + "|" + st[1];
             }
+            @JavascriptInterface public boolean upRetry(String id) { return UploadService.retry(MainActivity.this, id); }
             @JavascriptInterface public void upCancel(String id) {
                 UploadService.Job j = UploadService.ALL.get(id);
                 if (j != null) j.cancel = true;
