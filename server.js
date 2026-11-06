@@ -1346,6 +1346,7 @@ body.msg-selecting .chat-head{display:none}
 .fw-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--line);cursor:pointer}
 .fw-row input{width:auto;margin:0}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:70;background:rgba(17,24,39,.92);color:#fff;padding:8px 16px;border-radius:99px;font-size:14px}
+.msg-text{white-space:pre-wrap;overflow-wrap:anywhere}
 .bubble{max-width:78%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;word-wrap:break-word}
 .bubble.me{align-self:flex-end;background:linear-gradient(135deg,#5bc8ff,var(--blue) 60%);color:#04101f;border-bottom-right-radius:4px}
 .bubble.them{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:4px}

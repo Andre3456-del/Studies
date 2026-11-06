@@ -118,8 +118,10 @@ public class CallService extends FirebaseMessagingService {
             boolean group = "group".equals(chat);
             String who = title, text = body;
             if (group) { int k = body.indexOf(": "); if (k > 0 && k < 40) { who = body.substring(0, k); text = body.substring(k + 2); } }
-            Notification.MessagingStyle ms = new Notification.MessagingStyle("You");
-            if (group) ms.setConversationTitle(title);
+            final boolean p28 = Build.VERSION.SDK_INT >= 28;
+            Notification.MessagingStyle ms = p28 ? new Notification.MessagingStyle(new android.app.Person.Builder().setName("You").build()) : new Notification.MessagingStyle("You");
+            if (group) { ms.setConversationTitle(title); if (p28) ms.setGroupConversation(true); }
+            android.graphics.drawable.Icon pic28 = p28 ? android.graphics.drawable.Icon.createWithBitmap(round(pic)) : null;
             try {
                 SharedPreferences sp = getSharedPreferences("chatnotes", MODE_PRIVATE);
                 org.json.JSONArray old = new org.json.JSONArray(sp.getString("n" + nid, "[]")), keep = new org.json.JSONArray();
@@ -127,7 +129,11 @@ public class CallService extends FirebaseMessagingService {
                 for (int k = Math.max(0, old.length() - 5); k < old.length(); k++) { org.json.JSONObject o = old.getJSONObject(k); if (now - o.getLong("t") < 3600000L) keep.put(o); }
                 keep.put(new org.json.JSONObject().put("w", who).put("x", text).put("t", now));
                 sp.edit().putString("n" + nid, keep.toString()).apply();
-                for (int k = 0; k < keep.length(); k++) { org.json.JSONObject o = keep.getJSONObject(k); ms.addMessage(o.getString("x"), o.getLong("t"), o.getString("w")); }
+                for (int k = 0; k < keep.length(); k++) {
+                    org.json.JSONObject o = keep.getJSONObject(k);
+                    if (p28) ms.addMessage(new Notification.MessagingStyle.Message(o.getString("x"), o.getLong("t"), new android.app.Person.Builder().setName(o.getString("w")).setIcon(pic28).build()));
+                    else ms.addMessage(o.getString("x"), o.getLong("t"), o.getString("w"));
+                }
             } catch (Throwable t) { ms.addMessage(text, System.currentTimeMillis(), who); }
             b.setStyle(ms).setGroup("sh_chats");
         } else b.setStyle(new Notification.BigTextStyle().bigText(body));
