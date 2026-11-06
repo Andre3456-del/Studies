@@ -156,6 +156,12 @@ public class MainActivity extends Activity {
                 String why = UploadService.ERR.get(id);
                 return st[0] + "|" + st[1] + (why == null ? "" : "|" + why);
             }
+            @JavascriptInterface public void upOpen(String id, String url) {
+                UploadService.Job j = UploadService.ALL.get(id);
+                if (j != null && url != null && url.startsWith("/")) { j.open = url; UploadService.save(MainActivity.this, j); }
+            }
+            @JavascriptInterface public void offWifi(boolean on) { getSharedPreferences("studieshub", MODE_PRIVATE).edit().putBoolean("off_wifi", on).apply(); }
+            @JavascriptInterface public boolean offWifiOn() { return getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("off_wifi", false); }
             @JavascriptInterface public boolean upRetry(String id) { return UploadService.retry(MainActivity.this, id); }
             @JavascriptInterface public void upCancel(String id) {
                 UploadService.Job j = UploadService.ALL.get(id);
@@ -256,6 +262,20 @@ public class MainActivity extends Activity {
             @Override public void onPageFinished(WebView v, String url) {
                 CookieManager.getInstance().flush();
                 if (!"online".equals(net)) v.evaluateJavascript("window.__net&&__net('" + net + "',1)", null);
+                // Opening the thing a notification was about clears that notification.
+                try {
+                    Uri cu = Uri.parse(url);
+                    String key = cu.getPath() == null ? "/" : cu.getPath();
+                    android.content.SharedPreferences np = getSharedPreferences("noteurls", MODE_PRIVATE);
+                    for (String k : new String[]{key, key + (cu.getQuery() == null ? "" : "?" + cu.getQuery())}) {
+                        if (np.contains(k)) {
+                            int id = np.getInt(k, 0);
+                            ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(id);
+                            getSharedPreferences("chatnotes", MODE_PRIVATE).edit().remove("n" + id).apply();
+                            np.edit().remove(k).apply();
+                        }
+                    }
+                } catch (Throwable t) { }
                 inCall = url != null && url.contains("studieshub.org/call/");
                 String ck = CookieManager.getInstance().getCookie("https://studieshub.org");
                 if (ck != null && ck.contains("sid=")) startPresence();

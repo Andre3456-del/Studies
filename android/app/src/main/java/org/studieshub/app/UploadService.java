@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 /** Uploads files on its own, so they keep going when the person leaves the chat or closes the app. */
 public class UploadService extends Service {
     static final String BASE = "https://studieshub.org";
-    static class Job { String id, url, fields, afterUrl, afterJson, title, name, mime; volatile boolean cancel; }
+    static class Job { String id, url, fields, afterUrl, afterJson, title, name, mime, open; volatile boolean cancel; }
     static final ConcurrentLinkedQueue<Job> QUEUE = new ConcurrentLinkedQueue<>();
     /** id -> {state, pct}; state 1 queued, 2 running, 3 done, 4 failed */
     static final ConcurrentHashMap<String, int[]> STATUS = new ConcurrentHashMap<>();
@@ -44,7 +44,7 @@ public class UploadService extends Service {
 
     static void save(Context c, Job j) {
         try {
-            JSONObject o = new JSONObject().put("id", j.id).put("url", j.url).put("fields", j.fields).put("afterUrl", j.afterUrl).put("afterJson", j.afterJson).put("title", j.title).put("name", j.name).put("mime", j.mime);
+            JSONObject o = new JSONObject().put("id", j.id).put("url", j.url).put("fields", j.fields).put("afterUrl", j.afterUrl).put("afterJson", j.afterJson).put("title", j.title).put("name", j.name).put("mime", j.mime).put("open", j.open == null ? "" : j.open);
             java.io.FileWriter w = new java.io.FileWriter(metaFile(c, j.id)); w.write(o.toString()); w.close();
         } catch (Exception e) { }
     }
@@ -55,7 +55,7 @@ public class UploadService extends Service {
             if (j == null) {
                 java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(metaFile(c, id)));
                 JSONObject o = new JSONObject(r.readLine()); r.close();
-                j = new Job(); j.id = id; j.url = o.getString("url"); j.fields = o.optString("fields"); j.afterUrl = o.optString("afterUrl"); j.afterJson = o.optString("afterJson"); j.title = o.optString("title"); j.name = o.optString("name"); j.mime = o.optString("mime");
+                j = new Job(); j.id = id; j.url = o.getString("url"); j.fields = o.optString("fields"); j.afterUrl = o.optString("afterUrl"); j.afterJson = o.optString("afterJson"); j.title = o.optString("title"); j.name = o.optString("name"); j.mime = o.optString("mime"); j.open = o.optString("open");
             }
         } catch (Exception e) { return false; }
         if (!cacheFile(c, id).exists()) return false;
@@ -235,6 +235,15 @@ public class UploadService extends Service {
         if (!ok) ERR.put(j.id, why.replace("|", " "));
         STATUS.put(j.id, new int[]{ok ? 3 : 4, ok ? 100 : 0});
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (ok) {
+            // Tell the person it went through; it stays until they open it.
+            String url = j.open == null || j.open.isEmpty() ? "/" : j.open;
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, "uploads")) : new Notification.Builder(this);
+            b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle("Upload complete").setContentText(j.title + " has been uploaded. Tap to open.").setAutoCancel(true)
+             .setContentIntent(PendingIntent.getActivity(this, 15 + (j.id.hashCode() & 0xff), new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", url), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+            nm.notify(9300 + (j.id.hashCode() & 0xff), b.build());
+            getSharedPreferences("noteurls", MODE_PRIVATE).edit().putInt(url, 9300 + (j.id.hashCode() & 0xff)).apply();
+        }
         if (!ok && !j.cancel) {
             Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CH) : new Notification.Builder(this);
             b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle(hard ? "Upload failed" : "Upload paused").setContentText(j.title + ": " + why + (hard ? "" : ". Tap Retry to continue.")).setAutoCancel(true)

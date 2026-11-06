@@ -157,6 +157,7 @@ public class CallService extends FirebaseMessagingService {
             b.addAction(reply).addAction(read).addAction(mute);
         }
         nm.notify(nid, b.build());
+        getSharedPreferences("noteurls", MODE_PRIVATE).edit().putInt(url == null ? "/" : url, nid).apply();
         if (isChat) {
             // One "Studies Hub" header that holds all the chats; news, uploads and the rest stay outside it.
             Notification.Builder sb = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, "messages")) : new Notification.Builder(this);

@@ -36,6 +36,16 @@ public class OfflineService extends Service {
         return START_STICKY;
     }
 
+    private boolean wifiOnly() { return getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("off_wifi", false); }
+
+    private boolean onWifi() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            return nc != null && nc.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+        } catch (Throwable t) { return true; }
+    }
+
     private boolean online() {
         try {
             android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
@@ -50,7 +60,8 @@ public class OfflineService extends Service {
             wl = ((android.os.PowerManager) getSystemService(POWER_SERVICE)).newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "studieshub:offline");
             wl.acquire(6 * 3600 * 1000L);
         } catch (Throwable t) { wl = null; }
-        int failures = 0;
+        int failures = 0, okCount = 0, failCount = 0;
+        String lastSlug = "", lastTitle = "";
         while (true) {
             JSONObject j = OfflineStore.peek(this);
             if (j == null) {
@@ -59,32 +70,47 @@ public class OfflineService extends Service {
             }
             String slug = j.optString("slug"), uid = j.optString("uid"), title = j.optString("title");
             int total = done + OfflineStore.queued(this);
-            if (!online()) {
+            if (!online() || (wifiOnly() && !onWifi())) {
                 OfflineStore.STATUS.put(slug, "queued");
-                update("Waiting for the internet", "Saving carries on by itself when your data or Wi-Fi is back. " + OfflineStore.queued(this) + " left.", -1);
+                boolean needWifi = online() && wifiOnly();
+                update(needWifi ? "Waiting for Wi-Fi" : "Waiting for the internet", (needWifi ? "Wi-Fi only is on. Downloading carries on when you connect to Wi-Fi. " : "Downloading carries on by itself when your data or Wi-Fi is back. ") + OfflineStore.queued(this) + " left.", -1);
                 try { Thread.sleep(8000); } catch (InterruptedException e) { }
                 continue;
             }
-            update("Saving " + (done + 1) + " of " + total, title, 0);
+            update("Downloading " + (total > 1 ? (done + 1) + " of " + total : ""), title + "  \u00b7  0%", 0);
             final int pos = done + 1;
             Thread pr = new Thread(() -> {
                 String last = "";
                 while (!Thread.currentThread().isInterrupted()) {
                     String st = OfflineStore.STATUS.get(slug);
-                    if (st != null && st.startsWith("saving:") && !st.equals(last)) { last = st; try { update("Saving " + pos + " of " + total, title, Integer.parseInt(st.substring(7))); } catch (Exception e) { } }
+                    if (st != null && st.startsWith("saving:") && !st.equals(last)) { last = st; try { int pc = Integer.parseInt(st.substring(7)); update("Downloading " + (total > 1 ? pos + " of " + total : ""), title + "  \u00b7  " + pc + "%", pc); } catch (Exception e) { } }
                     try { Thread.sleep(700); } catch (InterruptedException e) { return; }
                 }
             });
             pr.start();
             int r = OfflineStore.saveBlocking(this, uid, slug, title, j.optString("kind"), j.optString("course"));
             pr.interrupt();
-            if (r == 0 || r == 2) { OfflineStore.drop(this, uid, slug); done++; failures = 0; }
+            if (r == 0 || r == 2) { OfflineStore.drop(this, uid, slug); done++; failures = 0; if (r == 0) { okCount++; lastSlug = slug; lastTitle = title; } else failCount++; }
             else { failures++; try { Thread.sleep(Math.min(30000, 3000L * failures)); } catch (InterruptedException e) { } }
         }
         try { if (wl != null && wl.isHeld()) wl.release(); } catch (Throwable t) { }
+        if (okCount > 0 || failCount > 0) finished(okCount, failCount, lastSlug, lastTitle);
         done = 0;
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE); else stopForeground(true);
         stopSelf();
+    }
+
+    /** Tells the person it is done. It stays until they open it. */
+    private void finished(int ok, int bad, String slug, String title) {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        String url = ok == 1 && bad == 0 ? "/p/" + slug : "/saved";
+        String head = ok == 1 && bad == 0 ? "Download complete" : ok + " materials downloaded";
+        String text = ok == 1 && bad == 0 ? title + " is saved on your phone. Tap to open it." : (bad > 0 ? bad + " could not be saved. " : "") + "Tap to see them.";
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, "general")) : new Notification.Builder(this);
+        b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle(head).setContentText(text).setAutoCancel(true)
+         .setContentIntent(PendingIntent.getActivity(this, 14, new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", url), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+        nm.notify(9202, b.build());
+        getSharedPreferences("noteurls", MODE_PRIVATE).edit().putInt(url, 9202).apply();
     }
 
     private long lastNote = 0;
