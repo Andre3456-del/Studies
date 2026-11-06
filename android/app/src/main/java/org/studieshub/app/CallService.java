@@ -64,7 +64,7 @@ public class CallService extends FirebaseMessagingService {
         String title = d.get("title") == null ? "Studies Hub" : d.get("title");
         String body = d.get("body") == null ? "" : d.get("body");
         if (type.equals("ring")) showCall(this, d.get("id"), title, body);
-        else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"), d.get("chat"), d.get("cid"));
+        else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"), d.get("chat"), d.get("cid"), d.get("av"));
     }
 
     static int flags() { return PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0); }
@@ -100,17 +100,39 @@ public class CallService extends FirebaseMessagingService {
 
     private static int AudioManager_STREAM_RING() { return android.media.AudioManager.STREAM_RING; }
 
-    private void note(NotificationManager nm, String title, String body, String url, String tag, String cat, String chat, String cid) {
+    private void note(NotificationManager nm, String title, String body, String url, String tag, String cat, String chat, String cid, String av) {
         Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", url == null ? "/" : url);
         int nid = (tag == null || tag.isEmpty() ? title + body : tag).hashCode();
         PendingIntent pi = PendingIntent.getActivity(this, nid, open, flags());
         String c = cat == null || cat.isEmpty() ? "general" : cat;
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, c)) : new Notification.Builder(this);
         if (Build.VERSION.SDK_INT < 26) { Uri nu = Sounds.current(this, c); if (nu != null) b.setSound(nu); }
-        b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF6D5EFC).setLargeIcon(android.graphics.BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher))
-         .setContentTitle(title).setContentText(body).setStyle(new Notification.BigTextStyle().bigText(body)).setAutoCancel(true).setContentIntent(pi);
+        b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF6D5EFC).setContentTitle(title).setContentText(body).setAutoCancel(true).setContentIntent(pi);
+        boolean isChat = chat != null && cid != null && !cid.isEmpty();
+        android.graphics.Bitmap pic = null;
+        if (isChat && av != null) pic = fetchAvatar("https://studieshub.org" + av);
+        if (pic == null) pic = android.graphics.BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher);
+        b.setLargeIcon(round(pic));
+        if (isChat) {
+            // Like WhatsApp: the last few messages of this chat stack up in one conversation notification.
+            boolean group = "group".equals(chat);
+            String who = title, text = body;
+            if (group) { int k = body.indexOf(": "); if (k > 0 && k < 40) { who = body.substring(0, k); text = body.substring(k + 2); } }
+            Notification.MessagingStyle ms = new Notification.MessagingStyle("You");
+            if (group) ms.setConversationTitle(title);
+            try {
+                SharedPreferences sp = getSharedPreferences("chatnotes", MODE_PRIVATE);
+                org.json.JSONArray old = new org.json.JSONArray(sp.getString("n" + nid, "[]")), keep = new org.json.JSONArray();
+                long now = System.currentTimeMillis();
+                for (int k = Math.max(0, old.length() - 5); k < old.length(); k++) { org.json.JSONObject o = old.getJSONObject(k); if (now - o.getLong("t") < 3600000L) keep.put(o); }
+                keep.put(new org.json.JSONObject().put("w", who).put("x", text).put("t", now));
+                sp.edit().putString("n" + nid, keep.toString()).apply();
+                for (int k = 0; k < keep.length(); k++) { org.json.JSONObject o = keep.getJSONObject(k); ms.addMessage(o.getString("x"), o.getLong("t"), o.getString("w")); }
+            } catch (Throwable t) { ms.addMessage(text, System.currentTimeMillis(), who); }
+            b.setStyle(ms).setGroup("sh_chats");
+        } else b.setStyle(new Notification.BigTextStyle().bigText(body));
         // Only a chat message can be answered, marked as read or muted from here. News, uploads and the rest just open.
-        if (chat != null && cid != null && !cid.isEmpty()) {
+        if (isChat) {
             int base = Math.abs(nid % 100000) * 4;
             android.app.RemoteInput ri = new android.app.RemoteInput.Builder("reply_text").setLabel("Reply").build();
             Notification.Action reply = new Notification.Action.Builder(R.drawable.ic_stat, "Reply",
@@ -123,6 +145,30 @@ public class CallService extends FirebaseMessagingService {
             b.addAction(reply).addAction(read).addAction(mute);
         }
         nm.notify(nid, b.build());
+    }
+
+    private android.graphics.Bitmap fetchAvatar(String u) {
+        try {
+            java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+            h.setConnectTimeout(4000); h.setReadTimeout(4000);
+            if (h.getResponseCode() != 200) return null;
+            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeStream(h.getInputStream());
+            h.disconnect();
+            return bm;
+        } catch (Throwable t) { return null; }
+    }
+
+    private static android.graphics.Bitmap round(android.graphics.Bitmap src) {
+        int sz = 128;
+        android.graphics.Bitmap out = android.graphics.Bitmap.createBitmap(sz, sz, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas cv = new android.graphics.Canvas(out);
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        cv.drawCircle(sz / 2f, sz / 2f, sz / 2f, p);
+        p.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN));
+        int m = Math.min(src.getWidth(), src.getHeight());
+        android.graphics.Rect from = new android.graphics.Rect((src.getWidth() - m) / 2, (src.getHeight() - m) / 2, (src.getWidth() + m) / 2, (src.getHeight() + m) / 2);
+        cv.drawBitmap(src, from, new android.graphics.Rect(0, 0, sz, sz), p);
+        return out;
     }
 
     private Intent chatIntent(String act, String chat, String cid, int nid) {

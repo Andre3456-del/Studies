@@ -46,7 +46,7 @@ public class ChatActionReceiver extends BroadcastReceiver {
                 ok = h.getResponseCode() == 200;
                 h.disconnect();
             } catch (Exception e) { /* fall through */ }
-            if (ok) nm.cancel(nid);
+            if (ok) { nm.cancel(nid); c.getSharedPreferences("chatnotes", Context.MODE_PRIVATE).edit().remove("n" + nid).apply(); }
             else if ("reply".equals(act)) {
                 // keep the notification and tell the person it did not go
                 nm.cancel(nid);
