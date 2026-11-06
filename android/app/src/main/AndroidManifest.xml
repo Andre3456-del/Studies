@@ -59,5 +59,6 @@
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>
         <receiver android:name=".CallActionReceiver" android:exported="false" />
+        <receiver android:name=".ChatActionReceiver" android:exported="false" />
     </application>
 </manifest>

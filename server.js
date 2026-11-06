@@ -320,7 +320,7 @@ async function pumpMail() {
       const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org', link = base + (p.url || '/');
       const first = esc(String(u.name || '').trim().split(/\s+/)[0] || 'there');
       const text = `Hi ${String(u.name || '').trim().split(/\s+/)[0] || 'there'},\n\n${p.title}${p.body ? '\n' + p.body : ''}\n\nOpen it: ${link}\n\nYou get this email because you have a Studies Hub account.`;
-      const html = emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(p.title)}</h2><p style="margin:0 0 6px">Hi ${first},</p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p style="margin:0 0 20px"><a href="${esc(link)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open on Studies Hub</a></p><p style="color:#7a8593;font-size:12px;margin:0">You get this email because you have a Studies Hub account.</p>`, base);
+      const html = emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">${esc(p.title)}</h2><p style="margin:0 0 12px"><b>Hi ${first},</b></p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p style="margin:0 0 20px"><a href="${esc(link)}" style="background:#6d5efc;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:12px;display:inline-block;font-weight:700;font-size:16px">Open on Studies Hub</a></p>`, base);
       mailCount++;
       try { await deliver(u.email, p.title, text, html); } catch (e) { console.error('Alert email failed:', e.message); }
       await new Promise(r => setTimeout(r, 700));
@@ -348,7 +348,7 @@ function emailEveryone(subject, heading, message) {
   const people = db.prepare('SELECT id,email,name FROM users WHERE verified=1').all();
   for (const u of people) {
     const first = String(u.name || '').trim().split(/\s+/)[0] || 'there';
-    noticeQueue.push({ to: u.email, subject, text: `Hi ${first},\n\n${message}\n\n${base}`, html: emailShell(`<h2 style="margin:0 0 8px;font-size:20px">${esc(heading)}</h2><p style="margin:0 0 8px">Hi ${esc(first)},</p><p style="margin:0 0 18px">${esc(message)}</p><p><a href="${esc(base)}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;display:inline-block;font-weight:600">Open Studies Hub</a></p>`, base) });
+    noticeQueue.push({ to: u.email, subject, text: `Hi ${first},\n\n${message}\n\n${base}`, html: emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">${esc(heading)}</h2><p style="margin:0 0 12px"><b>Hi ${esc(first)},</b></p><p style="margin:0 0 18px">${esc(message)}</p><p><a href="${esc(base)}" style="background:#6d5efc;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:12px;display:inline-block;font-weight:700;font-size:16px">Open Studies Hub</a></p>`, base) });
   }
   notify(people.map(u => u.id), { title: heading, body: message, url: '/', tag: 'site-notice' });
   setImmediate(pumpNotices);
@@ -471,7 +471,8 @@ async function gmailSend(to, subject, text, html) {
 // Every email gets the same look: the Studies Hub logo and name at the top, then the message.
 function emailShell(inner, base) {
   base = base || process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
-  return `<div style="background:#f3f5f9;padding:24px 12px"><div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;color:#1b2430;border:1px solid #e3e8ef"><div style="padding:18px 22px;border-bottom:1px solid #e3e8ef"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:10px"><img src="${base}/logo.png" width="40" height="40" alt="Studies Hub" style="display:block;border-radius:9px;border:0"></td><td style="font-size:18px;font-weight:700">Studies Hub</td></tr></table></div><div style="padding:22px;line-height:1.55">${inner}</div></div><p style="text-align:center;color:#7a8593;font:12px system-ui,Arial,sans-serif;margin:14px 0 0">${base.replace(/^https?:\/\//, '')}</p></div>`;
+  const F = "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+  return `<div style="background:#eef1f7;padding:28px 12px;${F}"><div style="max-width:560px;margin:0 auto"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:18px;overflow:hidden;color:#1b2430"><tr><td style="height:6px;background:#6d5efc;font-size:0;line-height:0">&nbsp;</td></tr><tr><td style="padding:30px 32px 6px"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:12px"><img src="${base}/logo.png" width="52" height="52" alt="Studies Hub" style="display:block;border-radius:12px;border:0"></td><td style="${F};font-size:20px;font-weight:700;color:#1b2430">Studies Hub</td></tr></table></td></tr><tr><td style="padding:18px 32px 34px;${F};font-size:16px;line-height:1.75;color:#2a3442">${inner}</td></tr></table><p style="text-align:center;color:#8a94a3;${F};font-size:12px;line-height:1.6;margin:18px 12px 0">You are getting this email because you have a Studies Hub account.<br>Studies Hub &middot; Study smarter, together</p></div></div>`;
 }
 async function deliver(to, subject, text, html) {
   const from = process.env.MAIL_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
@@ -507,14 +508,14 @@ async function sendVerification(req, user) {
   const link = `${base}/verify?token=${token}`;
   const sent = await deliver(user.email, 'Verify your email for Studies Hub',
     `Hi ${user.name},\n\nConfirm your email to activate your account:\n${link}\n\nThis link expires in 24 hours. If you did not sign up, ignore this email.`,
-    emailShell(`<p style="margin:0 0 12px">Hi ${esc(user.name)},</p><p style="margin:0 0 16px">Confirm your email to activate your account.</p><p style="margin:0 0 16px"><a href="${link}" style="background:#1a73e8;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;display:inline-block;font-weight:600">Confirm your email</a></p><p style="color:#5b6675;font-size:13px;margin:0">This link expires in 24 hours. If you did not sign up, ignore this email.</p>`, base));
+    emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">Welcome to Studies Hub</h2><p style="margin:0 0 12px"><b>Hi ${esc(user.name)},</b></p><p style="margin:0 0 16px">Confirm your email to activate your account.</p><p style="margin:0 0 16px"><a href="${link}" style="background:#6d5efc;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:12px;display:inline-block;font-weight:700;font-size:16px">Confirm your email</a></p><p style="color:#5b6675;font-size:13px;margin:0">This link expires in 24 hours. If you did not sign up, ignore this email.</p>`, base));
   if (!sent) console.log(`[email not configured] Verification link for ${user.email}: ${link}`);
 }
 
 async function sendResetCode(email, code) {
   const sent = await deliver(email, 'Your Studies Hub password reset code',
     `Your password reset code is ${code}. It expires in 10 minutes. If you did not ask for it, ignore this email.`,
-    emailShell(`<p style="margin:0 0 8px">Your password reset code is:</p><p style="font-size:32px;font-weight:700;letter-spacing:6px;margin:0 0 14px">${code}</p><p style="color:#5b6675;font-size:13px;margin:0">It expires in 10 minutes. If you did not ask for it, ignore this email.</p>`));
+    emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">Reset your password</h2><p style="margin:0 0 12px">Use this code to choose a new password:</p><p style="font-size:34px;font-weight:800;letter-spacing:8px;margin:0 0 18px;background:#f3f1ff;border-radius:12px;padding:14px 18px;text-align:center;color:#3b2fc9">${code}</p><p style="color:#5b6675;font-size:13px;margin:0">It expires in 10 minutes. If you did not ask for it, ignore this email.</p>`));
   if (!sent) console.log(`[email not configured] Reset code for ${email}: ${code}`);
 }
 
@@ -4193,7 +4194,13 @@ app.post('/settings/appearance', (req, res) => {
 app.get('/settings/notifications', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings/notifications');
   res.send(layout('Notifications', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Notifications</h1>
-<div class="card"><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="if(window.StudiesApp){StudiesApp.notifications();return}window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>`, req.user));
+<div class="card"><p class="mut" style="margin:4px 0 8px">Get a notification on this device for messages, friend requests and new uploads.</p><button type="button" class="ghost" onclick="if(window.StudiesApp){StudiesApp.notifications();return}window.enablePush&&window.enablePush().then(function(ok){alert(ok?'Notifications are on for this device.':'Notifications were not allowed. You can allow them in your browser settings.')})">Turn on notifications</button></div>
+<div class="card" id="sndCard" hidden><h2 style="margin-top:0">Sounds</h2><p class="mut" style="margin:0 0 6px">Pick a sound for each kind of notification, and a ringing tone for calls.</p><div id="sndRows"></div></div>
+<style>.sndr{display:flex;align-items:center;gap:10px;padding:12px 0;border-top:1px solid rgba(127,127,127,.25)}.sndr:first-child{border-top:0}.sndr .t{flex:1;min-width:0}.sndr .t span{display:block;font-size:13px;opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sndr button{padding:8px 12px}</style>
+<script>(function(){var A=window.StudiesApp;if(!A||!A.soundInfo)return;var L=[['messages','Chat messages'],['news','News'],['uploads','New uploads'],['general','Other notifications'],['calls','Call ringing tone']];
+function draw(){var n={};try{n=JSON.parse(A.soundInfo())}catch(e){}var h='';L.forEach(function(r){h+='<div class="sndr"><div class="t"><b>'+r[1]+'</b><span>'+(n[r[0]]||'')+'</span></div><button type="button" class="ghost" data-p="'+r[0]+'" aria-label="Play">&#9654;</button><button type="button" class="ghost" data-c="'+r[0]+'">Change</button></div>'});document.getElementById('sndRows').innerHTML=h;document.getElementById('sndCard').hidden=false}
+document.getElementById('sndRows').onclick=function(e){var b=e.target.closest('button');if(!b)return;if(b.getAttribute('data-p'))A.playSound(b.getAttribute('data-p'));else if(b.getAttribute('data-c'))A.pickSound(b.getAttribute('data-c'))};
+draw();document.addEventListener('visibilitychange',function(){setTimeout(draw,400)});window.addEventListener('focus',function(){setTimeout(draw,400)});setInterval(draw,3000)})()</script>`, req.user));
 });
 
 // ---------- Security: app lock (phone app) and change password ----------
@@ -5831,6 +5838,6 @@ try {
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { setSecret('run_state', 'stopped'); } catch (e) { console.error('Shutdown note failed:', e.message); } process.exit(0); });
 function notifyAdminCrash() {
   const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
-  deliver(ADMIN_EMAIL, 'Studies Hub restarted unexpectedly', 'The site stopped without shutting down cleanly and has started again. If it keeps happening, check the logs in Railway.', emailShell('<h2 style="margin:0 0 8px;font-size:20px">The site restarted unexpectedly</h2><p>It stopped without shutting down cleanly and has started again. If this keeps happening, check the logs in Railway.</p>', base)).catch(() => {});
+  deliver(ADMIN_EMAIL, 'Studies Hub restarted unexpectedly', 'The site stopped without shutting down cleanly and has started again. If it keeps happening, check the logs in Railway.', emailShell('<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">The site restarted unexpectedly</h2><p>It stopped without shutting down cleanly and has started again. If this keeps happening, check the logs in Railway.</p>', base)).catch(() => {});
 }
 app.listen(PORT, () => console.log(`Studies Hub running on http://localhost:${PORT}`));

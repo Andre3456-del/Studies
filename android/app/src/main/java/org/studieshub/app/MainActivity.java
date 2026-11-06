@@ -585,19 +585,46 @@ public class MainActivity extends Activity {
     }
 
     private View buildOverlay() {
+        final float d = getResources().getDisplayMetrics().density;
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.setClickable(true);
+        root.setBackground(new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xFF1B1740, 0xFF0C0C16, 0xFF0A0A12}));
         android.widget.LinearLayout l = new android.widget.LinearLayout(this);
         l.setOrientation(android.widget.LinearLayout.VERTICAL);
-        l.setGravity(android.view.Gravity.CENTER);
-        l.setBackgroundColor(0xFF12121C);
-        l.setClickable(true);
+        l.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        l.setPadding((int) (32 * d), 0, (int) (32 * d), 0);
+        android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.CENTER);
+        // logo inside a soft glowing ring
+        android.widget.FrameLayout ring = new android.widget.FrameLayout(this);
+        android.graphics.drawable.GradientDrawable rg = new android.graphics.drawable.GradientDrawable();
+        rg.setShape(android.graphics.drawable.GradientDrawable.OVAL); rg.setColor(0x226D5EFC); rg.setStroke((int) (2 * d), 0x556D5EFC);
+        ring.setBackground(rg);
+        android.widget.ImageView logo = new android.widget.ImageView(this);
+        logo.setImageResource(R.mipmap.ic_launcher);
+        int ls = (int) (72 * d);
+        ring.addView(logo, new android.widget.FrameLayout.LayoutParams(ls, ls, android.view.Gravity.CENTER));
+        l.addView(ring, new android.widget.LinearLayout.LayoutParams((int) (128 * d), (int) (128 * d)));
         android.widget.TextView t = new android.widget.TextView(this);
-        t.setText("Studies Hub"); t.setTextColor(0xFFFFFFFF); t.setTextSize(26);
+        t.setText("Studies Hub is locked"); t.setTextColor(0xFFFFFFFF); t.setTextSize(24); t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        t.setGravity(android.view.Gravity.CENTER); t.setPadding(0, (int) (28 * d), 0, (int) (8 * d));
         android.widget.TextView s = new android.widget.TextView(this);
-        s.setText("The app is locked"); s.setTextColor(0xB3FFFFFF); s.setTextSize(15); s.setPadding(0, 12, 0, 36);
-        android.widget.Button b = new android.widget.Button(this);
-        b.setText("Unlock"); b.setOnClickListener(v -> unlockNow());
-        l.addView(t); l.addView(s); l.addView(b);
-        return l;
+        s.setText("Confirm it\u2019s you to carry on studying.\nYour account stays safe while the app is locked."); s.setTextColor(0xB3FFFFFF); s.setTextSize(15);
+        s.setGravity(android.view.Gravity.CENTER); s.setLineSpacing(0, 1.25f); s.setPadding(0, 0, 0, (int) (36 * d));
+        android.widget.TextView b = new android.widget.TextView(this);
+        b.setText("\uD83D\uDD12  Unlock"); b.setTextColor(0xFFFFFFFF); b.setTextSize(17); b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        b.setGravity(android.view.Gravity.CENTER);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, new int[]{0xFF6D5EFC, 0xFF8B5CF6});
+        bg.setCornerRadius(40 * d);
+        b.setBackground(bg); b.setClickable(true); b.setOnClickListener(v -> unlockNow());
+        l.addView(t); l.addView(s);
+        l.addView(b, new android.widget.LinearLayout.LayoutParams(-1, (int) (56 * d)));
+        root.addView(l, lp);
+        android.widget.TextView f = new android.widget.TextView(this);
+        f.setText("Protected by your phone\u2019s lock"); f.setTextColor(0x66FFFFFF); f.setTextSize(12); f.setGravity(android.view.Gravity.CENTER);
+        android.widget.FrameLayout.LayoutParams fp = new android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM);
+        fp.bottomMargin = (int) (36 * d);
+        root.addView(f, fp);
+        return root;
     }
 
     private void unlockNow() {

@@ -60,7 +60,13 @@ function register(db) {
       let data, ttl = '60s';
       if (p.ring) { data = { type: 'ring', id: p.ring.id, kind: p.ring.kind, title: p.title, body: p.body }; ttl = '45s'; }
       else if (p.ringEnd) data = { type: 'end', id: String(p.tag || '').replace(/^call-/, '') };
-      else data = { type: 'note', title: p.title, body: p.body, url: p.url || '/', tag: p.tag || '' };
+      else {
+        const tg = String(p.tag || ''), q = p.quickReply || {};
+        const chat = /^(dm|group)-\d+$/.test(tg);
+        const cat = chat ? 'messages' : /news/.test(tg) ? 'news' : /upload/.test(tg) ? 'uploads' : 'general';
+        data = { type: 'note', title: p.title, body: p.body, url: p.url || '/', tag: tg, cat };
+        if (chat) { data.chat = q.group ? 'group' : 'dm'; data.cid = String(q.group || q.to || ''); }
+      }
       const tk = await accessToken(a), project = a.project_id;
       await Promise.allSettled(rows.map(async ({ token }) => {
         const r = await fetch(`https://fcm.googleapis.com/v1/projects/${project}/messages:send`, { method: 'POST', headers: { Authorization: 'Bearer ' + tk, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { token, data, android: { priority: 'HIGH', ttl } } }) });
