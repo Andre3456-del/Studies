@@ -102,7 +102,7 @@ public class MainActivity extends Activity {
         lockMin = lp.getInt("lock_min", 0);
         overlay = buildOverlay();
         root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        if (lockOn) { locked = true; getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE); }
+        if (lockOn) { locked = true; secure(true); }
         else overlay.setVisibility(View.GONE);
 
         WebSettings s = web.getSettings();
@@ -535,9 +535,9 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() { if (ScreenShareService.ui == this) ScreenShareService.ui = null; super.onDestroy(); }
 
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
-    @Override protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
+    @Override protected void onPause() { super.onPause(); if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
     @Override protected void onResume() {
-        super.onResume(); web.onResume(); skipLock = false;
+        super.onResume(); web.onResume(); skipLock = false; if (!locked) secure(false);
         if (System.currentTimeMillis() - lastUpdateCheck > 3600000L) checkUpdate();
     }
 
@@ -545,14 +545,14 @@ public class MainActivity extends Activity {
         super.onStop();
         if (lockOn && !skipLock) {
             leftAt = System.currentTimeMillis();
-            if (lockMin == 0) { locked = true; overlay.setVisibility(View.VISIBLE); }
+            if (lockMin == 0) { locked = true; overlay.setVisibility(View.VISIBLE); secure(true); }
         }
     }
 
     @Override protected void onStart() {
         super.onStart();
         if (lockOn && !skipLock && !locked && leftAt > 0 && System.currentTimeMillis() - leftAt >= lockMin * 60000L) {
-            locked = true; overlay.setVisibility(View.VISIBLE);
+            locked = true; overlay.setVisibility(View.VISIBLE); secure(true);
         }
         if (lockOn && locked && !authing) unlockNow();
     }
@@ -673,16 +673,21 @@ public class MainActivity extends Activity {
     private void unlockNow() {
         if (authing) return;
         authing = true;
-        authenticate(() -> { authing = false; locked = false; overlay.setVisibility(View.GONE); },
+        authenticate(() -> { authing = false; locked = false; overlay.setVisibility(View.GONE); secure(false); },
                      () -> { authing = false; });
     }
 
     private void setLock(boolean on, int minutes) {
         lockOn = on; lockMin = minutes; locked = false; leftAt = 0;
         getSharedPreferences("studieshub", MODE_PRIVATE).edit().putBoolean("lock_on", on).putInt("lock_min", minutes).apply();
+        secure(false);
+        overlay.setVisibility(View.GONE);
+    }
+
+    /** Hide the screen from screenshots, recordings and the recent-apps picture, but only while the lock screen is up or the app is out of sight. Once you are in, everything shows normally. */
+    private void secure(boolean on) {
         if (on) getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE);
         else getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
-        overlay.setVisibility(View.GONE);
     }
 
     private void lockDone(String kind, boolean ok) {
