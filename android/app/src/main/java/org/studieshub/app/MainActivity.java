@@ -100,6 +100,7 @@ public class MainActivity extends Activity {
         SharedPreferences lp = getSharedPreferences("studieshub", MODE_PRIVATE);
         lockOn = lp.getBoolean("lock_on", false);
         lockMin = lp.getInt("lock_min", 0);
+        OfflineStore.userId = getSharedPreferences("studieshub", MODE_PRIVATE).getString("off_uid", "0");
         startNetWatch();
         overlay = buildOverlay();
         root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -164,13 +165,15 @@ public class MainActivity extends Activity {
                 priv = p;
                 runOnUiThread(() -> secure(lockOn && locked));
             }
-            @JavascriptInterface public void offUser(String id) { OfflineStore.userId = id == null ? "0" : id; }
+            @JavascriptInterface public void offUser(String id) { OfflineStore.userId = id == null ? "0" : id; if (!OfflineStore.userId.equals("0")) getSharedPreferences("studieshub", MODE_PRIVATE).edit().putString("off_uid", OfflineStore.userId).apply(); }
             @JavascriptInterface public boolean offSave(String slug, String title, String kind, String course) {
-                try {
-                    OfflineStore.save(MainActivity.this, web.getSettings().getUserAgentString(), CookieManager.getInstance().getCookie("https://studieshub.org"), slug, title, kind, course);
-                    return true;
-                } catch (Throwable t) { return false; }
+                try { OfflineStore.ua = web.getSettings().getUserAgentString(); return OfflineStore.enqueue(MainActivity.this, slug, title, kind, course); } catch (Throwable t) { return false; }
             }
+            @JavascriptInterface public void offAuto(boolean on) {
+                getSharedPreferences("studieshub", MODE_PRIVATE).edit().putBoolean("off_auto", on).apply();
+                if (on) topUp();
+            }
+            @JavascriptInterface public boolean offAutoOn() { return getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("off_auto", false); }
             @JavascriptInterface public String offStatus(String slug) {
                 String st = OfflineStore.STATUS.get(slug);
                 if (st != null && !st.equals("saved")) return st;
@@ -561,7 +564,7 @@ public class MainActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
     @Override protected void onPause() { super.onPause(); fg = false; if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
     @Override protected void onResume() {
-        super.onResume(); fg = true; web.onResume(); skipLock = false; if (!locked) secure(false);
+        super.onResume(); fg = true; if (getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("off_auto", false) && System.currentTimeMillis() - lastTopUp > 1800000L) topUp(); if (OfflineStore.queued(this) > 0) OfflineService.start(this); web.onResume(); skipLock = false; if (!locked) secure(false);
         if (System.currentTimeMillis() - lastUpdateCheck > 3600000L) checkUpdate();
     }
 
@@ -723,6 +726,28 @@ public class MainActivity extends Activity {
             android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(cm.getActiveNetwork());
             return nc != null && nc.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET);
         } catch (Throwable t) { return true; }
+    }
+
+    private long lastTopUp = 0;
+    /** With "save all" on: find materials not on the phone yet and queue them. */
+    private void topUp() {
+        if (OfflineStore.userId.equals("0")) return;
+        lastTopUp = System.currentTimeMillis();
+        OfflineStore.ua = web.getSettings().getUserAgentString();
+        final String ck = CookieManager.getInstance().getCookie("https://studieshub.org");
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://studieshub.org/api/saved/available").openConnection();
+                h.setConnectTimeout(10000); h.setReadTimeout(20000);
+                h.setRequestProperty("User-Agent", OfflineStore.ua);
+                if (ck != null) h.setRequestProperty("Cookie", ck);
+                if (h.getResponseCode() != 200) return;
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                try (java.io.InputStream in = h.getInputStream()) { byte[] b = new byte[8192]; int r; while ((r = in.read(b)) > 0) bo.write(b, 0, r); }
+                org.json.JSONArray a = new org.json.JSONObject(bo.toString("UTF-8")).getJSONArray("items");
+                for (int i = 0; i < a.length(); i++) { org.json.JSONObject o = a.getJSONObject(i); OfflineStore.enqueue(MainActivity.this, o.getString("slug"), o.getString("title"), o.getString("kind"), o.optString("course")); }
+            } catch (Exception e) { }
+        }).start();
     }
 
     private void startNetWatch() {

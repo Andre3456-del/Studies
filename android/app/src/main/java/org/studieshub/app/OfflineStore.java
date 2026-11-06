@@ -52,6 +52,7 @@ final class OfflineStore {
         File[] fs = d.listFiles();
         if (fs != null) for (File f : fs) f.delete();
         d.delete();
+        drop(c, userId, slug);
         STATUS.remove(slug);
     }
 
@@ -89,63 +90,109 @@ final class OfflineStore {
         return n;
     }
 
-    static void save(final Context c, final String ua, final String cookie, final String slug, final String title, final String kind, final String course) {
-        if (STATUS.containsKey(slug) && STATUS.get(slug).startsWith("saving")) return;
+    static volatile String ua = "Mozilla/5.0 StudiesHubApp/1.0";
+
+    static File slugDirFor(Context c, String uid, String slug) {
+        File d = new File(c.getFilesDir(), "offline/u" + uid.replaceAll("[^0-9]", "") + "/" + slug.replaceAll("[^A-Za-z0-9_-]", ""));
+        d.getParentFile().mkdirs();
+        return d;
+    }
+
+    // ---- the saving queue (kept in a file, so it carries on after the app is closed or the phone restarts) ----
+    private static final Object QLOCK = new Object();
+    private static File queueFile(Context c) { File d = new File(c.getFilesDir(), "offline"); d.mkdirs(); return new File(d, "queue.json"); }
+
+    private static JSONArray readQueue(Context c) {
+        try {
+            java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(queueFile(c)));
+            String l = r.readLine(); r.close();
+            return new JSONArray(l == null ? "[]" : l);
+        } catch (Exception e) { return new JSONArray(); }
+    }
+
+    private static void writeQueue(Context c, JSONArray a) {
+        try (FileOutputStream o = new FileOutputStream(queueFile(c))) { o.write((a.toString() + "\n").getBytes(StandardCharsets.UTF_8)); } catch (Exception e) { }
+    }
+
+    static boolean enqueue(Context c, String slug, String title, String kind, String course) {
+        synchronized (QLOCK) {
+            if (has(c, slug)) { STATUS.put(slug, "saved"); return true; }
+            JSONArray q = readQueue(c);
+            for (int i = 0; i < q.length(); i++) if (slug.equals(q.optJSONObject(i).optString("slug")) && userId.equals(q.optJSONObject(i).optString("uid"))) return true;
+            try { q.put(new JSONObject().put("uid", userId).put("slug", slug).put("title", title).put("kind", kind).put("course", course == null ? "" : course)); } catch (Exception e) { return false; }
+            writeQueue(c, q);
+            STATUS.put(slug, "queued");
+        }
+        OfflineService.start(c);
+        return true;
+    }
+
+    static JSONObject peek(Context c) { synchronized (QLOCK) { JSONArray q = readQueue(c); return q.length() == 0 ? null : q.optJSONObject(0); } }
+    static int queued(Context c) { synchronized (QLOCK) { return readQueue(c).length(); } }
+
+    static void drop(Context c, String uid, String slug) {
+        synchronized (QLOCK) {
+            JSONArray q = readQueue(c), n = new JSONArray();
+            for (int i = 0; i < q.length(); i++) { JSONObject o = q.optJSONObject(i); if (!(slug.equals(o.optString("slug")) && uid.equals(o.optString("uid")))) n.put(o); }
+            writeQueue(c, n);
+        }
+    }
+
+    /** 0 = saved, 1 = no network (try again later), 2 = cannot be saved (message in STATUS) */
+    static int saveBlocking(Context c, String uid, String slug, String title, String kind, String course) {
+        final String cookie = android.webkit.CookieManager.getInstance().getCookie(BASE);
+        final File d = slugDirFor(c, uid, slug);
         STATUS.put(slug, "saving:2");
-        final File d = slugDir(c, slug);
-        new Thread(() -> {
-            try {
-                d.mkdirs();
-                // 1. the page itself
-                HttpURLConnection h = get(BASE + "/p/" + slug, ua, cookie);
-                if (h.getResponseCode() != 200) throw new Exception(h.getResponseCode() == 401 || h.getResponseCode() == 403 ? "You can't save this one." : "The site answered " + h.getResponseCode());
-                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
-                try (InputStream in = h.getInputStream()) { byte[] b = new byte[16384]; int r; while ((r = in.read(b)) > 0) bo.write(b, 0, r); }
-                h.disconnect();
-                String html = bo.toString("UTF-8");
-                // A page asking for payment or sign-in is not the material.
-                if (!html.contains("/p/" + slug + "/raw") && ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind))) throw new Exception("This material is locked. Unlock it first, then save.");
-                STATUS.put(slug, "saving:8");
-                // 2. the file
-                long size = 0;
-                String mime = "text/html";
-                if ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind)) {
-                    HttpURLConnection f = get(BASE + "/p/" + slug + "/raw", ua, cookie);
-                    if (f.getResponseCode() != 200) throw new Exception("Could not download the file (" + f.getResponseCode() + ").");
-                    mime = f.getContentType() == null ? "application/octet-stream" : f.getContentType().split(";")[0];
-                    size = copy(f, new File(d, "raw.bin"), slug, Math.max(0, f.getContentLength()));
-                    f.disconnect();
-                }
-                // 3. the pieces the page needs (the PDF reader, fonts of the page, small pictures)
-                Matcher m = Pattern.compile("(?:https://cdnjs\\.cloudflare\\.com/[^\"'\\s)<>]+|(?:src|href)=\"(/[^\"#?]+\\.(?:png|jpg|svg|css|js|ico|webp))\")").matcher(html);
-                HashSet<String> urls = new HashSet<>();
-                while (m.find()) {
-                    String u = m.group(1) != null ? BASE + m.group(1) : m.group(0);
-                    urls.add(u);
-                }
-                for (String u : urls) {
-                    File lf = new File(libDir(c), sha(u));
-                    if (lf.exists()) continue;
-                    try {
-                        HttpURLConnection l = get(u, ua, cookie);
-                        if (l.getResponseCode() != 200) continue;
-                        String lm = l.getContentType() == null ? "application/octet-stream" : l.getContentType().split(";")[0];
-                        copy(l, lf, slug, 0);
-                        l.disconnect();
-                        try (FileOutputStream o = new FileOutputStream(new File(libDir(c), sha(u) + ".mime"))) { o.write(lm.getBytes(StandardCharsets.UTF_8)); }
-                    } catch (Exception e) { lf.delete(); }
-                }
-                try (FileOutputStream o = new FileOutputStream(new File(d, "page.html"))) { o.write(html.getBytes(StandardCharsets.UTF_8)); }
-                JSONObject meta = new JSONObject().put("slug", slug).put("title", title).put("kind", kind).put("course", course == null ? "" : course).put("mime", mime).put("size", size).put("savedAt", System.currentTimeMillis());
-                try (FileOutputStream o = new FileOutputStream(new File(d, "meta.json"))) { o.write((meta.toString() + "\n").getBytes(StandardCharsets.UTF_8)); }
-                STATUS.put(slug, "saved");
-            } catch (Exception e) {
-                File[] fs = d.listFiles();
-                if (fs != null) for (File f : fs) f.delete();
-                d.delete();
-                STATUS.put(slug, "error:" + (e.getMessage() == null ? "Network problem" : e.getMessage().replace("|", " ")));
+        try {
+            d.mkdirs();
+            HttpURLConnection h = get(BASE + "/p/" + slug, ua, cookie);
+            int code = h.getResponseCode();
+            if (code != 200) { h.disconnect(); if (code >= 500 || code == 408 || code == 429) throw new java.io.IOException("server " + code); throw new Exception(code == 401 || code == 403 ? "You can't save this one." : "The site answered " + code); }
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            try (InputStream in = h.getInputStream()) { byte[] b = new byte[16384]; int r; while ((r = in.read(b)) > 0) bo.write(b, 0, r); }
+            h.disconnect();
+            String html = bo.toString("UTF-8");
+            if (!html.contains("/p/" + slug + "/raw") && ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind))) throw new Exception("This material is locked. Unlock it first, then save.");
+            STATUS.put(slug, "saving:8");
+            long size = 0;
+            String mime = "text/html";
+            if ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind)) {
+                HttpURLConnection f = get(BASE + "/p/" + slug + "/raw", ua, cookie);
+                int fc = f.getResponseCode();
+                if (fc != 200) { f.disconnect(); if (fc >= 500 || fc == 408 || fc == 429) throw new java.io.IOException("server " + fc); throw new Exception("Could not download the file (" + fc + ")."); }
+                mime = f.getContentType() == null ? "application/octet-stream" : f.getContentType().split(";")[0];
+                size = copy(f, new File(d, "raw.bin"), slug, Math.max(0, f.getContentLength()));
+                f.disconnect();
             }
-        }).start();
+            Matcher m = Pattern.compile("(?:https://cdnjs\\.cloudflare\\.com/[^\"'\\s)<>]+|(?:src|href)=\"(/[^\"#?]+\\.(?:png|jpg|svg|css|js|ico|webp))\")").matcher(html);
+            HashSet<String> urls = new HashSet<>();
+            while (m.find()) urls.add(m.group(1) != null ? BASE + m.group(1) : m.group(0));
+            for (String u : urls) {
+                File lf = new File(libDir(c), sha(u));
+                if (lf.exists()) continue;
+                try {
+                    HttpURLConnection l = get(u, ua, cookie);
+                    if (l.getResponseCode() != 200) continue;
+                    String lm = l.getContentType() == null ? "application/octet-stream" : l.getContentType().split(";")[0];
+                    copy(l, lf, slug, 0);
+                    l.disconnect();
+                    try (FileOutputStream o = new FileOutputStream(new File(libDir(c), sha(u) + ".mime"))) { o.write(lm.getBytes(StandardCharsets.UTF_8)); }
+                } catch (Exception e) { lf.delete(); }
+            }
+            try (FileOutputStream o = new FileOutputStream(new File(d, "page.html"))) { o.write(html.getBytes(StandardCharsets.UTF_8)); }
+            JSONObject meta = new JSONObject().put("slug", slug).put("title", title).put("kind", kind).put("course", course == null ? "" : course).put("mime", mime).put("size", size).put("savedAt", System.currentTimeMillis());
+            try (FileOutputStream o = new FileOutputStream(new File(d, "meta.json"))) { o.write((meta.toString() + "\n").getBytes(StandardCharsets.UTF_8)); }
+            STATUS.put(slug, "saved");
+            return 0;
+        } catch (java.io.IOException e) {
+            File[] fs = d.listFiles(); if (fs != null) for (File f : fs) f.delete(); d.delete();
+            STATUS.put(slug, "queued");
+            return 1;
+        } catch (Exception e) {
+            File[] fs = d.listFiles(); if (fs != null) for (File f : fs) f.delete(); d.delete();
+            STATUS.put(slug, "error:" + (e.getMessage() == null ? "Could not save" : e.getMessage().replace("|", " ")));
+            return 2;
+        }
     }
 
     // ---- serving to the WebView ----
