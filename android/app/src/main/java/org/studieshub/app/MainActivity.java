@@ -594,7 +594,7 @@ public class MainActivity extends Activity {
         final float d = getResources().getDisplayMetrics().density;
         android.widget.FrameLayout root = new android.widget.FrameLayout(this);
         root.setClickable(true);
-        root.setBackground(new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xFF14120C, 0xFF000000, 0xFF000000}));
+        root.setBackground(new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xFF000000, 0xFF000000, 0xFF000000}));
         android.widget.LinearLayout l = new android.widget.LinearLayout(this);
         l.setOrientation(android.widget.LinearLayout.VERTICAL);
         l.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
@@ -603,7 +603,7 @@ public class MainActivity extends Activity {
         // logo inside a soft glowing ring
         android.widget.FrameLayout ring = new android.widget.FrameLayout(this);
         android.graphics.drawable.GradientDrawable rg = new android.graphics.drawable.GradientDrawable();
-        rg.setShape(android.graphics.drawable.GradientDrawable.OVAL); rg.setColor(0xFF000000); rg.setStroke((int) (2 * d), 0x88E8C25A);
+        rg.setShape(android.graphics.drawable.GradientDrawable.OVAL); rg.setColor(0xFF000000); rg.setStroke((int) (2 * d), 0xAA6D5EFC);
         ring.setBackground(rg);
         android.widget.ImageView logo = new android.widget.ImageView(this);
         logo.setImageResource(R.mipmap.ic_launcher);
@@ -617,9 +617,9 @@ public class MainActivity extends Activity {
         s.setText("Confirm it\u2019s you to carry on studying.\nYour account stays safe while the app is locked."); s.setTextColor(0xB3FFFFFF); s.setTextSize(15);
         s.setGravity(android.view.Gravity.CENTER); s.setLineSpacing(0, 1.25f); s.setPadding(0, 0, 0, (int) (36 * d));
         android.widget.TextView b = new android.widget.TextView(this);
-        b.setText("\uD83D\uDD12  Unlock"); b.setTextColor(0xFF1A1405); b.setTextSize(17); b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        b.setText("\uD83D\uDD12  Unlock"); b.setTextColor(0xFFFFFFFF); b.setTextSize(17); b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         b.setGravity(android.view.Gravity.CENTER);
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, new int[]{0xFFE8C25A, 0xFFD4A63A});
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, new int[]{0xFF6D5EFC, 0xFF8B5CF6});
         bg.setCornerRadius(40 * d);
         b.setBackground(bg); b.setClickable(true); b.setOnClickListener(v -> unlockNow());
         l.addView(t); l.addView(s);
