@@ -2023,7 +2023,7 @@ function open(t){var k=String(t.getAttribute('data-pv')).split(':'),kind=k[0],id
  ov=mk('div','position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483000;background:rgba(0,0,0,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:20px');
  ov.appendChild(mk('div','color:#fff;font:700 17px system-ui,sans-serif;max-width:80vw;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',name));
  var mid=mk('div','display:flex;align-items:center;justify-content:center');
- if(photo){var im=mk('img','width:min(62vw,240px);height:min(62vw,240px);object-fit:cover;border-radius:18px;background:#222');im.alt='';im.src=(kind==='g'?'/group-avatar/':'/avatar/')+id;mid.appendChild(im)}
+ if(photo){var im=mk('img','width:min(62vw,240px);height:min(62vw,240px);object-fit:cover;border-radius:18px;background:#222;transition:filter .4s;filter:blur(14px)');im.alt='';var fu=(kind==='g'?'/group-avatar/':'/avatar/')+id;im.src=t.currentSrc||t.src||fu;mid.appendChild(im);var big=new Image();big.onload=function(){im.src=fu;im.style.filter='none'};big.src=fu;if(t.complete&&t.naturalWidth&&(t.currentSrc||t.src).indexOf(fu)>-1)im.style.filter='none'}
  else{mid.appendChild(mk('div','width:min(62vw,240px);height:min(62vw,240px);border-radius:18px;background:#2a2a3a;color:#fff;display:flex;align-items:center;justify-content:center;font:700 min(26vw,96px) system-ui,sans-serif',kind==='g'?'👥':(name.trim().charAt(0)||'?').toUpperCase()))}
  ov.appendChild(mid);
  var bar=mk('div','display:flex;gap:34px;justify-content:center');
@@ -2033,7 +2033,7 @@ function open(t){var k=String(t.getAttribute('data-pv')).split(':'),kind=k[0],id
  ov.appendChild(bar);
  ov.addEventListener('click',function(e){if(!e.target.closest('a'))close()});
  document.body.appendChild(ov)}
-document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-pv]');if(!t||t.closest('label,form,[data-nopv]'))return;e.preventDefault();e.stopPropagation();open(t)},true);
+document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-pv][data-pn]');if(!t||t===document.documentElement||t.closest('label,form,[data-nopv]'))return;e.preventDefault();e.stopPropagation();open(t)},true);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')close()});
 window.addEventListener('pagehide',close)})()</script>` : ''}
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
@@ -5961,25 +5961,19 @@ const TEAM_ROLES = ROLES.filter(r => r !== 'user');
 const ROLE_JOB = { partial: 'Can upload plain HTML pages.', content: 'Can upload every kind of file (PDF, Word, video, CBT).', news: 'Can post news and review what students share.', support: 'Can help people who cannot log in.', observer: 'Can look but not change anything.', admin: 'Full admin: everything except the central admin\'s own powers.' };
 const teamBack = msg => '/admin/team?msg=' + encodeURIComponent(msg);
 app.get('/admin/maintenance', central, (req, res) => {
-  const since = getSecret('maintenance_since'), n = db.prepare('SELECT COUNT(*) n FROM users WHERE verified=1').get().n;
+  const n = db.prepare('SELECT COUNT(*) n FROM users WHERE verified=1').get().n;
   const msg = req.query.msg ? `<p class="pill">${esc(req.query.msg)}</p>` : '';
   res.send(layout('Site notices', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Site notices</h1>${msg}
-<p class="mut">Tell everyone by email (and a phone notification) when you are about to upgrade the site, and when it is back. ${n} verified member${n === 1 ? '' : 's'} will receive it. A website that is down cannot send email itself, so send the first notice <b>before</b> you start the upgrade. The "we are back" email then goes out <b>by itself</b> a few seconds after the site restarts.</p>
+<p class="mut">Send a message to everyone by email and phone notification. ${n} verified member${n === 1 ? '' : 's'} will receive it. The Studies Hub logo is added for you.</p>
 <p class="mut">Your email service has a daily sending limit (Resend's free plan is about 100 a day). If you have more members than that, the rest will not be delivered until you upgrade the plan.</p>
-${since ? `<div class="card"><p style="margin:0 0 6px"><b>Upgrade notice sent</b> ${timeAgo(new Date(Number(since)).toISOString().slice(0, 19).replace('T', ' '))}.</p><p class="mut" style="margin:0 0 8px">When the site restarts, everyone is told it is back automatically. If you finished without a restart, send it yourself:</p>
-<form method="post" action="/admin/maintenance/end" onsubmit="return confirm('Email all ${n} members that the site is back?')"><button>Send "we are back" now</button></form></div>`
- : `<form method="post" action="/admin/maintenance/start" class="card" onsubmit="return confirm('Email all ${n} members that the site is being upgraded?')"><label class="mut">Message (you can change it)</label><textarea name="note" rows="4" maxlength="400" style="width:100%">${esc(MAINT_START)}</textarea><button style="margin-top:8px">Send "we are upgrading" notice to everyone</button></form>`}`, req.user));
+<form method="post" action="/admin/maintenance/start" class="card" onsubmit="return confirm('Send this to all ${n} members?')"><label class="mut">Title</label><input name="title" maxlength="80" required placeholder="What is this about?"><label class="mut">Message</label><textarea name="note" rows="5" maxlength="600" required style="width:100%" placeholder="Write the message people will read"></textarea><button style="margin-top:8px">Send to everyone</button></form>`, req.user));
 });
 app.post('/admin/maintenance/start', central, (req, res) => {
-  const note = String(req.body.note || '').trim().slice(0, 400) || MAINT_START;
-  setSecret('maintenance_since', Date.now());
-  const n = emailEveryone('Studies Hub is being upgraded', 'We are upgrading the site', note);
-  console.log(`Audit: ${req.user.email} sent the upgrade notice to ${n} members`);
-  res.redirect('/admin/maintenance?msg=' + encodeURIComponent(`Notice is going out to ${n} members.`));
-});
-app.post('/admin/maintenance/end', central, (req, res) => {
-  const n = maintenanceBack();
-  res.redirect('/admin/maintenance?msg=' + encodeURIComponent(`"We are back" is going out to ${n} members.`));
+  const note = String(req.body.note || '').trim().slice(0, 600), title = String(req.body.title || '').trim().slice(0, 80);
+  if (!note || !title) return res.redirect('/admin/maintenance?msg=' + encodeURIComponent('Please write both a title and a message.'));
+  const n = emailEveryone(title, title, note);
+  console.log(`Audit: ${req.user.email} sent a site notice to ${n} members`);
+  res.redirect('/admin/maintenance?msg=' + encodeURIComponent(`Your message is going out to ${n} members.`));
 });
 app.get('/admin/team', central, (req, res) => {
   const staff = db.prepare("SELECT id,name,email,username,role FROM users WHERE role!='user' AND virtual=0 ORDER BY name").all();
