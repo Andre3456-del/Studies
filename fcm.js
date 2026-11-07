@@ -65,6 +65,7 @@ function register(db) {
         const chat = /^(dm|group)-\d+$/.test(tg);
         const cat = chat ? 'messages' : /news/.test(tg) ? 'news' : /upload/.test(tg) ? 'uploads' : 'general';
         data = { type: 'note', title: p.title, body: p.body, url: p.url || '/', tag: tg, cat };
+        if (/^\W*Missed (video|voice) call/.test(String(p.body || ''))) data.missed = '1';
         if (chat) { data.chat = q.group ? 'group' : 'dm'; data.cid = String(q.group || q.to || ''); data.av = q.group ? '/group-avatar/' + q.group : '/avatar/' + q.to; }
       }
       const tk = await accessToken(a), project = a.project_id;

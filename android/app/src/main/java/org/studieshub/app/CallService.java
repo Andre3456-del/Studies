@@ -67,7 +67,7 @@ public class CallService extends FirebaseMessagingService {
         if (type.equals("ring") && d.get("id") != null) ack("POST", "/api/calls/" + d.get("id") + "/ringing");
         else if (type.equals("note")) ack("GET", "/api/ping");
         if (type.equals("ring")) showCall(this, d.get("id"), title, body);
-        else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"), d.get("chat"), d.get("cid"), d.get("av"));
+        else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"), d.get("chat"), d.get("cid"), d.get("av"), d.get("missed") != null);
     }
 
     static void ack(final String method, final String path) {
@@ -126,7 +126,7 @@ public class CallService extends FirebaseMessagingService {
 
     private static int AudioManager_STREAM_RING() { return android.media.AudioManager.STREAM_RING; }
 
-    private void note(NotificationManager nm, String title, String body, String url, String tag, String cat, String chat, String cid, String av) {
+    private void note(NotificationManager nm, String title, String body, String url, String tag, String cat, String chat, String cid, String av, boolean missed) {
         Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", url == null ? "/" : url);
         int nid = (tag == null || tag.isEmpty() ? title + body : tag).hashCode();
         PendingIntent pi = PendingIntent.getActivity(this, nid, open, flags());
@@ -161,10 +161,21 @@ public class CallService extends FirebaseMessagingService {
                     else ms.addMessage(o.getString("x"), o.getLong("t"), o.getString("w"));
                 }
             } catch (Throwable t) { ms.addMessage(text, System.currentTimeMillis(), who); }
-            b.setStyle(ms).setGroup("sh_chats");
+            b.setStyle(ms).setGroup("sh_chats").setCategory(Notification.CATEGORY_MESSAGE);
+            try {
+                String sid = "chat_" + chat + "_" + cid;
+                if (Build.VERSION.SDK_INT >= 30) {
+                    android.content.pm.ShortcutManager sm = getSystemService(android.content.pm.ShortcutManager.class);
+                    android.content.pm.ShortcutInfo si = new android.content.pm.ShortcutInfo.Builder(this, sid).setShortLabel(title).setLongLived(true)
+                        .setIntent(new Intent(this, MainActivity.class).setAction(Intent.ACTION_VIEW).putExtra("url", url == null ? "/" : url))
+                        .setPerson(new android.app.Person.Builder().setName(title).setIcon(pic28).setImportant(true).build()).setIcon(pic28).build();
+                    sm.pushDynamicShortcut(si);
+                    b.setShortcutId(sid);
+                }
+            } catch (Throwable t) { }
         } else b.setStyle(new Notification.BigTextStyle().bigText(body));
         // Only a chat message can be answered, marked as read or muted from here. News, uploads and the rest just open.
-        if (isChat) {
+        if (isChat && !missed) {
             int base = Math.abs(nid % 100000) * 4;
             android.app.RemoteInput ri = new android.app.RemoteInput.Builder("reply_text").setLabel("Reply").build();
             Notification.Action reply = new Notification.Action.Builder(R.drawable.ic_stat, "Reply",

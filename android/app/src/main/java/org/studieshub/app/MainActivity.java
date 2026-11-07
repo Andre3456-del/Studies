@@ -126,6 +126,7 @@ public class MainActivity extends Activity {
         try { android.content.SharedPreferences sp0 = getSharedPreferences("studieshub", MODE_PRIVATE); if (sp0.getInt("cache_clean", 0) < 2) { web.clearCache(true); sp0.edit().putInt("cache_clean", 2).apply(); } } catch (Throwable t) { }
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
+        cm.setCookie("https://studieshub.org", "shapp=1; Max-Age=31536000; Path=/; Secure"); // tells the site every request (even the page loader's) comes from the app
         cm.setAcceptThirdPartyCookies(web, true);
 
         web.addJavascriptInterface(new Object() {
@@ -477,15 +478,12 @@ public class MainActivity extends Activity {
         } catch (Throwable t) { /* ignore */ }
     }
 
-    private boolean presenceWanted() { return getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("presence", true); }
+    // The always-on "You show as online to your friends" helper (and its notification) is gone. Being reachable is worked out from the pushes
+    // that reach the phone and from the app being open, so there is nothing to switch on. This only switches off an old copy left by an earlier version.
+    private boolean presenceWanted() { return false; }
 
-    /** Starts the "show me online" helper when the person is logged in and has not turned it off. */
     private void startPresence() {
-        try {
-            if (!presenceWanted() || PresenceService.running) return;
-            Intent s = new Intent(this, PresenceService.class);
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(s); else startService(s);
-        } catch (Throwable t) { /* ignore */ }
+        try { stopService(new Intent(this, PresenceService.class)); } catch (Throwable t) { /* ignore */ }
     }
 
     /** Asks once for permission to show notifications (Android 13 and newer), so progress and "complete" notices can appear. */

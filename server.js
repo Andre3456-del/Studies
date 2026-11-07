@@ -995,7 +995,7 @@ app.get('/app/version', async (req, res) => {
 });
 app.get('/app', (req, res) => {
   // The download page is for the website only: inside the app it can never open, even by a stale link.
-  if (/StudiesHubApp/.test(req.headers['user-agent'] || '')) return res.redirect('/settings');
+  if (inApp(req)) return res.redirect('/settings');
   const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a id="dlApp" class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><script>(function(){var a=document.getElementById('dlApp');try{navigator.getInstalledRelatedApps&&navigator.getInstalledRelatedApps().then(function(r){if(r&&r.length&&a){a.textContent='Open the app';a.removeAttribute('download');a.href='intent://studieshub.org/#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/StudiesHub.apk')+';end'}}).catch(function(){})}catch(e){}})()</script><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
   res.send(layout('Get the app', body, req.user));
 });
@@ -1175,6 +1175,9 @@ const pingHandler = (req, res) => {
 app.get('/api/ping', pingHandler);
 app.post('/api/ping', pingHandler);
 
+// Is this request from the Studies Hub Android app? The app's name is in its user-agent, but the browser's background page loader does not send
+// that, so the app also keeps a small "shapp" cookie. Both count.
+const inApp = req => /StudiesHubApp/.test(req.headers['user-agent'] || '') || /(?:^|;\s*)shapp=1(?:;|$)/.test(req.headers.cookie || '');
 const ONLINE_MS = 2 * 60 * 1000; // a user counts as "online" if seen in the last 2 minutes
 const isReachable = u => !!u.last_seen && Date.now() - u.last_seen < ONLINE_MS; // the person's phone has data on right now (used for the two ticks and ringing)
 const isOnline = u => isReachable(u) && !u.hide_active; // what may be shown as "online": only when they have active status on
@@ -1867,7 +1870,9 @@ window.enablePush=function(){
     if(p!=='granted')return false;
     return navigator.serviceWorker.register('/sw.js').then(function(){return navigator.serviceWorker.ready}).then(subscribe)
   }).catch(function(){return false})};
-navigator.serviceWorker.register('/sw.js').then(function(reg){
+// Inside the Android app the page loader is not used at all: it hides the app's identity from the site and gets in the way of the app's own offline pages.
+if(window.StudiesApp){try{navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister()})}).catch(function(){});if(window.caches)caches.keys().then(function(ks){ks.forEach(function(k){caches.delete(k)})}).catch(function(){})}catch(e){}}
+else navigator.serviceWorker.register('/sw.js').then(function(reg){
   if(window.Notification&&window.PushManager&&Notification.permission==='granted')subscribe(reg).catch(function(){})
   if('periodicSync' in reg&&navigator.permissions){
     navigator.permissions.query({name:'periodic-background-sync'}).then(function(status){
@@ -2008,6 +2013,29 @@ document.addEventListener('pointermove',function(e){if(T&&(Math.abs(e.clientX-x0
 document.addEventListener('click',function(e){if(fired){e.preventDefault();e.stopPropagation();fired=false}},true);
 document.addEventListener('contextmenu',function(e){var a=pageLink(e.target);if(a&&ptype==='touch')e.preventDefault()},true)})()</script>
 ` : ''}
+${user ? `<script>(function(){var me='${user.id}',ov=null;
+function close(){if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);ov=null}
+function mk(tag,css,txt){var e=document.createElement(tag);if(css)e.style.cssText=css;if(txt!=null)e.textContent=txt;return e}
+var IC={chat:'<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'};
+function btn(href,svg,label){var a=mk('a','display:flex;flex-direction:column;align-items:center;gap:6px;color:#fff;text-decoration:none;font:600 12px system-ui,sans-serif');a.href=href;
+ var c=mk('span','width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center');c.innerHTML='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+svg+'</svg>';a.appendChild(c);a.appendChild(mk('span','',label));return a}
+function open(t){var k=String(t.getAttribute('data-pv')).split(':'),kind=k[0],id=k[1],name=t.getAttribute('data-pn')||'',photo=t.getAttribute('data-ph')==='1';close();
+ ov=mk('div','position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483000;background:rgba(0,0,0,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:20px');
+ ov.appendChild(mk('div','color:#fff;font:700 17px system-ui,sans-serif;max-width:80vw;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',name));
+ var mid=mk('div','display:flex;align-items:center;justify-content:center');
+ if(photo){var im=mk('img','width:min(62vw,240px);height:min(62vw,240px);object-fit:cover;border-radius:18px;background:#222');im.alt='';im.src=(kind==='g'?'/group-avatar/':'/avatar/')+id;mid.appendChild(im)}
+ else{mid.appendChild(mk('div','width:min(62vw,240px);height:min(62vw,240px);border-radius:18px;background:#2a2a3a;color:#fff;display:flex;align-items:center;justify-content:center;font:700 min(26vw,96px) system-ui,sans-serif',kind==='g'?'👥':(name.trim().charAt(0)||'?').toUpperCase()))}
+ ov.appendChild(mid);
+ var bar=mk('div','display:flex;gap:34px;justify-content:center');
+ var own=kind==='u'&&id===me;
+ if(!own)bar.appendChild(btn(kind==='g'?'/chat/group/'+id:'/chat/'+id,IC.chat,'Chat'));
+ bar.appendChild(btn(kind==='g'?'/chat/group/'+id+'/info':'/u/'+id,IC.info,'Info'));
+ ov.appendChild(bar);
+ ov.addEventListener('click',function(e){if(!e.target.closest('a'))close()});
+ document.body.appendChild(ov)}
+document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-pv]');if(!t||t.closest('label,form,[data-nopv]'))return;e.preventDefault();e.stopPropagation();open(t)},true);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')close()});
+window.addEventListener('pagehide',close)})()</script>` : ''}
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
 <script>(function(){if(!window.StudiesApp)return;function fail(m){var b=document.querySelector('a.gbtn');if(b)b.style.opacity='';if(m)alert(m)}window.studiesGoogleFail=fail;window.studiesGoogle=function(t,l){fetch('/auth/google/app',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:t,lecturer:!!l})}).then(function(r){return r.json()}).then(function(j){if(j.ok)location.href=j.url||'/';else fail(j.error)}).catch(function(){fail('No connection. Please try again.')})};document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a.gbtn');if(!a)return;e.preventDefault();a.style.opacity='.6';StudiesApp.google(/as=lecturer/.test(a.getAttribute('href')||''))},true)})()</script>
@@ -2026,7 +2054,7 @@ var ob=document.getElementById('offBar');
 if(ob){var slug=ob.getAttribute('data-slug'),ttl=ob.getAttribute('data-title')||'',kd=ob.getAttribute('data-kind')||'',crs=ob.getAttribute('data-course')||'',fl=ob.getAttribute('data-file')||'',tick=null;
  var st=document.createElement('style');st.textContent='@keyframes shspin{to{transform:rotate(360deg)}}.shdl{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 12px}.shdl svg{flex:none}.shdl button{flex:1 1 150px;display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 10px;border-radius:12px;border:1px solid var(--line,#444);background:transparent;color:inherit;font:600 14px system-ui,sans-serif;cursor:pointer;white-space:nowrap}.shdl .ok{flex:1 1 150px;display:flex;align-items:center;justify-content:center;padding:12px 14px;border-radius:12px;background:rgba(34,197,94,.15);color:#22c55e;font:600 15px system-ui,sans-serif}.shdl .busy{flex:1 1 100%;border:1px solid var(--line,#444);border-radius:12px;padding:12px 14px}.shdl .row{display:flex;align-items:center;gap:10px;font:600 15px system-ui,sans-serif}.shdl .ring{transform-origin:12px 12px;animation:shspin 1s linear infinite}.shdl .bar{height:6px;border-radius:99px;background:rgba(127,127,127,.3);margin-top:10px;overflow:hidden}.shdl .bar i{display:block;height:100%;width:0;background:#22c55e;border-radius:99px;transition:width .4s}';document.head.appendChild(st);
  var ARROW='<path d="M12 6v8m-3-3 3 3 3-3M7 18h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
- var ICON='<svg width="22" height="22" viewBox="0 0 24 24">'+ARROW+'</svg>',SPIN='<svg width="26" height="26" viewBox="0 0 24 24"><circle class="ring" cx="12" cy="12" r="10.5" fill="none" stroke="#22c55e" stroke-width="2" stroke-dasharray="16 50" stroke-linecap="round"/>'+ARROW+'</svg>';
+ var ICON='<svg width="22" height="22" viewBox="0 0 24 24">'+ARROW+'</svg>',SPIN='<svg width="22" height="22" viewBox="0 0 24 24"><circle class="ring" cx="12" cy="12" r="10.5" fill="none" stroke="#22c55e" stroke-width="2" stroke-dasharray="16 50" stroke-linecap="round"/>'+ARROW+'</svg>';
  var box=document.createElement('div');box.className='shdl';ob.appendChild(box);
  function hideLinks(){Array.prototype.forEach.call(document.querySelectorAll('a[href*="/raw"]'),function(a){a.style.display='none'})}
  function viewOnly(){Array.prototype.forEach.call(document.querySelectorAll('video'),function(v){v.setAttribute('controlslist','nodownload')})}
@@ -2035,13 +2063,14 @@ if(ob){var slug=ob.getAttribute('data-slug'),ttl=ob.getAttribute('data-title')||
  function pc(s){return parseInt((s.split(':')[1]||'0'),10)||0}
  function busy(t,p,wait){box.innerHTML='<div class="busy"><div class="row">'+SPIN+'<span>'+t+'</span></div><div class="bar"><i style="width:'+(wait?6:p)+'%"></i></div></div>'}
  function chip(t){var d=document.createElement('div');d.className='ok';d.textContent=t;box.appendChild(d)}
+ var msg='';function note(t){if(!t)return;var d=document.createElement('div');d.style.cssText='flex:1 1 100%;color:#ef4444;font:600 13px system-ui,sans-serif';d.textContent=t;box.appendChild(d)}
  function btn(t,fn){var b=document.createElement('button');b.type='button';b.innerHTML=ICON+'<span></span>';b.lastChild.textContent=t;b.onclick=fn;box.appendChild(b)}
  function draw(){clearTimeout(tick);var a=sa(),p=sp();
   if(a==='queued'||a.indexOf('saving')===0){busy(a==='queued'?'Waiting to start…':'Saving to app… '+pc(a)+'%',pc(a),a==='queued');tick=setTimeout(draw,600);return}
   if(p==='pending'||p.indexOf('saving')===0){busy(p==='pending'?'Waiting to start…':'Downloading to phone… '+pc(p)+'%',pc(p),p==='pending');tick=setTimeout(draw,600);return}
-  box.innerHTML='';hideLinks();
-  if(a==='saved'){chip('✓ Saved in the app');viewOnly()}else btn(a.indexOf('error')===0?'Could not save. Tap to try again':'Save to app',function(){A.offSave(slug,ttl,kd,crs);draw()});
-  if(p==='done')chip('✓ Downloaded to phone');else btn(p.indexOf('error')===0?'Download failed. Tap to try again':'Download to phone',function(){var ok=false;try{ok=A.dlStart(slug,ttl,fl)}catch(e){}draw()})}
+  box.innerHTML='';hideLinks();var why=a.indexOf('error')===0?a.slice(6):p.indexOf('error')===0?p.slice(6):msg;
+  if(a==='saved'){chip('✓ Saved in the app');viewOnly()}else btn(a.indexOf('error')===0?'Could not save. Tap to try again':'Save to app',function(){msg='';var ok=false;try{ok=A.offSave(slug,ttl,kd,crs)}catch(e){}if(!ok&&sa()==='none')msg='Could not start saving. Please update the Studies Hub app and try again.';draw()});
+  if(p==='done')chip('✓ Downloaded to phone');else btn(p.indexOf('error')===0?'Download failed. Tap to try again':'Download to phone',function(){msg='';var ok=false;try{ok=A.dlStart(slug,ttl,fl)}catch(e){}if(!ok&&sp()==='none')msg='Could not start the download. Please update the Studies Hub app and try again.';draw()});note(why)}
  draw()}
 })()</script>`}${`<script>(function(){var A=window.StudiesApp;if(!A||!A.privatePage)return;var last=null;
 function chk(){var p=location.pathname,v=/^\\/(settings\\/(profile|security|devices)|login|signup|forgot|reset|verify|welcome|pay|admin)(\\/|$)/.test(p);if(v!==last){last=v;try{A.privatePage(v)}catch(e){}}}
@@ -2353,8 +2382,8 @@ ${posts.length ? `<h3>News from ${esc(u.name.split(' ')[0])}</h3>${posts.map(p =
 });
 
 // ---------- chat: encrypted messages between any two users ----------
-const avatarOr = (u, size = 44) => u.avatar_mime ? `<img src="/avatar/${u.id}" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
-const groupAvatarOr = (g, size = 44) => g.avatar_mime ? `<img src="/group-avatar/${g.id}" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.44)}px">👥</span>`;
+const avatarOr = (u, size = 44) => u.avatar_mime ? `<img src="/avatar/${u.id}" data-pv="u:${u.id}" data-pn="${esc(u.name || '')}" data-ph="1" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" data-pv="u:${u.id}" data-pn="${esc(u.name || '')}" data-ph="0" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px">${esc((u.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`;
+const groupAvatarOr = (g, size = 44) => g.avatar_mime ? `<img src="/group-avatar/${g.id}" data-pv="g:${g.id}" data-pn="${esc(g.name || '')}" data-ph="1" class="av" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover">` : `<span class="avatar av" data-pv="g:${g.id}" data-pn="${esc(g.name || '')}" data-ph="0" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.44)}px">👥</span>`;
 // A verified position that carries real admin capability gets a small badge next to the name, wherever it shows.
 const verifiedBadge = autoRole => autoRole ? ' <span class="verified-badge" title="Verified admin">&#10003;</span>' : '';
 const byline = n => `${esc(n.author || 'Studies Hub')}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}${verifiedBadge(n.author_auto_role)}`;
@@ -4329,7 +4358,7 @@ app.get('/api/username/check', (req, res) => {
 });
 
 // Only on the website (a phone or tablet browser). Never inside the Android app, and not on laptops.
-const wantsApp = req => !/StudiesHubApp/.test(req.headers['user-agent'] || '') && deviceOf(req) !== 'laptop';
+const wantsApp = req => !inApp(req) && deviceOf(req) !== 'laptop';
 const SETTINGS_PAGES = [
   ['/settings/profile', '👤', 'Profile', 'Your picture, name, and details'],
   ['/settings/active-status', '🟢', 'Active status', 'Whether others see when you\u2019re online'],
@@ -4351,7 +4380,7 @@ const uniToolRows = u => {
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
   res.set({ 'Cache-Control': 'no-store', Vary: 'User-Agent' });
-  const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req)) && (x[0] !== '/saved' || /StudiesHubApp/.test(req.headers['user-agent'] || ''))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
+  const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req)) && (x[0] !== '/saved' || inApp(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
 app.get('/settings/profile', (req, res) => {
@@ -4400,9 +4429,7 @@ app.get('/settings/active-status', (req, res) => {
   const hidden = !!db.prepare('SELECT hide_active FROM users WHERE id=?').get(req.user.id).hide_active;
   res.send(layout('Active status', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Active status</h1>
 <p class="mut">When this is on, friends can see when you're online in chat. Turn it off to always appear offline to them.</p>
-<form method="post" action="/settings/active-status" class="card" id="actForm"><input type="hidden" name="hide" id="actHide" value="${hidden ? '0' : '1'}"><label class="swrow"><span><b>Show when I'm online</b><br><span class="mut" style="font-size:13px">${hidden ? 'Off. You always appear offline.' : 'On. Friends can see when you are online.'}</span></span><input type="checkbox" role="switch" class="shsw" id="actSw" aria-label="Show when I'm online"${hidden ? '' : ' checked'}></label></form><script>document.getElementById('actSw').onchange=function(){document.getElementById('actHide').value=this.checked?'0':'1';document.getElementById('actForm').submit()}</script>
-<div class="card row" id="bgCard" hidden style="align-items:center;gap:14px"><style>#bgCard input.bgsw{appearance:none!important;-webkit-appearance:none!important;display:block!important;flex:none!important;width:54px!important;min-width:54px!important;max-width:54px!important;height:32px!important;border-radius:16px!important;background:#000!important;box-shadow:inset 0 0 0 1.5px #3a3a48!important;position:relative!important;transition:background .2s;border:0!important;padding:0!important;margin:0!important;cursor:pointer}#bgCard input.bgsw::before{content:'';position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .2s}#bgCard input.bgsw:checked{background:#22c55e!important}#bgCard input.bgsw:checked::before{transform:translateX(22px)}</style><div style="flex:1"><b>Stay online when the app is closed</b><br><span class="mut" style="font-size:13px">Friends see you as online whenever your phone has internet. Android shows a small notification while this is on.</span></div><input type="checkbox" role="switch" id="bgSw" class="bgsw" aria-label="Stay online when the app is closed"></div>
-<script>(function(){var A=window.StudiesApp;if(!A||!A.presenceOn)return;var c=document.getElementById('bgCard'),s=document.getElementById('bgSw');c.hidden=false;s.checked=!!A.presenceOn();s.onchange=function(){A.presence(s.checked)}})()</script>`, req.user));
+<form method="post" action="/settings/active-status" class="card" id="actForm"><input type="hidden" name="hide" id="actHide" value="${hidden ? '0' : '1'}"><label class="swrow"><span><b>Show when I'm online</b><br><span class="mut" style="font-size:13px">${hidden ? 'Off. You always appear offline.' : 'On. Friends can see when you are online.'}</span></span><input type="checkbox" role="switch" class="shsw" id="actSw" aria-label="Show when I'm online"${hidden ? '' : ' checked'}></label></form><script>document.getElementById('actSw').onchange=function(){document.getElementById('actHide').value=this.checked?'0':'1';document.getElementById('actForm').submit()}</script>`, req.user));
 });
 app.post('/settings/active-status', (req, res) => {
   if (!req.user) return res.sendStatus(401);
@@ -4609,7 +4636,7 @@ app.get('/api/saved/available', (req, res) => {
 app.get('/saved', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/saved');
   // Saved offline belongs to the app only; the website never shows it.
-  if (!/StudiesHubApp/.test(req.headers['user-agent'] || '')) return res.redirect('/settings');
+  if (!inApp(req)) return res.redirect('/settings');
   res.send(layout('Saved offline', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Saved offline</h1>
 <p class="mut">Saved materials live inside the Studies Hub app only, like downloads in a video app. You can open them with no internet, but you cannot take them out of the app. Saving runs in the background, so you can leave this page or the app.</p>
 <div class="card"><label class="swrow"><span><b>Save all materials</b><br><span class="mut" id="autoInfo" style="font-size:13px"></span></span><input type="checkbox" role="switch" class="shsw" id="autoSw" aria-label="Save all materials"></label></div>
