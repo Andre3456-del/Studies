@@ -969,7 +969,15 @@ async function latestApp() {
     const j = r.ok ? await r.json() : null, m = j && /versionCode:\s*(\d+)/.exec(j.body || '');
     const asset = j && (j.assets || []).find(x => x.name === 'StudiesHub.apk');
     if (m && asset) appVer = { n: Number(m[1]), assetId: asset.id, at: Date.now() };
-  } catch (e) { /* keep the last known build */ }
+    else throw new Error('api');
+  } catch (e) {
+    // GitHub's data service refuses busy shared servers now and then; the ordinary release page still answers, so read the build number there.
+    try {
+      const r2 = await fetch('https://github.com/Andre3456-del/Studies/releases/tag/app-latest', { headers: { 'User-Agent': 'studieshub' } });
+      const m2 = r2.ok ? /versionCode:\s*(\d+)/.exec(await r2.text()) : null;
+      if (m2) appVer = { n: Number(m2[1]), assetId: null, at: Date.now() };
+    } catch (e2) { /* keep the last known build */ }
+  }
   return appVer;
 }
 app.get('/StudiesHub.apk', async (req, res) => {

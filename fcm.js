@@ -65,6 +65,7 @@ function register(db) {
         const chat = /^(dm|group)-\d+$/.test(tg);
         const cat = chat ? 'messages' : /news/.test(tg) ? 'news' : /upload/.test(tg) ? 'uploads' : 'general';
         data = { type: 'note', title: p.title, body: p.body, url: p.url || '/', tag: tg, cat };
+        ttl = '86400s'; // keep it for a day: a phone whose data was off gets it the moment data returns, and tells the server (which makes the sender's ticks go double)
         if (/^\W*Missed (video|voice) call/.test(String(p.body || ''))) data.missed = '1';
         if (chat) { data.chat = q.group ? 'group' : 'dm'; data.cid = String(q.group || q.to || ''); data.av = q.group ? '/group-avatar/' + q.group : '/avatar/' + q.to; }
       }

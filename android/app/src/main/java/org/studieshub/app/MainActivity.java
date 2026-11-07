@@ -637,7 +637,7 @@ public class MainActivity extends Activity {
     @Override protected void onPause() { super.onPause(); fg = false; if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
     @Override protected void onResume() {
         super.onResume(); fg = true; if (getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("off_auto", false) && System.currentTimeMillis() - lastTopUp > 1800000L) topUp(); if (OfflineStore.queued(this) > 0) OfflineService.start(this); web.onResume(); skipLock = false; if (!locked) secure(false);
-        if (System.currentTimeMillis() - lastUpdateCheck > 3600000L) checkUpdate();
+        if (System.currentTimeMillis() - lastUpdateCheck > 120000L) checkUpdate();
     }
 
     @Override protected void onStop() {
