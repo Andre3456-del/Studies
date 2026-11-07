@@ -211,6 +211,27 @@ app.use((req, res, next) => {
   }
   next();
 });
+// Squeeze pages and data before they travel (about 5 to 8 times smaller): on a slow phone connection this is the biggest speed-up there is.
+app.use((req, res, next) => {
+  if (!/\bgzip\b/.test(String(req.headers['accept-encoding'] || '')) || req.headers.range) return next();
+  const send = res.send;
+  res.send = function (body) {
+    try {
+      const isStr = typeof body === 'string', isBuf = Buffer.isBuffer(body);
+      if ((isStr || isBuf) && !res.getHeader('Content-Encoding') && res.statusCode !== 204 && res.statusCode !== 304 && req.method !== 'HEAD') {
+        const ct = String(res.getHeader('Content-Type') || (isStr ? 'text/html' : ''));
+        if (/^(text\/|application\/(json|javascript|xml)|image\/svg)/i.test(ct) && Buffer.byteLength(body) > 1024) {
+          const z = zlib.gzipSync(isStr ? Buffer.from(body, 'utf8') : body, { level: 5 });
+          res.setHeader('Content-Encoding', 'gzip'); res.setHeader('Vary', 'Accept-Encoding');
+          if (!res.getHeader('Content-Type')) res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          return send.call(this, z);
+        }
+      }
+    } catch (e) { /* send it plain */ }
+    return send.call(this, body);
+  };
+  next();
+});
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json({ limit: '20kb' }));
 
