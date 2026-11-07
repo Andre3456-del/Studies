@@ -62,8 +62,28 @@ public class CallService extends FirebaseMessagingService {
         }
         String title = d.get("title") == null ? "Studies Hub" : d.get("title");
         String body = d.get("body") == null ? "" : d.get("body");
+        // The push reached this phone, so its data is on: tell the server right away. That turns the sender's one tick into two ticks
+        // (and makes a call say "Ringing…" instead of "Calling…"), even while the app is closed.
+        if (type.equals("ring") && d.get("id") != null) ack("POST", "/api/calls/" + d.get("id") + "/ringing");
+        else if (type.equals("note")) ack("GET", "/api/ping");
         if (type.equals("ring")) showCall(this, d.get("id"), title, body);
         else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"), d.get("chat"), d.get("cid"), d.get("av"));
+    }
+
+    static void ack(final String method, final String path) {
+        new Thread(() -> {
+            try {
+                String cookie = CookieManager.getInstance().getCookie("https://studieshub.org");
+                if (cookie == null || !cookie.contains("sid=")) return;
+                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://studieshub.org" + path).openConnection();
+                h.setRequestMethod(method);
+                h.setConnectTimeout(8000); h.setReadTimeout(8000);
+                h.setRequestProperty("Cookie", cookie);
+                if (method.equals("POST")) { h.setRequestProperty("Content-Type", "application/json"); h.setDoOutput(true); h.getOutputStream().write("{}".getBytes()); }
+                h.getResponseCode();
+                h.disconnect();
+            } catch (Throwable t) { }
+        }).start();
     }
 
     static int flags() { return PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0); }

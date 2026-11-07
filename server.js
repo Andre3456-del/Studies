@@ -670,7 +670,6 @@ function startSession(res, userId) {
 
 app.get('/health', (req, res) => res.type('text').send('ok'));
 // The Android app calls this every ~45 seconds while the phone has internet; the request itself marks the person online (see the presence stamp below).
-app.get('/api/ping', (req, res) => { if (!req.user) return res.sendStatus(401); res.set('Cache-Control', 'no-store').sendStatus(204); });
 
 app.use((req, res, next) => {
   const c = (req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('sid='));
@@ -995,6 +994,8 @@ app.get('/app/version', async (req, res) => {
   res.set('Cache-Control', 'no-store').json({ versionCode: v.n, url: '/StudiesHub.apk' });
 });
 app.get('/app', (req, res) => {
+  // The download page is for the website only: inside the app it can never open, even by a stale link.
+  if (/StudiesHubApp/.test(req.headers['user-agent'] || '')) return res.redirect('/settings');
   const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a id="dlApp" class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><script>(function(){var a=document.getElementById('dlApp');try{navigator.getInstalledRelatedApps&&navigator.getInstalledRelatedApps().then(function(r){if(r&&r.length&&a){a.textContent='Open the app';a.removeAttribute('download');a.href='intent://studieshub.org/#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/StudiesHub.apk')+';end'}}).catch(function(){})}catch(e){}})()</script><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
   res.send(layout('Get the app', body, req.user));
 });
@@ -1007,7 +1008,7 @@ a.btn{display:inline-block;background:#5bc8ff;color:#04101f;border:none;border-r
 <body><div class="card"><div class="tick">💾</div><h1>Saved on your device</h1>
 <p>No connection right now, so this is waiting on your phone. It'll upload itself as soon as you're back online -- no need to try again.</p>
 <a class="btn" href="/admin">Back to Admin</a></div></body></html>`;
-const SW_JS = `var OFFLINE_CACHE='studies-hub-offline-v1',UPLOAD_PATHS=['/admin/upload'];
+const SW_JS = `var OFFLINE_CACHE='studies-hub-offline-v2',UPLOAD_PATHS=['/admin/upload'];
 self.addEventListener('install',function(e){self.skipWaiting();e.waitUntil(caches.open(OFFLINE_CACHE).then(function(c){return c.add('/offline.html')}))});
 self.addEventListener('fetch',function(e){
   if(e.request.mode!=='navigate')return;
@@ -1015,10 +1016,11 @@ self.addEventListener('fetch',function(e){
   if(e.request.method==='POST'&&UPLOAD_PATHS.indexOf(pathname)>-1){e.respondWith(handleUploadNav(e.request,pathname));return}
   if(e.request.method!=='GET'){e.respondWith(fetch(e.request).catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match('/offline.html')})}));return}
   // A normal page visit: try the network and remember the result, so the same page can still open with no connection later.
-  e.respondWith(fetch(e.request).then(function(res){var copy=res.clone();caches.open(OFFLINE_CACHE).then(function(c){c.put(e.request,copy)});return res})
+  var skip=pathname==='/app'||pathname==='/saved'||pathname==='/settings';
+  e.respondWith(fetch(e.request).then(function(res){if(!skip){var copy=res.clone();caches.open(OFFLINE_CACHE).then(function(c){c.put(e.request,copy)})}return res})
     .catch(function(){return caches.open(OFFLINE_CACHE).then(function(c){return c.match(e.request).then(function(cached){return cached||c.match('/offline.html')})})}));
 });
-self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});
+self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k.indexOf('studies-hub-offline-')===0&&k!==OFFLINE_CACHE}).map(function(k){return caches.delete(k)}))}).then(function(){return self.clients.claim()}))});
 // Periodic Background Sync: a Chromium-only, engagement-gated API -- the browser decides if/how often this
 // actually fires. Used here to keep a few key pages fresh for offline browsing, and to refresh the News widget.
 function refreshCachedPages(){
@@ -1161,8 +1163,21 @@ app.post('/api/push/unsubscribe', (req, res) => {
   res.json({ ok: true });
 });
 
+// The Android app's "my data is on" ping (every ~45 s, and the moment a push reaches the phone). It counts the person as reachable right now,
+// which is what turns a sent message's one tick into two. (It must sit after the login check above, otherwise it can never know who is calling.)
+const pingHandler = (req, res) => {
+  if (!req.user) return res.sendStatus(401);
+  db.prepare('UPDATE users SET last_seen=? WHERE id=?').run(Date.now(), req.user.id);
+  req.user.last_seen = Date.now();
+  markDelivered(req.user.id);
+  res.set('Cache-Control', 'no-store').sendStatus(204);
+};
+app.get('/api/ping', pingHandler);
+app.post('/api/ping', pingHandler);
+
 const ONLINE_MS = 2 * 60 * 1000; // a user counts as "online" if seen in the last 2 minutes
-const isOnline = u => !!u.last_seen && Date.now() - u.last_seen < ONLINE_MS && !u.hide_active;
+const isReachable = u => !!u.last_seen && Date.now() - u.last_seen < ONLINE_MS; // the person's phone has data on right now (used for the two ticks and ringing)
+const isOnline = u => isReachable(u) && !u.hide_active; // what may be shown as "online": only when they have active status on
 const presenceDot = u => `<span title="${isOnline(u) ? 'Online' : 'Offline'}" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${isOnline(u) ? '#22c55e' : '#ef4444'};margin-right:7px;vertical-align:middle"></span>`;
 
 // Roles: user | partial (HTML pages only) | content (all file types) | news | support (login help) | admin (everything).
@@ -1891,7 +1906,7 @@ function show(el){hide();tip=document.createElement('div');tip.className='tabtip
 document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>(function(){var d=document.documentElement,ua=navigator.userAgent||"",ud=navigator.userAgentData,tp=navigator.maxTouchPoints||0,sm=Math.min(screen.width,screen.height),os="Unknown",dev;
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>if(/StudiesHubApp/.test(navigator.userAgent))document.documentElement.setAttribute("data-inapp","1")</script><style>[data-inapp] a[href="/app"]{display:none!important}html:not([data-inapp]) a[href="/saved"]{display:none!important}</style><script>(function(){var d=document.documentElement,ua=navigator.userAgent||"",ud=navigator.userAgentData,tp=navigator.maxTouchPoints||0,sm=Math.min(screen.width,screen.height),os="Unknown",dev;
 if(/iPhone|iPod/.test(ua))os="iOS";else if(/iPad/.test(ua)||(/Macintosh/.test(ua)&&tp>1))os="iPadOS";else if(/Android/.test(ua)||(ud&&ud.platform==="Android"))os="Android";else if(/CrOS/.test(ua))os="ChromeOS";else if(/Windows/.test(ua))os="Windows";else if(/Mac OS X|Macintosh/.test(ua))os="macOS";else if(/Linux|X11/.test(ua))os="Linux";
 var mob=/Mobi|iPhone|iPod/.test(ua)||(ud&&ud.mobile===true);
 if(os==="iOS")dev="phone";else if(os==="iPadOS")dev="tablet";else if(os==="Android")dev=(mob||sm<600)?"phone":"tablet";else if(tp>0&&sm<600)dev="phone";else if(tp>0&&sm<1100&&os==="Linux")dev="tablet";else dev="laptop";
@@ -1999,24 +2014,34 @@ ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><sc
 <script>(function(){window.studiesNote=function(ok){alert(ok?'Notifications are on for this device.':'Notifications are off. Turn them on in your phone settings for Studies Hub.')};if(window.StudiesApp)return;var native=window.alert;window.alert=function(m){try{var o=document.createElement('div');o.setAttribute('role','alertdialog');o.style.cssText='position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';var b=document.createElement('div');b.style.cssText='max-width:420px;width:100%;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:16px;padding:20px;font:16px/1.45 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.45)';var t=document.createElement('div');t.textContent=String(m);t.style.whiteSpace='pre-wrap';var k=document.createElement('button');k.type='button';k.textContent='OK';k.style.cssText='margin-top:16px;float:right;border:0;border-radius:10px;padding:10px 22px;background:#6c63ff;color:#fff;font:600 15px system-ui,sans-serif;cursor:pointer';k.onclick=function(){o.remove()};b.appendChild(t);b.appendChild(k);o.appendChild(b);document.body.appendChild(o);k.focus()}catch(e){native.call(window,m)}}})()</script>
 ${`<script>(function(){var A=window.StudiesApp;if(!A||!A.offUser)return;
 try{A.offUser('${user ? user.id : 0}')}catch(e){}
-var bar=null,tm=null;
+var bar=null,tm=null,NOINET='No internet connection. Check your internet connection and try again.';
 function toast(msg,kind){if(!bar){bar=document.createElement('div');bar.style.cssText='position:fixed;left:12px;right:12px;top:calc(10px + env(safe-area-inset-top,0px));z-index:2147482000;border-radius:14px;padding:12px 14px;font:600 14px system-ui,sans-serif;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.4);text-align:center';document.body.appendChild(bar)}
- bar.style.background=kind==='ok'?'#16a34a':kind==='warn'?'#b45309':'#334155';bar.textContent=msg;bar.hidden=false;if(tm)clearTimeout(tm);if(kind==='ok')tm=setTimeout(function(){bar.hidden=true},3000);else tm=setTimeout(function(){bar.hidden=true},9000)}
-window.__net=function(s,quiet){
- if(s==='offline'){toast('You are offline. Only materials you saved on this phone are available.','off')}
- else if(s==='unstable'){toast('Your network is not steady. Switching to offline mode, so saved materials stay available.','warn')}
- else{if(!quiet)toast('Back online','ok');if(document.title==='Offline')setTimeout(function(){location.href='/'},600)}};
-try{var st=A.netState();if(st&&st!=='online')window.__net(st,1)}catch(e){}
+ bar.style.background=kind==='ok'?'#16a34a':kind==='err'?'#b91c1c':'#334155';bar.textContent=msg;bar.hidden=false;if(tm)clearTimeout(tm);tm=setTimeout(function(){bar.hidden=true},4000)}
+window.__toast=toast;window.__noInet=function(){toast(NOINET,'err')};
+// No "you are offline" notices. The app only remembers the state, tells the chat to send what is waiting once the internet is back, and shows an error only when something truly needs the internet.
+window.__net=function(s){window.__netState=s;if(s==='online'){try{window.dispatchEvent(new Event('shnet'))}catch(e){}}};
+try{window.__netState=String(A.netState()||'online')}catch(e){}
+document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM'||f.hasAttribute('data-offok'))return;var st='online';try{st=String(A.netState())}catch(x){}if(st!=='offline')return;if((f.getAttribute('method')||'get').toLowerCase()!=='post')return;e.preventDefault();e.stopImmediatePropagation();toast(NOINET,'err')},true);
 var ob=document.getElementById('offBar');
-if(ob){var slug=ob.getAttribute('data-slug'),btn=document.createElement('button');btn.type='button';btn.className='btn ghost';btn.style.margin='6px 0 10px';ob.appendChild(btn);
- function viewOnly(){Array.prototype.forEach.call(document.querySelectorAll('a[href*="/raw"]'),function(a){a.style.display='none'});Array.prototype.forEach.call(document.querySelectorAll('video'),function(v){v.setAttribute('controlslist','nodownload')})}
- function draw(){var s=String(A.offStatus(slug));
-  if(s==='saved'){btn.textContent='\u2713 Saved';btn.disabled=true;btn.style.opacity='.85';viewOnly()}
-  else if(s==='queued'){btn.textContent='Waiting to save\u2026';btn.disabled=true;setTimeout(draw,1500);return}
-  else if(s.indexOf('saving')===0){btn.textContent='Saving\u2026 '+(s.split(':')[1]||'')+'%';btn.disabled=true;setTimeout(draw,700);return}
-  else if(s.indexOf('error')===0){btn.textContent='Could not save ('+s.slice(6)+'). Tap to try again';btn.disabled=false}
-  else{btn.textContent='\u2B07 Save to phone';btn.disabled=false}}
- btn.onclick=function(){A.offSave(slug,ob.getAttribute('data-title'),ob.getAttribute('data-kind'),ob.getAttribute('data-course')||'');draw()};
+if(ob){var slug=ob.getAttribute('data-slug'),ttl=ob.getAttribute('data-title')||'',kd=ob.getAttribute('data-kind')||'',crs=ob.getAttribute('data-course')||'',fl=ob.getAttribute('data-file')||'',tick=null;
+ var st=document.createElement('style');st.textContent='@keyframes shspin{to{transform:rotate(360deg)}}.shdl{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 12px}.shdl svg{flex:none}.shdl button{flex:1 1 150px;display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 10px;border-radius:12px;border:1px solid var(--line,#444);background:transparent;color:inherit;font:600 14px system-ui,sans-serif;cursor:pointer;white-space:nowrap}.shdl .ok{flex:1 1 150px;display:flex;align-items:center;justify-content:center;padding:12px 14px;border-radius:12px;background:rgba(34,197,94,.15);color:#22c55e;font:600 15px system-ui,sans-serif}.shdl .busy{flex:1 1 100%;border:1px solid var(--line,#444);border-radius:12px;padding:12px 14px}.shdl .row{display:flex;align-items:center;gap:10px;font:600 15px system-ui,sans-serif}.shdl .ring{transform-origin:12px 12px;animation:shspin 1s linear infinite}.shdl .bar{height:6px;border-radius:99px;background:rgba(127,127,127,.3);margin-top:10px;overflow:hidden}.shdl .bar i{display:block;height:100%;width:0;background:#22c55e;border-radius:99px;transition:width .4s}';document.head.appendChild(st);
+ var ARROW='<path d="M12 6v8m-3-3 3 3 3-3M7 18h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+ var ICON='<svg width="22" height="22" viewBox="0 0 24 24">'+ARROW+'</svg>',SPIN='<svg width="26" height="26" viewBox="0 0 24 24"><circle class="ring" cx="12" cy="12" r="10.5" fill="none" stroke="#22c55e" stroke-width="2" stroke-dasharray="16 50" stroke-linecap="round"/>'+ARROW+'</svg>';
+ var box=document.createElement('div');box.className='shdl';ob.appendChild(box);
+ function hideLinks(){Array.prototype.forEach.call(document.querySelectorAll('a[href*="/raw"]'),function(a){a.style.display='none'})}
+ function viewOnly(){Array.prototype.forEach.call(document.querySelectorAll('video'),function(v){v.setAttribute('controlslist','nodownload')})}
+ function sa(){try{return String(A.offStatus(slug))}catch(e){return 'none'}}
+ function sp(){try{return String(A.dlStatus(slug))}catch(e){return 'none'}}
+ function pc(s){return parseInt((s.split(':')[1]||'0'),10)||0}
+ function busy(t,p,wait){box.innerHTML='<div class="busy"><div class="row">'+SPIN+'<span>'+t+'</span></div><div class="bar"><i style="width:'+(wait?6:p)+'%"></i></div></div>'}
+ function chip(t){var d=document.createElement('div');d.className='ok';d.textContent=t;box.appendChild(d)}
+ function btn(t,fn){var b=document.createElement('button');b.type='button';b.innerHTML=ICON+'<span></span>';b.lastChild.textContent=t;b.onclick=fn;box.appendChild(b)}
+ function draw(){clearTimeout(tick);var a=sa(),p=sp();
+  if(a==='queued'||a.indexOf('saving')===0){busy(a==='queued'?'Waiting to start…':'Saving to app… '+pc(a)+'%',pc(a),a==='queued');tick=setTimeout(draw,600);return}
+  if(p==='pending'||p.indexOf('saving')===0){busy(p==='pending'?'Waiting to start…':'Downloading to phone… '+pc(p)+'%',pc(p),p==='pending');tick=setTimeout(draw,600);return}
+  box.innerHTML='';hideLinks();
+  if(a==='saved'){chip('✓ Saved in the app');viewOnly()}else btn(a.indexOf('error')===0?'Could not save. Tap to try again':'Save to app',function(){A.offSave(slug,ttl,kd,crs);draw()});
+  if(p==='done')chip('✓ Downloaded to phone');else btn(p.indexOf('error')===0?'Download failed. Tap to try again':'Download to phone',function(){var ok=false;try{ok=A.dlStart(slug,ttl,fl)}catch(e){}draw()})}
  draw()}
 })()</script>`}${`<script>(function(){var A=window.StudiesApp;if(!A||!A.privatePage)return;var last=null;
 function chk(){var p=location.pathname,v=/^\\/(settings\\/(profile|security|devices)|login|signup|forgot|reset|verify|welcome|pay|admin)(\\/|$)/.test(p);if(v!==last){last=v;try{A.privatePage(v)}catch(e){}}}
@@ -2321,7 +2346,7 @@ app.get('/u/:id', (req, res) => {
     : areFriends ? `<a class="btn" href="/chat/${u.id}">Message ${esc(u.name.split(' ')[0])}</a>`
     : friendActionHtml(req.user.id, u.id);
   res.send(layout(u.name, `<p class="mut" style="margin:0 0 12px"><a href="javascript:history.back()">&larr; Back</a></p>
-<div class="card"><div class="prof">${avatarOr(u, 88)}<div><h1 style="margin:0;font-size:26px">${esc(u.name)}</h1><p class="mut" style="margin:2px 0 0">${u.username ? `@${esc(u.username)}` : ''}</p>${u.title ? `<span class="role-tag" style="margin:4px 0 0">${esc(u.title)}</span>${verifiedBadge(u.position_auto_role)}` : ''}<div class="mut" style="margin-top:6px">${presenceDot(u)}${isOnline(u) ? 'Online now' : 'Offline'}</div></div></div>
+<div class="card"><div class="prof">${avatarOr(u, 88)}<div><h1 style="margin:0;font-size:26px">${esc(u.name)}</h1><p class="mut" style="margin:2px 0 0">${u.username ? `@${esc(u.username)}` : ''}</p>${u.title ? `<span class="role-tag" style="margin:4px 0 0">${esc(u.title)}</span>${verifiedBadge(u.position_auto_role)}` : ''}<div class="mut" style="margin-top:6px">${isOnline(u) ? 'Online now' : ''}</div></div></div>
 ${facts ? `<table style="margin-top:14px">${facts}</table>` : '<p class="mut" style="margin:14px 0 0">No department, university or level added yet.</p>'}
 <p style="margin:14px 0 0">${action}</p></div>
 ${posts.length ? `<h3>News from ${esc(u.name.split(' ')[0])}</h3>${posts.map(p => `<div class="card row"><a href="/news/${p.id}">${esc(p.title)}</a><span class="mut">${timeAgo(p.created_at)}</span></div>`).join('')}` : ''}`, req.user));
@@ -2506,7 +2531,7 @@ function tickFor(m, recipientId) {
   if (isRead(m.id, recipientId)) return 'read';
   if (m.delivered_at) return 'delivered';
   const other = db.prepare('SELECT last_seen FROM users WHERE id=?').get(recipientId);
-  if (other && isOnline(other)) { markDelivered(recipientId); return 'delivered'; }
+  if (other && isReachable(other)) { markDelivered(recipientId); return 'delivered'; }
   return 'sent';
 }
 const fmtCallSecs = n => n >= 60 ? `${Math.floor(n / 60)} min${n % 60 ? ` ${n % 60} sec` : ''}` : `${n} sec`;
@@ -2781,8 +2806,8 @@ app.get('/chat', (req, res) => {
     const m = lastVisible('dm', u.id), p = prefs['dm:' + u.id] || {};
     const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(u.id, me, me, me).n;
     const mine = m && m.sender_id === me && !m.deleted_at && m.kind !== 'call' ? tickSpan(tickFor(m, u.id)) + ' ' : '';
-    items.push({ kind: 'dm', id: u.id, name: u.name, av: avatarOr(u), m, p, unread, dot: isOnline(u) ? '#22c55e' : '#ef4444',
-      sub: m ? `${mine}${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : (isOnline(u) ? 'Online now' : 'Offline') });
+    items.push({ kind: 'dm', id: u.id, name: u.name, av: avatarOr(u), m, p, unread, dot: null,
+      sub: m ? `${mine}${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet' });
   }
   for (const g of db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me)) {
     const m = lastVisible('group', g.id), p = prefs['group:' + g.id] || {};
@@ -2808,8 +2833,12 @@ var sel={},filter='all',query='',arch=false,pressed=false,timer=null,sx=0,sy=0;
 function pending(){return new Promise(function(res){try{var rq=indexedDB.open('shq-pending',2);
 rq.onupgradeneeded=function(){var d=rq.result;if(!d.objectStoreNames.contains('msgs'))d.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!d.objectStoreNames.contains('uploads'))d.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};
 rq.onsuccess=function(){try{var g=rq.result.transaction('msgs','readonly').objectStore('msgs').getAll();g.onsuccess=function(){res(g.result||[])};g.onerror=function(){res([])}}catch(e){res([])}};rq.onerror=function(){res([])}}catch(e){res([])}})}
-function mark(){pending().then(function(items){var latest={};items.forEach(function(it){var p=it.payload||{};if(!p.body)return;latest[p.group?'/chat/group/'+p.group:'/chat/'+p.to]=p.body});
-Array.prototype.forEach.call(list.querySelectorAll('a.chat-item'),function(a){var b=latest[a.getAttribute('href')];if(!b)return;var sub=a.querySelector('.meta span');if(!sub)return;sub.innerHTML='';var c=document.createElement('span');c.className='tick tick-queued';c.title='Waiting for a connection';c.textContent='\\u231B';sub.appendChild(c);sub.appendChild(document.createTextNode(' '+b.slice(0,40)))})})}
+var CLOCK='<svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+function outbox(){return new Promise(function(res){try{var rq=indexedDB.open('shq-outbox',1);rq.onupgradeneeded=function(){rq.result.createObjectStore('items',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){try{var g=rq.result.transaction('items','readonly').objectStore('items').getAll();g.onsuccess=function(){res(g.result||[])};g.onerror=function(){res([])}}catch(e){res([])}};rq.onerror=function(){res([])}}catch(e){res([])}})}
+function mark(){Promise.all([pending(),window.StudiesApp?outbox():Promise.resolve([])]).then(function(r){var latest={};
+r[0].forEach(function(it){var p=it.payload||{};if(!p.body)return;latest[p.group?'/chat/group/'+p.group:'/chat/'+p.to]=p.body});
+r[1].forEach(function(it){var c=String(it.conv||'').split(':'),h=c[0]==='group'?'/chat/group/'+c[1]:'/chat/'+c[1];latest[h]=it.type==='voice'?'\\uD83C\\uDFA4 Voice note':(it.type==='sticker'||it.type==='lsticker')?'Sticker':(it.name||'File')});
+Array.prototype.forEach.call(list.querySelectorAll('a.chat-item'),function(a){var b=latest[a.getAttribute('href')];if(!b)return;var sub=a.querySelector('.meta span');if(!sub)return;sub.innerHTML='';var c=document.createElement('span');c.className='tick tick-queued';c.title='Waiting for a connection';c.innerHTML=CLOCK;sub.appendChild(c);sub.appendChild(document.createTextNode(' '+String(b).slice(0,40)))})})}
 function rows(){return Array.prototype.slice.call(list.querySelectorAll('a.chat-item[data-key]'))}
 function keys(){return Object.keys(sel)}
 function rowOf(k){return list.querySelector('a.chat-item[data-key="'+k+'"]')}
@@ -2908,7 +2937,7 @@ function linkifyInto(container,text){
   });
 }
 function toBottom(){window.scrollTo(0,document.body.scrollHeight)}
-function tickHtml(t){if(!t)return'';if(t==='queued')return' <span class="tick tick-queued" title="Waiting for a connection">&#8987;</span>';if(convType==='group')return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
+function tickHtml(t){if(!t)return'';if(t==='queued')return' <span class="tick tick-queued" title="Waiting for a connection"><svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>';if(convType==='group')return'';if(t==='read')return' <span class="tick tick-read">&#10003;&#10003;</span>';if(t==='delivered')return' <span class="tick tick-un">&#10003;&#10003;</span>';return' <span class="tick tick-un">&#10003;</span>'}
 function clearReply(){replyTarget=null;replyBar.hidden=true;var t=document.getElementById('replyThumb');if(t)t.hidden=true}
 var replyThumb=document.getElementById('replyThumb');
 function startReply(id){
@@ -2958,7 +2987,7 @@ function bubble(m){
   d.setAttribute('data-id',m.id);d.setAttribute('data-kind',m.kind);
   if(m.reactions&&Object.keys(m.reactions).length){var row=el('div','reactions');Object.keys(m.reactions).forEach(function(em){row.appendChild(el('span','rchip',em+' '+m.reactions[em]))});d.appendChild(row)}
   d.appendChild(t);stamp(t);
-  if(mine&&m.kind!=='call'){var tk=document.createElement('span');tk.className='tickwrap';tk.setAttribute('data-tick','1');t.appendChild(tk);updateTick(m.id,m.tick||'sent')}
+  if(mine&&m.kind!=='call'){var tk=document.createElement('span');tk.className='tickwrap';tk.setAttribute('data-tick','1');t.appendChild(tk);tk.innerHTML=tickHtml(m.tick||'sent')}
   var stick=mine||nearBottom();thread.appendChild(d);decorateVoice(d);if(m.starred&&!m.deleted)setStar(d,true);if(stick)toBottom();else bumpNew();
 }
 function updateTick(id,status){var b=thread.querySelector('[data-id="'+id+'"]');if(!b)return;var tk=b.querySelector('[data-tick]');if(!tk)return;tk.innerHTML=tickHtml(status)}
@@ -2967,6 +2996,7 @@ var polling=false;
 function poll(){if(polling)return;polling=true;fetch('/api/messages/poll?'+qs+'&after='+lastId+'&seen='+(document.hidden?'0':'1')+pendQ(),{cache:'no-store',credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
   (j.messages||[]).forEach(function(m){bubble(m);if(m.id>lastId)lastId=m.id});
   (j.receipts||[]).forEach(function(r){updateTick(r.id,r.status)});
+  var pr=document.getElementById('chatPresence');if(pr&&typeof j.online==='boolean')pr.textContent=j.online?'online':'';
   (j.ready||[]).forEach(readyMsg);
   polling=false;
 }).catch(function(){polling=false})}
@@ -2978,7 +3008,7 @@ toBottom();setTimeout(initialScroll,0);var initialReplyId=Number(new URLSearchPa
 form.addEventListener('submit',function(e){e.preventDefault();var text=input.value.trim();if(!text)return;
   if(editingId){var id=editingId;editingId=null;input.value='';resizeInput();fetch('/api/messages/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:text})}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){var b=thread.querySelector('[data-id="'+id+'"]'),span=b&&b.querySelector('.msg-text');if(span){span.innerHTML='';linkifyInto(span,text);if(!b.querySelector('.mut'))b.insertBefore(el('span','mut',' (edited)'),b.querySelector('time'))}}else alert((j&&j.error)||'Could not edit.')}).catch(function(){alert('Could not edit.')});return}
   var selectedReply=replyTarget;input.value='';resizeInput();var body=Object.assign({body:text,reply_to_id:selectedReply?selectedReply.id:null},convType==='group'?{group:convId}:{to:convId});
-  if(!navigator.onLine){queueAndShow(body,text,selectedReply);clearReply();return}
+  if(window.StudiesApp?obxOff():!navigator.onLine){queueAndShow(body,text,selectedReply);clearReply();if(window.StudiesApp&&!obxHard())setTimeout(flushPendingHere,700);return}
   fetch('/api/messages/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){
     if(j&&j.id){bubble({id:j.id,from:myId,kind:'text',body:text,reply:selectedReply,created_at:j.created_at,tick:'sent'});if(j.id>lastId)lastId=j.id;clearReply()}
     else alert((j&&j.error)||'Could not send.')
@@ -2987,7 +3017,7 @@ form.addEventListener('submit',function(e){e.preventDefault();var text=input.val
 /* ---- send while offline: queue in IndexedDB, auto-send once a connection is back ---- */
 function queueAndShow(body,text,selectedReply){
   var tempId='q'+Date.now()+Math.random().toString(36).slice(2);
-  bubble({id:tempId,from:myId,kind:'text',body:text,reply:selectedReply||null,created_at:new Date().toISOString(),tick:'queued'});
+  bubble({id:tempId,from:myId,kind:'text',body:text,reply:selectedReply||null,created_at:new Date().toISOString().slice(0,19).replace('T',' '),tick:'queued'});
   pendingAdd({tempId:tempId,at:new Date().toISOString(),payload:body}).then(registerBackgroundSync);
 }
 function pendingDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-pending',2);rq.onupgradeneeded=function(){var db=rq.result;if(!db.objectStoreNames.contains('msgs'))db.createObjectStore('msgs',{keyPath:'id',autoIncrement:true});if(!db.objectStoreNames.contains('uploads'))db.createObjectStore('uploads',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
@@ -3008,12 +3038,75 @@ function flushPendingHere(){ // fallback for browsers without Background Sync: o
   });
 }
 window.addEventListener('online',flushPendingHere);
+window.addEventListener('shnet',function(){flushPendingHere();if(typeof obxFlush==='function')obxFlush();poll()});
 function showPending(){ // a message still waiting for a connection keeps its clock after a refresh, until it is really sent
   return pendingList().then(function(items){items.forEach(function(it){var p=it.payload||{};
     var here=convType==='group'?String(p.group)===String(convId):String(p.to)===String(convId);
-    if(here&&p.body&&!thread.querySelector('[data-id="'+it.tempId+'"]'))bubble({id:it.tempId,from:myId,kind:'text',body:p.body,created_at:it.at||new Date().toISOString(),tick:'queued'})})}).catch(function(){});
+    if(here&&p.body&&!thread.querySelector('[data-id="'+it.tempId+'"]'))bubble({id:it.tempId,from:myId,kind:'text',body:p.body,created_at:(it.at||new Date().toISOString()).slice(0,19).replace('T',' '),tick:'queued'})})}).catch(function(){});
 }
 showPending().then(function(){if(navigator.onLine)flushPendingHere()});
+/* ---- App only: voice notes, stickers and files sent with no steady internet wait here with a clock.
+   Voice notes and stickers go by themselves once the internet is back; a file waits for a tap on it (retry). ---- */
+var APPOBX=!!(window.StudiesApp&&window.indexedDB),NOINET_MSG='No internet connection. Check your internet connection and try again.';
+function noInet(){if(window.__noInet)window.__noInet();else alert(NOINET_MSG)}
+function netNow(){try{return String(StudiesApp.netState())}catch(e){return navigator.onLine?'online':'offline'}}
+function obxOff(){return !navigator.onLine||netNow()!=='online'}
+function obxHard(){return !navigator.onLine||netNow()==='offline'}
+function obxDB(){return new Promise(function(res,rej){var rq=indexedDB.open('shq-outbox',1);rq.onupgradeneeded=function(){rq.result.createObjectStore('items',{keyPath:'id',autoIncrement:true})};rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})}
+function obxAdd(it){return obxDB().then(function(db){return new Promise(function(res,rej){var rq=db.transaction('items','readwrite').objectStore('items').add(it);rq.onsuccess=function(){res(rq.result)};rq.onerror=function(){rej(rq.error)}})})}
+function obxAll(){return obxDB().then(function(db){return new Promise(function(res){var rq=db.transaction('items','readonly').objectStore('items').getAll();rq.onsuccess=function(){res(rq.result||[])};rq.onerror=function(){res([])}})}).catch(function(){return []})}
+function obxDel(id){return obxDB().then(function(db){return new Promise(function(res){var tx=db.transaction('items','readwrite');tx.objectStore('items').delete(id);tx.oncomplete=function(){res()};tx.onerror=function(){res()}})}).catch(function(){})}
+function obxDest(){return convType==='group'?{group:convId}:{to:convId}}
+function obxReply(r){return r?{id:r.id,from_name:r.from_name,text:r.text,kind:r.kind}:null}
+function obxShow(it){
+  var id='o'+it.id;if(seen[id]||thread.querySelector('[data-id="'+id+'"]'))return;seen[id]=1;
+  var hello=thread.querySelector('.hello');if(hello)hello.parentNode.removeChild(hello);
+  var st=it.type==='sticker'||it.type==='lsticker',d=el('div',st?'sticker-msg me':'bubble me'),t=el('time'),mm=it.mime||'';t.setAttribute('data-t',it.at.slice(0,19).replace('T',' '));
+  if(it.reply)d.appendChild(replyBox(it.reply));
+  if(it.type==='voice'){d.appendChild(el('span','msg-text','🎤 Voice note · '+dur(it.ms)))}
+  else if(st){var im=document.createElement('img');im.alt='sticker';im.style.cssText='width:120px;height:120px;object-fit:contain';im.src=it.blob?URL.createObjectURL(it.blob):'/api/stickers/'+it.sticker_id;d.appendChild(im)}
+  else{
+    if(it.blob&&mm.indexOf('image/')===0){var pi=document.createElement('img');pi.style.cssText='max-width:220px;max-height:220px;border-radius:10px;display:block';pi.src=URL.createObjectURL(it.blob);d.appendChild(pi)}
+    d.appendChild(el('div','msg-text',(mm.indexOf('video/')===0?'🎬 ':mm.indexOf('image/')===0?'':'📄 ')+(it.name||'File')+' · '+fmtBytes(it.size||0)));
+    var rt=el('div','mut','Not sent. Tap to retry');rt.style.cssText='color:#fff;opacity:.95;font-size:12px;font-weight:600';d.appendChild(rt);d.setAttribute('data-oretry',String(it.id));d.style.cursor='pointer'}
+  d.setAttribute('data-id',id);d.setAttribute('data-kind',it.type);
+  d.appendChild(t);stamp(t);var tk=document.createElement('span');tk.className='tickwrap';tk.setAttribute('data-tick','1');t.appendChild(tk);tk.innerHTML=tickHtml('queued');
+  thread.appendChild(d);toBottom()}
+function obxQueue(it){
+  it.conv=convType+':'+convId;it.at=new Date().toISOString();
+  obxAdd(it).then(function(id){it.id=id;obxShow(it);if(it.type!=='file')setTimeout(obxFlush,700)}).catch(function(){noInet()})}
+function obxQSticker(base,selectedReply){base.dest=obxDest();base.reply_to_id=selectedReply?selectedReply.id:null;base.reply=obxReply(selectedReply);obxQueue(base);clearReply();panel.hidden=true;document.body.classList.remove('panel-open')}
+function obxQVoice(blob,ms,type,selectedReply){obxQueue({type:'voice',blob:blob,ms:ms,mime:type,dest:obxDest(),reply_to_id:selectedReply?selectedReply.id:null,reply:obxReply(selectedReply)});clearReply()}
+var obxBusy=false;
+function obxDone(it,j){
+  var b=thread.querySelector('[data-id="o'+it.id+'"]');if(b&&b.parentNode)b.parentNode.removeChild(b);obxDel(it.id);
+  if(it.conv===convType+':'+convId){bubble({id:j.id,from:myId,kind:it.type==='voice'?'voice':'sticker',ms:it.ms,created_at:j.created_at,tick:'sent',reply:it.reply||null});if(j.id>lastId)lastId=j.id}}
+function obxSend(it){
+  var p;
+  if(it.type==='voice'){var fd=new FormData(),ext=(it.mime||'').indexOf('mp4')>-1?'m4a':(it.mime||'').indexOf('ogg')>-1?'ogg':'webm';
+    Object.keys(it.dest).forEach(function(k){fd.append(k,it.dest[k])});fd.append('ms',it.ms);if(it.reply_to_id)fd.append('reply_to_id',String(it.reply_to_id));fd.append('audio',it.blob,'voice.'+ext);
+    p=fetch('/api/messages/voice',{method:'POST',body:fd})}
+  else if(it.type==='lsticker'){var f2=new FormData();f2.append('sticker',it.blob,'sticker');Object.keys(it.dest).forEach(function(k){f2.append(k,it.dest[k])});if(it.reply_to_id)f2.append('reply_to_id',String(it.reply_to_id));
+    p=fetch('/api/messages/local-sticker',{method:'POST',body:f2})}
+  else p=fetch('/api/messages/sticker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({sticker_id:it.sticker_id,reply_to_id:it.reply_to_id||null},it.dest))});
+  return p.then(function(r){return r.json()}).then(function(j){
+    if(j&&j.id)obxDone(it,j);
+    else if(j&&j.error){var b=thread.querySelector('[data-id="o'+it.id+'"]');if(b&&b.parentNode)b.parentNode.removeChild(b);obxDel(it.id);alert(j.error)}
+  }).catch(function(){})}
+function obxFlush(){
+  if(!APPOBX||obxBusy||obxHard())return;obxBusy=true;
+  obxAll().then(function(items){return items.filter(function(it){return it.type!=='file'}).reduce(function(pr,it){return pr.then(function(){return obxSend(it)})},Promise.resolve())})
+   .then(function(){obxBusy=false},function(){obxBusy=false})}
+if(APPOBX){
+  thread.addEventListener('click',function(e){var n=e.target.closest?e.target.closest('[data-oretry]'):null;if(!n)return;e.stopPropagation();
+    if(obxHard()){noInet();return}
+    var iid=Number(n.getAttribute('data-oretry'));
+    obxAll().then(function(items){var it=items.filter(function(x){return x.id===iid})[0];if(!it)return;
+      if(n.parentNode)n.parentNode.removeChild(n);obxDel(iid);
+      sendFile(new File([it.blob],it.name||'file',{type:it.mime||''}),it.cap||'')})},true);
+  obxAll().then(function(items){items.forEach(function(it){if(it.conv===convType+':'+convId)obxShow(it)});if(!obxHard())obxFlush()});
+  setInterval(function(){if(!obxHard())obxFlush()},6000);
+}
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',function(e){
     if(!e.data||e.data.type!=='chat-synced')return;
@@ -3046,6 +3139,12 @@ function sendSticker(key){
   var isLocal=typeof key==='string'&&key.indexOf('local:')===0;
   if(!isLocal){
     var body=Object.assign({sticker_id:key,reply_to_id:selectedReply?selectedReply.id:null},convType==='group'?{group:convId}:{to:convId});
+    if(APPOBX){
+      if(obxOff()){obxQSticker({type:'sticker',sticker_id:key},selectedReply);return}
+      fetch('/api/messages/sticker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){
+        if(j&&j.id){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply();panel.hidden=true;document.body.classList.remove('panel-open')}
+        else alert((j&&j.error)||'Could not send.')}).catch(function(){obxQSticker({type:'sticker',sticker_id:key},selectedReply)});
+      return}
     post('/api/messages/sticker',body,function(j){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply();panel.hidden=true;document.body.classList.remove('panel-open')});
     return;
   }
@@ -3053,12 +3152,13 @@ function sendSticker(key){
   stickerList().then(function(list){
     var s=list.filter(function(x){return x.id===localId})[0];
     if(!s)return;
+    if(APPOBX&&obxOff()){obxQSticker({type:'lsticker',blob:s.blob,mime:s.mime||''},selectedReply);return}
     var fd=new FormData();fd.append('sticker',s.blob,'sticker');if(convType==='group')fd.append('group',convId);else fd.append('to',convId);
     if(selectedReply)fd.append('reply_to_id',String(selectedReply.id));
     fetch('/api/messages/local-sticker',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){
       if(j&&j.id){bubble({id:j.id,from:myId,kind:'sticker',created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply();panel.hidden=true;document.body.classList.remove('panel-open')}
       else alert((j&&j.error)||'Could not send that sticker.');
-    }).catch(function(){alert('Could not send that sticker -- check your connection.')});
+    }).catch(function(){if(APPOBX)obxQSticker({type:'lsticker',blob:s.blob,mime:s.mime||''},selectedReply);else alert('Could not send that sticker -- check your connection.')});
   });
 }
 function loadStickers(){
@@ -3178,6 +3278,7 @@ Array.prototype.forEach.call(thread.querySelectorAll('.mcard'),mInit);
 Array.prototype.forEach.call(thread.querySelectorAll('.file-chip.pending[data-fid]'),function(n){pend[n.getAttribute('data-fid')]=1});
 function sendFile(f,cap){
   if(f.size>200*1024*1024){alert('That file is too big (200 MB is the limit).');return}
+  if(APPOBX&&obxHard()){obxQueue({type:'file',blob:f,name:f.name,mime:f.type||'',size:f.size,cap:cap||''});return}
   var kind=f.type.indexOf('image/')===0?'image':f.type.indexOf('video/')===0?'video':'file',tmp='u'+Date.now()+Math.floor(Math.random()*1000),up={xhr:null,dead:false,id:0};
   startingUps++;ups[tmp]=up;
   bubble({id:tmp,from:myId,kind:kind,name:f.name,size:f.size,created_at:new Date().toISOString().slice(0,19).replace('T',' '),tick:'sent',uploading:f});
@@ -3208,7 +3309,7 @@ function sendFile(f,cap){
     x.onload=function(){if(up.dead)return;if(x.status===200)finish(j.id);else{var m='Could not send that file.';try{m=JSON.parse(x.responseText).error||m}catch(er){}alert(m);up.cancel()}};
     x.onerror=function(){if(up.dead)return;alert('Could not send that file. Check your connection and try again.');up.cancel()};
     x.send(fd)
-  }).catch(function(){startingUps--;if(up.dead)return;alert('Could not send that file. Check your connection and try again.');clean()})}
+  }).catch(function(){startingUps--;if(up.dead)return;clean();if(APPOBX)obxQueue({type:'file',blob:f,name:f.name,mime:f.type||'',size:f.size,cap:cap||''});else alert('Could not send that file. Check your connection and try again.')})}
 
 (function(){var A=window.StudiesApp;if(!A||!A.upStatus)return;
 function watch(mid,ui){var id='m'+mid,lost=0;(function t(){if(!document.querySelector('[data-id="'+mid+'"]'))return;var s=String(A.upStatus(id)).split('|'),st=+s[0],p=+s[1]||0;
@@ -3342,8 +3443,8 @@ function pickMime(){var c=['audio/webm;codecs=opus','audio/webm','audio/mp4','au
 function stopTracks(){if(stream){stream.getTracks().forEach(function(t){t.stop()});stream=null}}
 function endRec(){clearInterval(tick);recBar.hidden=true;form.hidden=false}
 function finish(cancel){cancelled=cancel;endRec();if(rec&&rec.state!=='inactive')rec.stop();else stopTracks()}
-function sendVoice(blob,ms,type){var selectedReply=replyTarget,fd=new FormData();if(convType==='group')fd.append('group',convId);else fd.append('to',convId);fd.append('ms',ms);if(selectedReply)fd.append('reply_to_id',String(selectedReply.id));var ext=/mp4/.test(type)?'m4a':/ogg/.test(type)?'ogg':'webm';fd.append('audio',blob,'voice.'+ext);
-  fetch('/api/messages/voice',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'voice',ms:ms,created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply()}else alert((j&&j.error)||'Could not send the voice note.')}).catch(function(){alert('Could not send the voice note.')})}
+function sendVoice(blob,ms,type){var selectedReply=replyTarget,fd=new FormData();if(APPOBX&&obxOff()){obxQVoice(blob,ms,type,selectedReply);return}if(convType==='group')fd.append('group',convId);else fd.append('to',convId);fd.append('ms',ms);if(selectedReply)fd.append('reply_to_id',String(selectedReply.id));var ext=/mp4/.test(type)?'m4a':/ogg/.test(type)?'ogg':'webm';fd.append('audio',blob,'voice.'+ext);
+  fetch('/api/messages/voice',{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(j){if(j&&j.id){bubble({id:j.id,from:myId,kind:'voice',ms:ms,created_at:j.created_at,tick:'sent',reply:selectedReply});if(j.id>lastId)lastId=j.id;clearReply()}else alert((j&&j.error)||'Could not send the voice note.')}).catch(function(){if(APPOBX){obxQVoice(blob,ms,type,selectedReply)}else alert('Could not send the voice note.')})}
 micBtn.addEventListener('click',function(){
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){alert('Voice notes are not supported in this browser.');return}
   navigator.mediaDevices.getUserMedia({audio:true}).then(function(s){
@@ -3404,7 +3505,7 @@ app.get('/chat/:id', (req, res) => {
   const bubbles = withUnreadDivider(rows, req.user.id, m => bubbleHtml(m, req.user.id, false));
   markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'dm', otherId);
   const lastId = rows.length ? rows[rows.length - 1].id : 0;
-  const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/u/${other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" style="font-size:12px">${isOnline(other) ? 'Online' : 'Offline'} &middot; tap to view profile</span></div></a></div>`;
+  const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/u/${other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" id="chatPresence" style="font-size:12px;min-height:14px;display:inline-block">${isOnline(other) ? 'online' : ''}</span></div></a></div>`;
   threadPage(req, res, { isGroup: false, convId: otherId, title: other.name, headHtml, bubbles, lastId });
 });
 
@@ -3704,7 +3805,9 @@ app.get('/api/messages/poll', (req, res) => {
     else if (r.filled) ready.push({ id, kind: r.kind, size: r.media_size || 0 });
   });
   if (Date.now() - lastPendingSweep > 60e3) { lastPendingSweep = Date.now(); db.prepare("DELETE FROM messages WHERE media_enc IS NULL AND kind IN ('image','video','file') AND created_at < datetime('now','-60 minutes')").run(); }
-  res.json({ messages, receipts, ready });
+  let online = false;
+  if (!req.query.group) { const o = db.prepare('SELECT last_seen,hide_active FROM users WHERE id=?').get(Number(req.query.with || req.query.to)); online = !!o && isOnline(o); }
+  res.json({ messages, receipts, ready, online });
 });
 
 app.post('/api/messages/:id/react', (req, res) => {
@@ -4044,14 +4147,15 @@ app.get('/lecturer', (req, res) => {
   const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
   const uploadForm = `<form class="card" id="upload" data-bgup method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
+<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
+<div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
-<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField');function sync(){var v=k.value==='video';lv.style.display=v?'':'none';fi.required=!v;fi.accept=v?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.style.display=im?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
   const pagesList = myPages.map(p => {
     const [icon, label] = KIND_META[p.kind] || KIND_META.html;
     return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
@@ -4077,14 +4181,15 @@ app.get('/lecturer/course', (req, res) => {
   const courseLinks = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
   const uploadForm = `<form class="card" id="upload" data-bgup method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
+<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
+<div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
-<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField');function sync(){var v=k.value==='video';lv.style.display=v?'':'none';fi.required=!v;fi.accept=v?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.style.display=im?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
   const pagesList = myPages.map(p => {
     const [icon, label] = KIND_META[p.kind] || KIND_META.html;
     return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
@@ -4106,14 +4211,15 @@ app.get('/lecturer/uploads', (req, res) => {
   const _unused = myCourses.map(c => `<a class="btn ghost" style="margin:4px 6px 0 0;display:inline-block" href="/lecturer/course/${c.id}">${esc(c.name)}</a>`).join('') || '<p class="mut">No courses linked to your account.</p>';
   const uploadForm = `<form class="card" id="upload" data-bgup method="post" action="/lecturer/upload" enctype="multipart/form-data"><h3>Upload for a course</h3>
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option></select>
+<select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
+<div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
-<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField');function sync(){var v=k.value==='video';lv.style.display=v?'':'none';fi.required=!v;fi.accept=v?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.style.display=im?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
   const pagesList = myPages.map(p => {
     const [icon, label] = KIND_META[p.kind] || KIND_META.html;
     return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
@@ -4129,19 +4235,20 @@ app.post('/lecturer/upload', upload.single('file'), (req, res) => {
   const courseId = Number(req.body.course_id);
   const owns = courseId && db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(req.user.id, courseId);
   if (!owns) return res.redirect(back('Pick one of your own courses.'));
-  const kind = ['pdf', 'doc', 'html', 'video'].includes(req.body.kind) ? req.body.kind : 'pdf';
+  const kind = ['pdf', 'doc', 'html', 'video', 'image'].includes(req.body.kind) ? req.body.kind : 'pdf';
   const title = (req.body.title || '').trim();
   const vid = kind === 'video' ? youtubeId(req.body.video_url) : null;
   if (kind === 'video' && !vid && !req.file) return res.redirect(back('Paste a YouTube link, or choose a video from your phone.'));
   if (!req.file && !vid) return res.redirect(back('Choose a file first.'));
   const vmime = kind === 'video' && !vid ? videoMimeOf(req.file) : null;
   if (kind === 'video' && !vid && !vmime) return res.redirect(back('That file is not a video.'));
+  if (kind === 'image' && !isImageUpload(req.file)) return res.redirect(back('Choose a JPG or PNG picture.'));
   const base = req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'Video';
   const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base);
   if (kind === 'video') {
     if (vid) db.prepare('INSERT INTO pages(slug,title,html,kind,video_id,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', vid, aud.dept, aud.level, req.user.id, courseId);
     else db.prepare('INSERT INTO pages(slug,title,html,kind,file_data,file_mime,file_name,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id, courseId);
-  } else if (kind === 'pdf' || kind === 'doc') {
+  } else if (kind === 'pdf' || kind === 'doc' || kind === 'image') {
     db.prepare('INSERT INTO pages(slug,title,html,kind,file_data,file_mime,file_name,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
       .run(slug, title || base, '', kind, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, req.user.id, courseId);
   } else {
@@ -4160,7 +4267,7 @@ app.get('/lecturer/pages/:id/edit', (req, res) => {
 <form class="card" method="post" action="/lecturer/pages/${p.id}/edit" enctype="multipart/form-data">
 <input name="title" value="${esc(p.title)}" required maxlength="140">
 <label class="mut">Replace the file (optional -- leave blank to keep the current one)</label>
-<input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : p.kind === 'video' ? 'video/*' : '.html,.htm'}">
+<input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : p.kind === 'video' ? 'video/*' : p.kind === 'image' ? 'image/png,image/jpeg' : '.html,.htm'}">
 ${p.kind === 'video' ? '<label class="mut">Or use a YouTube link instead</label><input name="video_url" placeholder="https://youtube.com/watch?v=...">' : ''}
 <label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>
@@ -4179,7 +4286,7 @@ app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
     db.prepare("UPDATE pages SET title=?, video_id=?, file_data=NULL, file_mime=NULL, file_name=NULL, dept=?, level=? WHERE id=?").run(title, newLink, aud.dept, aud.level, p.id);
   } else if (req.file) {
     if (p.kind === 'video') db.prepare('UPDATE pages SET title=?, file_data=?, file_mime=?, file_name=?, video_id=NULL, dept=?, level=? WHERE id=?').run(title, req.file.buffer, videoMimeOf(req.file), req.file.originalname, aud.dept, aud.level, p.id);
-    else if (p.kind === 'pdf' || p.kind === 'doc') db.prepare('UPDATE pages SET title=?, file_data=?, file_mime=?, file_name=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, p.id);
+    else if (p.kind === 'pdf' || p.kind === 'doc' || p.kind === 'image') db.prepare('UPDATE pages SET title=?, file_data=?, file_mime=?, file_name=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, p.id);
     else db.prepare('UPDATE pages SET title=?, html=?, dept=?, level=? WHERE id=?').run(title, req.file.buffer.toString('utf8'), aud.dept, aud.level, p.id);
   } else {
     db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
@@ -4243,6 +4350,7 @@ const uniToolRows = u => {
 };
 app.get('/settings', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/settings');
+  res.set({ 'Cache-Control': 'no-store', Vary: 'User-Agent' });
   const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req)) && (x[0] !== '/saved' || /StudiesHubApp/.test(req.headers['user-agent'] || ''))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span style="font-size:22px">${icon}</span><div style="flex:1"><b>${esc(label)}</b><br><span class="mut" style="font-size:13px">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
   res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
 });
@@ -4419,7 +4527,9 @@ function canViewPage(page, user) {
   if (page.members_only) return !!user;
   return true;
 }
-const KIND_META = { html: ['🌐', 'Page'], cbt: ['📝', 'CBT'], pdf: ['📄', 'PDF'], doc: ['📃', 'Document'], video: ['▶️', 'Video'] };
+// A picture upload must really be a JPG or PNG (checked by its first bytes, not just its name).
+function isImageUpload(f) { const b = f && f.buffer; return !!b && b.length > 8 && ((b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) || (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47)); }
+const KIND_META = { html: ['🌐', 'Page'], cbt: ['📝', 'CBT'], pdf: ['📄', 'PDF'], doc: ['📃', 'Document'], video: ['▶️', 'Video'], image: ['🖼️', 'Image'] };
 function pageCard(p) {
   const [icon, label] = KIND_META[p.kind] || KIND_META.html;
   const chip = p.paid ? '<span class="chip pay">Pay</span>' : '';
@@ -4487,17 +4597,19 @@ function paywallBody(p, req) {
 <div class="card" style="text-align:center"><p style="font-size:32px;font-weight:700;margin:8px 0">₦${priceNgn.toFixed(0)}</p>${action}</div>`;
 }
 
-const offBarHtml = p0 => { const p = Object.assign({}, p0, { course_name: ((p0.course_id && db.prepare('SELECT name FROM courses WHERE id=?').get(p0.course_id)) || {}).name || '' }); return (p.kind === 'pdf' || p.kind === 'doc' || (p.kind === 'video' && !p.video_id)) ? `<div id="offBar" data-slug="${esc(p.slug)}" data-kind="${esc(p.kind)}" data-title="${esc(p.title)}" data-course="${esc(p.course_name || '')}"></div>` : ''; };
+const offBarHtml = p0 => { const p = Object.assign({}, p0, { course_name: ((p0.course_id && db.prepare('SELECT name FROM courses WHERE id=?').get(p0.course_id)) || {}).name || '' }); return (p.kind === 'pdf' || p.kind === 'doc' || p.kind === 'image' || (p.kind === 'video' && !p.video_id)) ? `<div id="offBar" data-slug="${esc(p.slug)}" data-kind="${esc(p.kind)}" data-title="${esc(p.title)}" data-course="${esc(p.course_name || '')}" data-file="${esc(p.file_name || '')}"></div>` : ''; };
 app.get('/api/saved/available', (req, res) => {
   if (!req.user) return res.sendStatus(401);
   const cols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name).filter(c => c !== 'file_data' && c !== 'html');
-  const rows = db.prepare(`SELECT ${cols.map(c => 'p.' + c).join(',')}, length(p.file_data) AS file_len, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.kind IN ('pdf','doc','video') AND length(p.file_data) > 0 ORDER BY p.id DESC LIMIT 600`).all();
+  const rows = db.prepare(`SELECT ${cols.map(c => 'p.' + c).join(',')}, length(p.file_data) AS file_len, c.name AS course_name FROM pages p LEFT JOIN courses c ON c.id=p.course_id WHERE p.kind IN ('pdf','doc','video','image') AND length(p.file_data) > 0 ORDER BY p.id DESC LIMIT 600`).all();
   const out = rows.filter(p => (p.kind !== 'video' || !p.video_id) && sortedFor(p, req.user) && canViewPage(p, req.user))
     .map(p => ({ slug: p.slug, title: p.title, kind: p.kind, course: p.course_name || '', size: Number(p.file_len) || 0 }));
   res.json({ items: out });
 });
 app.get('/saved', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/saved');
+  // Saved offline belongs to the app only; the website never shows it.
+  if (!/StudiesHubApp/.test(req.headers['user-agent'] || '')) return res.redirect('/settings');
   res.send(layout('Saved offline', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Saved offline</h1>
 <p class="mut">Saved materials live inside the Studies Hub app only, like downloads in a video app. You can open them with no internet, but you cannot take them out of the app. Saving runs in the background, so you can leave this page or the app.</p>
 <div class="card"><label class="swrow"><span><b>Save all materials</b><br><span class="mut" id="autoInfo" style="font-size:13px"></span></span><input type="checkbox" role="switch" class="shsw" id="autoSw" aria-label="Save all materials"></label></div>
@@ -4561,6 +4673,7 @@ app.get('/p/:slug', (req, res) => {
   // reliably work on mobile Chrome/Android, which is why this needed replacing rather than just embedding.
   // doc: converted to HTML right in the browser (Mammoth.js). Both fetch through the same authenticated route
   // everything else here uses, so department/level access control still applies either way.
+  if (p.kind === 'image' && p.file_data) return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${offBarHtml(p)}<img src="/p/${esc(p.slug)}/raw" alt="${esc(p.title)}" style="width:100%;height:auto;border-radius:12px;display:block"></div>`, req.user));
   const embed = p.kind === 'pdf'
     ? pdfViewerHtml(p.slug)
     : `<div id="docViewer" class="doc-viewer"><p class="mut">Loading document&hellip;</p></div>
@@ -4598,7 +4711,7 @@ app.get('/p/:slug/raw', (req, res) => {
   }
   const safeMime = /^(application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.[a-z.]+|image\/(png|jpe?g|gif|webp))$/i.test(String(p.file_mime || ''));
   res.setHeader('Content-Type', safeMime ? p.file_mime : 'application/octet-stream');
-  res.setHeader('Content-Disposition', `${p.kind === 'pdf' && safeMime ? 'inline' : 'attachment'}; filename="${(p.file_name || p.slug).replace(/"/g, '')}"`);
+  res.setHeader('Content-Disposition', `${(p.kind === 'pdf' || p.kind === 'image') && safeMime && !req.query.dl ? 'inline' : 'attachment'}; filename="${(p.file_name || p.slug).replace(/"/g, '')}"`);
   res.send(Buffer.from(db.prepare('SELECT file_data FROM pages WHERE id=?').get(p.id).file_data));
 });
 
@@ -5354,7 +5467,7 @@ app.get('/admin', adminish, (req, res) => {
 ${newsItems.map(n => `<div class="card row" style="overflow:hidden">${newsThumb(n)}<span class="mut">${esc(n.title)}</span><a href="/admin/news/${n.id}/edit">Edit</a><form method="post" action="/admin/news/${n.id}/delete" onsubmit="return confirm('Delete this news item?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">No news posted yet.</p>'}` : '';
   const pagesSection = cp ? `<form class="card" id="upload" data-bgup method="post" action="/admin/upload" enctype="multipart/form-data"><h3>Upload content</h3>
 <input name="title" placeholder="Title (optional — defaults to file name)">
-${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">Video (YouTube link or from your phone)</option></select>`
+${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</option><option value="cbt">CBT (quiz) HTML</option><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>`
     : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Your role can upload plain HTML pages. PDFs, Word documents, videos and CBT pages need a Files admin or a full admin.</p>'}
 <div id="fileField"><input type="file" name="file" accept=".html,.htm,text/html"></div>
 ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."><p class="hint" style="margin:4px 0 0">Paste a YouTube link here, <b>or</b> choose a video from your phone above. Either one works.</p></div>` : ''}
@@ -5365,7 +5478,7 @@ ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeh
 ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
 ${semesterField('')}
 <button>Upload</button></form>
-${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';fi.required=!isVideo;fi.accept=isVideo?'video/*':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
+${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video',isImg=k.value==='image';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';fi.required=!isVideo;fi.accept=isVideo?'video/*':isImg?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
 <script>if('launchQueue' in window){window.launchQueue.setConsumer(function(lp){if(!lp.files||!lp.files.length)return;lp.files[0].getFile().then(function(file){var dt=new DataTransfer();dt.items.add(file);var fi=document.querySelector('#fileField input[type=file]');fi.files=dt.files;var n=file.name.toLowerCase();var ks=document.getElementById('kindSelect');ks.value=n.indexOf('.pdf')>-1?'pdf':(n.indexOf('.doc')>-1?'doc':'html');ks.dispatchEvent(new Event('change'));document.getElementById('upload').scrollIntoView({behavior:'smooth'})})})}</script>` : ''}
 ${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEventListener('message',function(e){if(e.data&&e.data.type==='uploads-synced')location.reload()})}</script>` : ''}
 <h3 id="pages">Pages (${pages.length})</h3>${(() => {
@@ -5420,7 +5533,7 @@ function readAudience(body, titleHint) {
   };
 }
 app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
-  const kind = ['html', 'cbt', 'pdf', 'doc', 'video'].includes(req.body.kind) ? req.body.kind : 'html';
+  const kind = ['html', 'cbt', 'pdf', 'doc', 'video', 'image'].includes(req.body.kind) ? req.body.kind : 'html';
   if (kind !== 'html' && !can.allKinds(req.user)) return res.sendStatus(403);
   const paid = can.full(req.user) && kind === 'cbt' && req.body.visibility === 'paid' ? 1 : 0; // only CBT can be pay-to-view
   const membersOnly = req.body.members_only ? 1 : 0;
@@ -5443,7 +5556,8 @@ app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.redirect(back('Choose a file first.'));
   const base = req.file.originalname.replace(/\.[a-z0-9]+$/i, '');
   const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base);
-  if (kind === 'pdf' || kind === 'doc') {
+  if (kind === 'image' && !isImageUpload(req.file)) return res.redirect(back('Choose a JPG or PNG picture.'));
+  if (kind === 'pdf' || kind === 'doc' || kind === 'image') {
     db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(slug, title || base, '', membersOnly, kind, paid, PRICE_KOBO, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, req.user.id);
   } else {
@@ -5671,7 +5785,8 @@ app.post('/admin/pages/:id/replace', pagesAdmin, upload.single('file'), (req, re
     const vmime = videoMimeOf(req.file);
     if (!vmime) return res.redirect(back('That file is not a video.'));
     db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=?, video_id=NULL WHERE id=?').run(req.file.buffer, vmime, req.file.originalname, req.params.id);
-  } else if (page.kind === 'pdf' || page.kind === 'doc') {
+  } else if (page.kind === 'pdf' || page.kind === 'doc' || page.kind === 'image') {
+    if (page.kind === 'image' && !isImageUpload(req.file)) return res.redirect(back('Choose a JPG or PNG picture.'));
     db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.file.originalname, req.params.id);
   } else {
     db.prepare('UPDATE pages SET html=? WHERE id=?').run(req.file.buffer.toString('utf8'), req.params.id);

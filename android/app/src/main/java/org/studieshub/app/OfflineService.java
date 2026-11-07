@@ -28,7 +28,7 @@ public class OfflineService extends Service {
     @Override public IBinder onBind(Intent i) { return null; }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        Notification n = note("Saving materials to your phone", "Getting ready", -1);
+        Notification n = note("Saving to app", "Getting ready", -1);
         if (Build.VERSION.SDK_INT >= 29) startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC); else startForeground(NID, n);
         synchronized (OfflineService.class) {
             if (!running) { running = true; new Thread(this::loop).start(); }
@@ -73,17 +73,17 @@ public class OfflineService extends Service {
             if (!online() || (wifiOnly() && !onWifi())) {
                 OfflineStore.STATUS.put(slug, "queued");
                 boolean needWifi = online() && wifiOnly();
-                update(needWifi ? "Waiting for Wi-Fi" : "Waiting for the internet", (needWifi ? "Wi-Fi only is on. Downloading carries on when you connect to Wi-Fi. " : "Downloading carries on by itself when your data or Wi-Fi is back. ") + OfflineStore.queued(this) + " left.", -1);
+                update(needWifi ? "Waiting for Wi-Fi" : "Waiting for the internet", (needWifi ? "Wi-Fi only is on. Saving carries on when you connect to Wi-Fi. " : "Saving carries on by itself when your data or Wi-Fi is back. ") + OfflineStore.queued(this) + " left.", -1);
                 try { Thread.sleep(8000); } catch (InterruptedException e) { }
                 continue;
             }
-            update("Downloading " + (total > 1 ? (done + 1) + " of " + total : ""), title + "  \u00b7  0%", 0);
+            update("Saving to app" + (total > 1 ? " \u00b7 " + (done + 1) + " of " + total : ""), title + "  \u00b7  0%", 0);
             final int pos = done + 1;
             Thread pr = new Thread(() -> {
                 String last = "";
                 while (!Thread.currentThread().isInterrupted()) {
                     String st = OfflineStore.STATUS.get(slug);
-                    if (st != null && st.startsWith("saving:") && !st.equals(last)) { last = st; try { int pc = Integer.parseInt(st.substring(7)); update("Downloading " + (total > 1 ? pos + " of " + total : ""), title + "  \u00b7  " + pc + "%", pc); } catch (Exception e) { } }
+                    if (st != null && st.startsWith("saving:") && !st.equals(last)) { last = st; try { int pc = Integer.parseInt(st.substring(7)); update("Saving to app" + (total > 1 ? " \u00b7 " + pos + " of " + total : ""), title + "  \u00b7  " + pc + "%", pc); } catch (Exception e) { } }
                     try { Thread.sleep(700); } catch (InterruptedException e) { return; }
                 }
             });
@@ -104,8 +104,8 @@ public class OfflineService extends Service {
     private void finished(int ok, int bad, String slug, String title) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         String url = ok == 1 && bad == 0 ? "/p/" + slug : "/saved";
-        String head = ok == 1 && bad == 0 ? "Download complete" : ok + " materials downloaded";
-        String text = ok == 1 && bad == 0 ? title + " is saved on your phone. Tap to open it." : (bad > 0 ? bad + " could not be saved. " : "") + "Tap to see them.";
+        String head = ok == 1 && bad == 0 ? "Save complete" : ok + " materials saved";
+        String text = ok == 1 && bad == 0 ? title + " is saved in the app. Tap to open it." : (bad > 0 ? bad + " could not be saved. " : "") + "Tap to see them.";
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, Sounds.channel(this, "general")) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_stat).setColor(0xFF000000).setContentTitle(head).setContentText(text).setAutoCancel(true)
          .setContentIntent(PendingIntent.getActivity(this, 14, new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("url", url), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));

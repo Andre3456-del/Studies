@@ -152,11 +152,11 @@ final class OfflineStore {
             try (InputStream in = h.getInputStream()) { byte[] b = new byte[16384]; int r; while ((r = in.read(b)) > 0) bo.write(b, 0, r); }
             h.disconnect();
             String html = bo.toString("UTF-8");
-            if (!html.contains("/p/" + slug + "/raw") && ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind))) throw new Exception("This material is locked. Unlock it first, then save.");
+            if (!html.contains("/p/" + slug + "/raw") && ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind) || "image".equals(kind))) throw new Exception("This material is locked. Unlock it first, then save.");
             STATUS.put(slug, "saving:8");
             long size = 0;
             String mime = "text/html";
-            if ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind)) {
+            if ("pdf".equals(kind) || "doc".equals(kind) || "video".equals(kind) || "image".equals(kind)) {
                 HttpURLConnection f = get(BASE + "/p/" + slug + "/raw", ua, cookie);
                 int fc = f.getResponseCode();
                 if (fc != 200) { f.disconnect(); if (fc >= 500 || fc == 408 || fc == 429) throw new java.io.IOException("server " + fc); throw new Exception("Could not download the file (" + fc + ")."); }
@@ -193,6 +193,107 @@ final class OfflineStore {
             STATUS.put(slug, "error:" + (e.getMessage() == null ? "Could not save" : e.getMessage().replace("|", " ")));
             return 2;
         }
+    }
+
+    // ---- remembering the pages and pictures the person has opened, so they open again with no internet ----
+    private static final java.util.concurrent.ExecutorService BG = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final HashMap<String, Long> recent = new HashMap<>();
+    static final String NOINET = "No internet connection. Check your internet connection and try again.";
+
+    static File pdir(Context c) { File d = new File(c.getFilesDir(), "offline/c" + userId.replaceAll("[^0-9]", "")); d.mkdirs(); return d; }
+    static String pkey(String url) {
+        String u = url.split("#")[0].replaceFirst("^https?://(www\\.)?studieshub\\.org", "");
+        return sha(u.isEmpty() ? "/" : u);
+    }
+    private static boolean ourHost(Uri u) { String h = u.getHost() == null ? "" : u.getHost(); return h.equals("studieshub.org") || h.equals("www.studieshub.org"); }
+    private static boolean pageOk(String path) {
+        return !(path.startsWith("/api/") || path.startsWith("/logout") || path.startsWith("/call") || path.startsWith("/login") || path.startsWith("/signup")
+            || path.startsWith("/auth") || path.startsWith("/forgot") || path.startsWith("/reset") || path.equals("/health") || path.equals("/sw.js")
+            || path.endsWith(".apk") || path.matches("^/p/[^/]+/raw/?$"));
+    }
+    private static byte[] readAll(InputStream in, int max) throws java.io.IOException {
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        byte[] b = new byte[16384]; int r;
+        while ((r = in.read(b)) > 0) { bo.write(b, 0, r); if (bo.size() > max) return null; }
+        return bo.toByteArray();
+    }
+    private static void store(File f, String mime, byte[] body) throws java.io.IOException {
+        try (FileOutputStream o = new FileOutputStream(f)) { o.write(body); }
+        try (FileOutputStream o = new FileOutputStream(new File(f.getPath() + ".mime"))) { o.write(mime.getBytes(StandardCharsets.UTF_8)); }
+    }
+
+    /** Quietly keeps a copy of a page the person just opened (only while online). */
+    static void remember(Context c0, String url) {
+        try {
+            final Context c = c0.getApplicationContext();
+            Uri u = Uri.parse(url);
+            if (offline || "0".equals(userId) || !ourHost(u) || !pageOk(u.getPath() == null ? "/" : u.getPath())) return;
+            synchronized (recent) {
+                Long t = recent.get(url);
+                if (t != null && System.currentTimeMillis() - t < 20000) return;
+                recent.put(url, System.currentTimeMillis());
+            }
+            final String uid = userId, fu = url;
+            BG.execute(() -> {
+                try {
+                    HttpURLConnection h = get(fu, ua, android.webkit.CookieManager.getInstance().getCookie(BASE));
+                    h.setInstanceFollowRedirects(false);
+                    String ct = h.getContentType();
+                    if (h.getResponseCode() != 200 || ct == null || !ct.toLowerCase().startsWith("text/html")) { h.disconnect(); return; }
+                    byte[] body = readAll(h.getInputStream(), 3000000);
+                    h.disconnect();
+                    if (body == null || !uid.equals(userId)) return;
+                    store(new File(pdir(c), pkey(fu)), "text/html", body);
+                } catch (Throwable t) { }
+            });
+        } catch (Throwable t) { }
+    }
+
+    /** Pictures are kept as they are shown, so the same pictures can be shown again with no internet. */
+    private static WebResourceResponse teeImage(Context c, Uri u, Map<String, String> reqH) {
+        try {
+            String acc = reqH == null ? null : reqH.get("Accept");
+            if (acc == null || !acc.contains("image/") || reqH.get("Range") != null || "0".equals(userId)) return null;
+            if (!ourHost(u) || u.getPath() == null || u.getPath().matches("^/p/[^/]+/raw/?$")) return null;
+            File f = new File(pdir(c), pkey(u.toString())), mf = new File(f.getPath() + ".mime");
+            Map<String, String> hd = new HashMap<>(); hd.put("Cache-Control", "no-cache");
+            if (f.exists() && mf.exists() && System.currentTimeMillis() - f.lastModified() < 120000) {
+                String m = readLine(mf);
+                return resp(m == null ? "image/png" : m, null, 200, "OK", hd, new FileInputStream(f));
+            }
+            HttpURLConnection h = get(u.toString(), ua, android.webkit.CookieManager.getInstance().getCookie(BASE));
+            String ct = h.getContentType();
+            if (h.getResponseCode() != 200 || ct == null || !ct.toLowerCase().startsWith("image/") || h.getContentLength() > 6000000) { h.disconnect(); return null; }
+            byte[] b = readAll(h.getInputStream(), 6000000);
+            h.disconnect();
+            if (b == null) return null;
+            String mime = ct.split(";")[0].trim();
+            try { store(f, mime, b); } catch (Throwable t) { }
+            return resp(mime, null, 200, "OK", hd, new ByteArrayInputStream(b));
+        } catch (Throwable t) { return null; }
+    }
+
+    private static WebResourceResponse placeholder(String path) {
+        boolean person = path.startsWith("/avatar/") || path.startsWith("/group-avatar/") || path.contains("avatar");
+        String svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='#3b3b4d'/>"
+            + (person ? "<circle cx='50' cy='38' r='18' fill='#9a9ab0'/><path d='M14 100c0-22 16-36 36-36s36 14 36 36z' fill='#9a9ab0'/>"
+                      : "<circle cx='68' cy='34' r='8' fill='#9a9ab0'/><path d='M18 78l22-30 15 20 10-12 17 22z' fill='#9a9ab0'/>") + "</svg>";
+        Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "no-store");
+        return resp("image/svg+xml", "utf-8", 200, "OK", h, new ByteArrayInputStream(svg.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /** Keeps the remembered pages and pictures from growing without limit. */
+    static void prune(Context c0) {
+        BG.execute(() -> {
+            try {
+                File d = pdir(c0.getApplicationContext());
+                File[] fs = d.listFiles(); if (fs == null) return;
+                long tot = 0; for (File f : fs) tot += f.length();
+                if (tot < 150L * 1048576) return;
+                java.util.Arrays.sort(fs, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+                for (File f : fs) { if (tot < 110L * 1048576) break; tot -= f.length(); f.delete(); }
+            } catch (Throwable t) { }
+        });
     }
 
     // ---- serving to the WebView ----
@@ -266,13 +367,24 @@ final class OfflineStore {
                 }
             }
             if (offline) {
+                File cf = new File(pdir(c), pkey(u.toString())), cm = new File(cf.getPath() + ".mime");
+                if (cf.exists() && cm.exists()) {
+                    String cmime = readLine(cm);
+                    Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "no-store");
+                    return resp(cmime == null ? "text/html" : cmime, cmime != null && cmime.startsWith("text/") ? "utf-8" : null, 200, "OK", h, new FileInputStream(cf));
+                }
                 if (mainFrame) {
                     Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "no-store");
                     return resp("text/html", "utf-8", 200, "OK", h, new ByteArrayInputStream(offlinePage(c).getBytes(StandardCharsets.UTF_8)));
                 }
+                String acc = reqH == null ? null : reqH.get("Accept");
+                if ((acc != null && acc.contains("image/")) || path.matches("(?i).*\\.(png|jpe?g|gif|webp|svg)$") || path.startsWith("/avatar/") || path.startsWith("/group-avatar/")) return placeholder(path);
                 if (path.startsWith("/api/") || path.equals("/health")) {
-                    return resp("application/json", "utf-8", 503, "Offline", new HashMap<String, String>(), new ByteArrayInputStream("{\"error\":\"You are offline.\"}".getBytes(StandardCharsets.UTF_8)));
+                    return resp("application/json", "utf-8", 503, "Offline", new HashMap<String, String>(), new ByteArrayInputStream(("{\"error\":\"" + NOINET + "\"}").getBytes(StandardCharsets.UTF_8)));
                 }
+            } else {
+                WebResourceResponse t = teeImage(c, u, reqH);
+                if (t != null) return t;
             }
         } catch (Throwable t) { }
         return null;
@@ -296,7 +408,7 @@ final class OfflineStore {
             + "h1{margin:6px 0 4px;font-size:24px}.mut{opacity:.7;line-height:1.5}.top{background:#1d1b3a;border-radius:16px;padding:16px;margin-bottom:18px}@media(prefers-color-scheme:light){.top{background:#ecebff}}"
             + ".it{display:flex;gap:12px;align-items:center;text-decoration:none;color:inherit;background:#15151f;border-radius:14px;padding:14px;margin:10px 0}.ic{font-size:28px}.tx{display:block;min-width:0}.tx b{display:block}.tx small{opacity:.65}"
             + "button{font-size:16px;padding:12px 24px;border:0;border-radius:12px;background:#6c63ff;color:#fff;margin-top:8px}"
-            + "</style></head><body><div class='top'><h1>You are offline</h1><p class='mut' style='margin:0'>Only the materials you saved on this phone are available. Everything else needs the internet.</p><button onclick=\"location.href='/'\">Try again</button></div>"
+            + "</style></head><body><div class='top'><h1>No internet connection</h1><p class='mut' style='margin:0'>Check your internet connection and try again.</p><button onclick=\"location.reload()\">Try again</button></div>"
             + "<h3>Saved on this phone</h3>" + list + "</body></html>";
     }
 }

@@ -349,13 +349,13 @@ ${boss ? `<h3>What your admins have been doing</h3>${log.map(l => `<p class="mut
   app.get('/uni/uploads', power('uploads'), (req, res) => {
     const rows = db.prepare('SELECT id,slug,title,kind,created_at,dept,level,admin_id FROM pages WHERE university=? ORDER BY id DESC LIMIT 100').all(req.inst);
     res.send(desk(req, 'University uploads', `<form method="post" action="/uni/uploads" data-bgup enctype="multipart/form-data" class="card"><p class="mut" style="margin:0 0 6px">Only people in ${esc(req.inst)} can see and get alerted about these.</p><input name="title" placeholder="Title (e.g. GST 101 past questions)" required maxlength="140">
-<select name="kind"><option value="pdf">PDF</option><option value="doc">Word / PowerPoint document</option><option value="video">Video (YouTube link or from your phone)</option></select><input type="file" name="file" accept=".pdf,.doc,.docx,.ppt,.pptx,video/*"><input name="video_url" placeholder="YouTube link (only for a video; or choose a video file above)">
+<select name="kind"><option value="pdf">PDF</option><option value="doc">Word / PowerPoint document</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select><input type="file" name="file" accept=".pdf,.doc,.docx,.ppt,.pptx,video/*,image/png,image/jpeg"><input name="video_url" placeholder="YouTube link (only for a video; or choose a video file above)">
 <select name="department"><option value="">Every department</option>${departmentNames().map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select><select name="level"><option value="">Every level</option>${LEVELS.map(l => `<option value="${l}">${l} level</option>`).join('')}</select>${semesterField('')}<button style="margin-top:8px">Upload</button></form>
 <h3>Uploaded</h3>${rows.map(p => `<div class="card row"><span><a href="/p/${esc(p.slug)}"><b>${esc(p.title)}</b></a><br><span class="mut">${esc(p.kind)} &middot; ${esc(p.dept || 'all departments')} &middot; ${p.level ? p.level + ' level' : 'all levels'} &middot; ${timeStr(p.created_at)}</span></span>${mayManage(req, p.admin_id) ? `<form method="post" action="/uni/uploads/${p.id}/delete" style="margin:0" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form>` : ''}</div>`).join('') || '<p class="mut">Nothing yet.</p>'}`));
   });
   app.post('/uni/uploads', power('uploads'), upload.single('file'), (req, res) => {
     const to = m => res.redirect('/uni/uploads?msg=' + encodeURIComponent(m));
-    const kind = ['pdf', 'doc', 'video'].includes(req.body.kind) ? req.body.kind : 'pdf', title = clean(req.body.title, 140);
+    const kind = ['pdf', 'doc', 'video', 'image'].includes(req.body.kind) ? req.body.kind : 'pdf', title = clean(req.body.title, 140);
     const dept = departmentNames().includes(req.body.department) ? req.body.department : null, level = LEVELS.includes(Number(req.body.level)) ? Number(req.body.level) : null;
     if (!title) return to('Enter a title.');
     let slug;
@@ -369,6 +369,7 @@ ${boss ? `<h3>What your admins have been doing</h3>${log.map(l => `<p class="mut
     } else {
       if (!req.file) return to('Choose a file first.');
       if (kind === 'pdf' && req.file.mimetype !== 'application/pdf') return to('That is not a PDF file.');
+      if (kind === 'image' && !/^image\/(png|jpe?g)$/i.test(req.file.mimetype)) return to('Choose a JPG or PNG picture.');
       slug = uniqueSlug(slugify(title));
       db.prepare("INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id,university) VALUES(?,?,'',1,?,0,NULL,?,?,?,?,?,?,?)").run(slug, title, kind, req.file.buffer, req.file.mimetype, req.file.originalname, dept, level, req.user.id, req.inst);
     }

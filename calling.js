@@ -7,11 +7,13 @@ function registerCalling(app, { db, crypto, notify, logCall }) {
   db.exec("CREATE TABLE IF NOT EXISTS call_sessions(id TEXT PRIMARY KEY,room_name TEXT UNIQUE NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('audio','video')),group_id INTEGER,created_by INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'active',created_at TEXT DEFAULT CURRENT_TIMESTAMP,ended_at TEXT); CREATE TABLE IF NOT EXISTS call_participants(call_id TEXT NOT NULL,user_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'invited',invited_by INTEGER NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(call_id,user_id)); CREATE INDEX IF NOT EXISTS call_participants_user_status ON call_participants(user_id,status);");
   const cpCols = db.prepare('PRAGMA table_info(call_participants)').all().map(c => c.name);
   if (!cpCols.includes('joined_at')) db.exec('ALTER TABLE call_participants ADD COLUMN joined_at TEXT');
+  // rang_at: the moment the other person's phone (or open page) really received the call. Until then the caller sees "Calling…", not "Ringing…".
+  if (!cpCols.includes('rang_at')) db.exec('ALTER TABLE call_participants ADD COLUMN rang_at TEXT');
   const isMember = (g,u) => !!db.prepare('SELECT 1 FROM group_members WHERE group_id=? AND user_id=?').get(g,u);
   const friends = (a,b) => !!db.prepare("SELECT 1 FROM friendships WHERE status='friends' AND ((requester_id=? AND addressee_id=?) OR (requester_id=? AND addressee_id=?))").get(a,b,b,a);
   const callById = id => db.prepare('SELECT * FROM call_sessions WHERE id=?').get(id);
   const participant = (id,u) => db.prepare('SELECT * FROM call_participants WHERE call_id=? AND user_id=?').get(id,u);
-  const people = id => db.prepare('SELECT cp.user_id,cp.status,u.name FROM call_participants cp JOIN users u ON u.id=cp.user_id WHERE cp.call_id=? ORDER BY u.name').all(id);
+  const people = id => db.prepare('SELECT cp.user_id,cp.status,cp.rang_at,u.name FROM call_participants cp JOIN users u ON u.id=cp.user_id WHERE cp.call_id=? ORDER BY u.name').all(id);
   // Ringing on the phone itself: a push notification with Answer / Decline, even when the site is closed. unring() takes it away again.
   function ring(call, ids) {
     if (!notify || !ids.length) return;
@@ -82,6 +84,8 @@ function registerCalling(app, { db, crypto, notify, logCall }) {
   });
   app.get('/api/calls/incoming',(req,res)=>{
     if(!req.user)return res.sendStatus(401);
+    // this phone/page just asked for its calls, so it has the ringing call: tell the caller it is ringing
+    db.prepare("UPDATE call_participants SET rang_at=CURRENT_TIMESTAMP WHERE user_id=? AND status='invited' AND rang_at IS NULL AND call_id IN (SELECT id FROM call_sessions WHERE status='active')").run(req.user.id);
     res.json({calls:db.prepare("SELECT c.id,c.kind,c.created_at,u.name caller_name,g.name group_name FROM call_participants cp JOIN call_sessions c ON c.id=cp.call_id JOIN users u ON u.id=c.created_by LEFT JOIN groups g ON g.id=c.group_id WHERE cp.user_id=? AND cp.status='invited' AND c.status='active' AND (strftime('%s','now')-strftime('%s',COALESCE(cp.updated_at,cp.created_at)))*1000<=? ORDER BY c.created_at DESC LIMIT 5").all(req.user.id,RING_MS)});
   });
   app.get('/api/calls/eligible',(req,res)=>{
@@ -96,6 +100,12 @@ function registerCalling(app, { db, crypto, notify, logCall }) {
     if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
     if(!c||!p)return res.status(404).json({error:'Call not found.'});
     res.json({id:c.id,kind:c.kind,group_id:c.group_id,created_by:c.created_by,status:c.status,people:people(c.id),me:p.status,title:callTitle(c,req.user.id),livekit_configured:ready()});
+  });
+  // The phone calls this the moment the ring reaches it (even when the app is closed).
+  app.post('/api/calls/:id/ringing',(req,res)=>{
+    if(!req.user)return res.sendStatus(401);
+    db.prepare("UPDATE call_participants SET rang_at=CURRENT_TIMESTAMP WHERE call_id=? AND user_id=? AND status='invited' AND rang_at IS NULL").run(String(req.params.id),req.user.id);
+    res.sendStatus(204);
   });
   app.post('/api/calls/:id/accept',(req,res)=>{
     if(!req.user)return res.sendStatus(401);const c=callById(String(req.params.id)),p=c&&participant(c.id,req.user.id);
@@ -213,7 +223,7 @@ function callScreen() {
       status = j;
       if (j.status !== 'active') return finish(whyFromPeople(j.people));
       const others = j.people.filter(p => p.user_id !== C.me), joined = others.filter(p => p.status === 'joined').length;
-      if (!room || room.remoteParticipants.size === 0) setSub(others.some(p => p.status === 'invited') ? 'Ringing…' : (joined ? 'Connecting…' : 'Calling…'));
+      if (!room || room.remoteParticipants.size === 0) setSub(others.some(p => p.status === 'invited' && p.rang_at) ? 'Ringing…' : 'Calling…');
       $('peerName').textContent = j.title || 'Call';
     }).catch(e => { if (!ended) { if (/not found|no longer/i.test(e.message)) finish('Call ended'); } });
   }
@@ -433,7 +443,7 @@ function callScreen() {
     try { const j = await api('/api/calls/' + C.id + '/invite', { user_ids: ids }); toast('Added ' + j.invited + ' to the call'); $('inviteBox').hidden = true; refresh(); } catch (e) { toast(e.message); }
   };
   window.addEventListener('beforeunload', () => { if (room && !ended) room.disconnect(); });
-  $('peerName').textContent = C.title; $('sub').textContent = 'Connecting…'; updateButtons();
+  $('peerName').textContent = C.title; $('sub').textContent = 'Calling…'; updateButtons();
   start();
 }
 // ---------- clean voice: only the speaker's voice goes out, not the room ----------

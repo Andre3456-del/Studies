@@ -121,6 +121,9 @@ public class MainActivity extends Activity {
         s.setBuiltInZoomControls(false);
         s.setSupportZoom(false);
         s.setUserAgentString(s.getUserAgentString() + " StudiesHubApp/1.0 (" + (Build.MANUFACTURER.substring(0, 1).toUpperCase() + Build.MANUFACTURER.substring(1)).replaceAll("[();]", "") + " " + Build.MODEL.replaceAll("[();]", "") + ")");
+        OfflineStore.ua = s.getUserAgentString();
+        // One-time clean-out of pages remembered by older versions, so nothing outdated (like a download-the-app entry) can show up inside the app.
+        try { android.content.SharedPreferences sp0 = getSharedPreferences("studieshub", MODE_PRIVATE); if (sp0.getInt("cache_clean", 0) < 2) { web.clearCache(true); sp0.edit().putInt("cache_clean", 2).apply(); } } catch (Throwable t) { }
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, true);
@@ -172,8 +175,46 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> secure(lockOn && locked));
             }
             @JavascriptInterface public void offUser(String id) { OfflineStore.userId = id == null ? "0" : id; if (!OfflineStore.userId.equals("0")) getSharedPreferences("studieshub", MODE_PRIVATE).edit().putString("off_uid", OfflineStore.userId).apply(); }
+            @JavascriptInterface public boolean dlStart(String slug, String title, String file) {
+                try {
+                    askNotif();
+                    String cookie = android.webkit.CookieManager.getInstance().getCookie("https://studieshub.org");
+                    String name = (file == null || file.trim().isEmpty() ? slug : file).replaceAll("[\\\\/:*?\"<>|]", "_");
+                    java.io.File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    if (new java.io.File(dl, name).exists()) { int dot = name.lastIndexOf('.'); String stem = dot > 0 ? name.substring(0, dot) : name, ext = dot > 0 ? name.substring(dot) : ""; name = stem + " (" + (System.currentTimeMillis() % 10000) + ")" + ext; }
+                    DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                    DownloadManager.Request r = new DownloadManager.Request(Uri.parse("https://studieshub.org/p/" + slug + "/raw?dl=1"));
+                    r.setTitle(title == null || title.isEmpty() ? name : title).setDescription("Studies Hub");
+                    if (cookie != null) r.addRequestHeader("Cookie", cookie);
+                    r.addRequestHeader("User-Agent", web.getSettings().getUserAgentString());
+                    r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                    r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
+                    long id = dm.enqueue(r);
+                    getSharedPreferences("studieshub", MODE_PRIVATE).edit().putLong("dl_" + OfflineStore.userId + "_" + slug, id).apply();
+                    return true;
+                } catch (Throwable t) { return false; }
+            }
+            /** none | pending | saving:NN | done | error:why  (for "Download to phone") */
+            @JavascriptInterface public String dlStatus(String slug) {
+                try {
+                    long id = getSharedPreferences("studieshub", MODE_PRIVATE).getLong("dl_" + OfflineStore.userId + "_" + slug, -1);
+                    if (id < 0) return "none";
+                    DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                    android.database.Cursor c = dm.query(new DownloadManager.Query().setFilterById(id));
+                    if (c == null) return "none";
+                    try {
+                        if (!c.moveToFirst()) return "none";
+                        int st = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                        long got = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)), tot = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                        if (st == DownloadManager.STATUS_SUCCESSFUL) return "done";
+                        if (st == DownloadManager.STATUS_FAILED) return "error:The download did not finish";
+                        if (st == DownloadManager.STATUS_PENDING || st == DownloadManager.STATUS_PAUSED || tot <= 0) return "pending";
+                        return "saving:" + Math.min(99, (int) (got * 100 / tot));
+                    } finally { c.close(); }
+                } catch (Throwable t) { return "none"; }
+            }
             @JavascriptInterface public boolean offSave(String slug, String title, String kind, String course) {
-                try { OfflineStore.ua = web.getSettings().getUserAgentString(); return OfflineStore.enqueue(MainActivity.this, slug, title, kind, course); } catch (Throwable t) { return false; }
+                try { askNotif(); OfflineStore.ua = web.getSettings().getUserAgentString(); return OfflineStore.enqueue(MainActivity.this, slug, title, kind, course); } catch (Throwable t) { return false; }
             }
             @JavascriptInterface public void offAuto(boolean on) {
                 getSharedPreferences("studieshub", MODE_PRIVATE).edit().putBoolean("off_auto", on).apply();
@@ -262,6 +303,7 @@ public class MainActivity extends Activity {
             @Override public void onPageFinished(WebView v, String url) {
                 CookieManager.getInstance().flush();
                 if (!"online".equals(net)) v.evaluateJavascript("window.__net&&__net('" + net + "',1)", null);
+                else if (url != null) { OfflineStore.remember(MainActivity.this, url); warmUp(); }
                 // Opening the thing a notification was about clears that notification.
                 try {
                     Uri cu = Uri.parse(url);
@@ -286,9 +328,15 @@ public class MainActivity extends Activity {
             }
             @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
                 if (r.isForMainFrame()) {
+                    if (!"GET".equalsIgnoreCase(r.getMethod())) {
+                        // a form that needed the internet: stay where you were and say so
+                        android.widget.Toast.makeText(MainActivity.this, OfflineStore.NOINET, android.widget.Toast.LENGTH_LONG).show();
+                        v.post(() -> { if (v.canGoBack()) v.goBack(); });
+                        return;
+                    }
                     v.loadDataWithBaseURL(null,
-                        "<html><body style='margin:0;background:#12121c;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center'>"
-                        + "<div style='padding:24px'><h2>No connection</h2><p style='opacity:.7'>Check your internet, then try again.</p>"
+                        "<html><head><title>Offline</title></head><body style='margin:0;background:#000;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center'>"
+                        + "<div style='padding:24px'><h2>No internet connection</h2><p style='opacity:.7'>Check your internet connection and try again.</p>"
                         + "<button style='font-size:16px;padding:12px 28px;border:0;border-radius:10px;background:#6c63ff;color:#fff' onclick=\"location.href='" + HOME + "'\">Try again</button></div></body></html>",
                         "text/html", "utf-8", null);
                 }
@@ -438,6 +486,12 @@ public class MainActivity extends Activity {
             Intent s = new Intent(this, PresenceService.class);
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(s); else startService(s);
         } catch (Throwable t) { /* ignore */ }
+    }
+
+    /** Asks once for permission to show notifications (Android 13 and newer), so progress and "complete" notices can appear. */
+    private void askNotif() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 77));
     }
 
     private void noteResult(boolean ok) { web.evaluateJavascript("window.studiesNote&&studiesNote(" + ok + ")", null); }
@@ -737,6 +791,16 @@ public class MainActivity extends Activity {
 
 
     // ---- network watching: online, offline, or "not steady" (which also switches to offline mode) ----
+    private long lastWarm = 0;
+    /** Once in a while, quietly keeps the main pages so they open with no internet even if they were not visited first. */
+    private void warmUp() {
+        if (System.currentTimeMillis() - lastWarm < 6 * 3600 * 1000L) return;
+        lastWarm = System.currentTimeMillis();
+        for (String p : new String[]{"/", "/dashboard", "/chat", "/news", "/settings", "/settings/profile", "/settings/active-status", "/settings/appearance", "/settings/notifications", "/settings/security", "/saved"})
+            OfflineStore.remember(this, "https://studieshub.org" + p);
+        OfflineStore.prune(this);
+    }
+
     private volatile String net = "online";
     private volatile boolean fg = false;
     private int pingOk = 0, pingBad = 0;
@@ -748,7 +812,7 @@ public class MainActivity extends Activity {
         net = n;
         OfflineStore.offline = !"online".equals(n);
         synchronized (flips) { flips.add(System.currentTimeMillis()); }
-        runOnUiThread(() -> { try { web.evaluateJavascript("window.__net&&__net('" + n + "')", null); } catch (Throwable t) { } });
+        runOnUiThread(() -> { try { web.evaluateJavascript("window.__net&&__net('" + n + "')", null); if ("online".equals(n)) web.evaluateJavascript("if(document.title==='Offline')location.reload()", null); } catch (Throwable t) { } });
     }
 
     private boolean hasNetwork() {
