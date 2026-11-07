@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
     private boolean inCall, frameBusy;
     private static final int REQ_PROJ = 17;
     private int dismissedVersion;
+    private volatile String uaCache = "";
     private boolean updateAsked;
     private GeolocationPermissions.Callback geoCb;
     private String geoOrigin;
@@ -121,6 +122,7 @@ public class MainActivity extends Activity {
         s.setBuiltInZoomControls(false);
         s.setSupportZoom(false);
         s.setUserAgentString(s.getUserAgentString() + " StudiesHubApp/1.0 (" + (Build.MANUFACTURER.substring(0, 1).toUpperCase() + Build.MANUFACTURER.substring(1)).replaceAll("[();]", "") + " " + Build.MODEL.replaceAll("[();]", "") + ")");
+        uaCache = s.getUserAgentString(); // saved now: the web view may only be asked on the main thread, and the buttons call from another one
         OfflineStore.ua = s.getUserAgentString();
         // One-time clean-out of pages remembered by older versions, so nothing outdated (like a download-the-app entry) can show up inside the app.
         try { android.content.SharedPreferences sp0 = getSharedPreferences("studieshub", MODE_PRIVATE); if (sp0.getInt("cache_clean", 0) < 2) { web.clearCache(true); sp0.edit().putInt("cache_clean", 2).apply(); } } catch (Throwable t) { }
@@ -187,7 +189,7 @@ public class MainActivity extends Activity {
                     DownloadManager.Request r = new DownloadManager.Request(Uri.parse("https://studieshub.org/p/" + slug + "/raw?dl=1"));
                     r.setTitle(title == null || title.isEmpty() ? name : title).setDescription("Studies Hub");
                     if (cookie != null) r.addRequestHeader("Cookie", cookie);
-                    r.addRequestHeader("User-Agent", web.getSettings().getUserAgentString());
+                    r.addRequestHeader("User-Agent", uaCache);
                     r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                     r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
                     long id = dm.enqueue(r);
@@ -215,7 +217,7 @@ public class MainActivity extends Activity {
                 } catch (Throwable t) { return "none"; }
             }
             @JavascriptInterface public boolean offSave(String slug, String title, String kind, String course) {
-                try { askNotif(); OfflineStore.ua = web.getSettings().getUserAgentString(); return OfflineStore.enqueue(MainActivity.this, slug, title, kind, course); } catch (Throwable t) { return false; }
+                try { askNotif(); OfflineStore.ua = uaCache; return OfflineStore.enqueue(MainActivity.this, slug, title, kind, course); } catch (Throwable t) { return false; }
             }
             @JavascriptInterface public void offAuto(boolean on) {
                 getSharedPreferences("studieshub", MODE_PRIVATE).edit().putBoolean("off_auto", on).apply();
@@ -826,7 +828,7 @@ public class MainActivity extends Activity {
     private void topUp() {
         if (OfflineStore.userId.equals("0")) return;
         lastTopUp = System.currentTimeMillis();
-        OfflineStore.ua = web.getSettings().getUserAgentString();
+        OfflineStore.ua = uaCache;
         final String ck = CookieManager.getInstance().getCookie("https://studieshub.org");
         new Thread(() -> {
             try {
