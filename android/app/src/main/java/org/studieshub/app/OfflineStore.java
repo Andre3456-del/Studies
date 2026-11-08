@@ -328,6 +328,15 @@ final class OfflineStore {
                 return resp(lm == null ? "application/octet-stream" : lm, null, 200, "OK", h, new FileInputStream(lf));
             }
             if (!host.equals("studieshub.org") && !host.equals("www.studieshub.org")) return null;
+            // The shared parts every page uses (styles and scripts) are carried inside the app itself: they open instantly, with or without data.
+            Matcher am = Pattern.compile("^/assets/([a-f0-9]{12}\\.(js|css))$").matcher(path);
+            if (am.find()) {
+                try {
+                    InputStream in = c.getAssets().open("webassets/" + am.group(1));
+                    Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "public, max-age=31536000, immutable"); h.put("Access-Control-Allow-Origin", "*");
+                    return resp("js".equals(am.group(2)) ? "application/javascript" : "text/css", "utf-8", 200, "OK", h, in);
+                } catch (IOException e) { /* not in this version of the app: fetch it from the site */ }
+            }
             Matcher m = Pattern.compile("^/p/([A-Za-z0-9_-]+)(/raw)?/?$").matcher(path);
             if (m.find()) {
                 String slug = m.group(1);

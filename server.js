@@ -232,6 +232,46 @@ app.use((req, res, next) => {
   };
   next();
 });
+// ---- shared page parts as files ----
+const ASSET_DIR = path.join(DATA_DIR, 'web-assets');
+try { fs.mkdirSync(ASSET_DIR, { recursive: true }); } catch (e) { /* ignore */ }
+const ASSET_MEM = new Map();    // file name -> text
+const ASSET_BLOCKS = [];        // [{ full, ref }]
+function externalize(html) {
+  for (const b of ASSET_BLOCKS) if (html.includes(b.full)) html = html.split(b.full).join(b.ref);
+  return html;
+}
+function harvestAssets() {
+  const fake = (id, role) => ({ id, name: 'Sample User', username: 'sample' + id, email: `sample${id}@example.com`, role, verified: 1, university_id: 1, department_id: 1, level: 100, avatar: null, created_at: '2020-01-01' });
+  const users = [null, fake(1, 'student'), fake(2, 'admin')];
+  const seen = new Map();
+  for (const u of users) for (const o of [{}, { footer: true }]) {
+    let h = '';
+    try { h = layoutRaw('Sample', '<p>Sample</p>', u, o); } catch (e) { continue; }
+    const here = new Set();
+    for (const m of h.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)) here.add(m[1] + '\u0000' + m[2]);
+    for (const k of here) seen.set(k, (seen.get(k) || 0) + 1);
+  }
+  ASSET_BLOCKS.length = 0;
+  for (const [k, n] of seen) {
+    const [tag, content] = k.split('\u0000');
+    if (n < 2 || content.length < 400 || /<\/(script|style)/i.test(content)) continue;
+    const ext = tag === 'script' ? 'js' : 'css';
+    const name = require('crypto').createHash('sha1').update(content).digest('hex').slice(0, 12) + '.' + ext;
+    ASSET_MEM.set(name, content);
+    try { const f = path.join(ASSET_DIR, name); if (!fs.existsSync(f)) fs.writeFileSync(f, content); } catch (e) { /* kept in memory */ }
+    ASSET_BLOCKS.push({ full: `<${tag}>${content}</${tag}>`, ref: ext === 'js' ? `<script src="/assets/${name}"></script>` : `<link rel="stylesheet" href="/assets/${name}">` });
+  }
+  return ASSET_MEM.size;
+}
+app.get('/assets/:f', (req, res, next) => {
+  const f = req.params.f;
+  if (!/^[a-f0-9]{12}\.(js|css)$/.test(f)) return next();
+  let t = ASSET_MEM.get(f);
+  if (t === undefined) { try { t = fs.readFileSync(path.join(ASSET_DIR, f), 'utf8'); } catch (e) { return res.status(404).end(); } }
+  res.set({ 'Content-Type': f.endsWith('.js') ? 'application/javascript; charset=utf-8' : 'text/css; charset=utf-8', 'Cache-Control': 'public, max-age=31536000, immutable' });
+  res.send(t);
+});
 // ---- live updates: when content changes (an upload, a news post, an approval), every open page is told, so counts and lists change at once ----
 const liveClients = new Set();
 let liveTimer = null;
@@ -1908,7 +1948,7 @@ const iconKey = i => {
 const badgeText = n => n > 15 ? '15+' : String(n);
 const PUSH_CLIENT_JS = `(function(){
 if(!('serviceWorker' in navigator))return;
-var KEY='__KEY__';
+var KEY=window.__VAPID||'';
 function u8(b){var p='='.repeat((4-b.length%4)%4),s=(b+p).replace(/-/g,'+').replace(/_/g,'/'),r=atob(s),o=new Uint8Array(r.length);for(var i=0;i<r.length;i++)o[i]=r.charCodeAt(i);return o}
 function save(sub){return fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())})}
 function fresh(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:u8(KEY)}).then(save).then(function(){return true})}
@@ -1946,7 +1986,10 @@ function topTitle(title) {
   const t = String(title || '').replace(/\s*[|\-\u2013\u2014]\s*Studies Hub\s*$/i, '').trim();
   return !t || /^(dashboard|home|welcome|studies hub)$/i.test(t) ? 'Studies Hub' : t;
 }
-const layout = (title, body, user, opts = {}) => {
+// Every page repeats the same big styles and scripts. They are served as files instead (the app carries a copy inside itself),
+// so a page is only its own content, and the shared parts open instantly and are kept on the phone.
+const layout = (...a) => externalize(layoutRaw(...a));
+const layoutRaw = (title, body, user, opts = {}) => {
   const avatarBit = user
     ? (user.avatar_mime ? `<img src="/avatar/${user.id}" class="drawer-av-img" alt="">` : `<span class="avatar" style="width:40px;height:40px;font-size:15px">${esc((user.name || '?').trim().charAt(0).toUpperCase() || '?')}</span>`)
     : '';
@@ -2089,7 +2132,7 @@ function open(t){var k=String(t.getAttribute('data-pv')).split(':'),kind=k[0],id
 document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-pv][data-pn]');if(!t||t===document.documentElement||t.closest('label,form,[data-nopv]'))return;e.preventDefault();e.stopPropagation();open(t)},true);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')close()});
 window.addEventListener('pagehide',close)})()</script>` : ''}
-${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
+${user ? `<script>window.__VAPID='${VAPID_PUBLIC}'</script><script>${PUSH_CLIENT_JS}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
 ${user ? `<script>${LIVE_CLIENT_JS}</script>` : ''}
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
 <script>(function(){if(!window.StudiesApp)return;function fail(m){var b=document.querySelector('a.gbtn');if(b)b.style.opacity='';if(m)alert(m)}window.studiesGoogleFail=fail;window.studiesGoogle=function(t,l){fetch('/auth/google/app',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:t,lecturer:!!l})}).then(function(r){return r.json()}).then(function(j){if(j.ok)location.href=j.url||'/';else fail(j.error)}).catch(function(){fail('No connection. Please try again.')})};document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a.gbtn');if(!a)return;e.preventDefault();a.style.opacity='.6';StudiesApp.google(/as=lecturer/.test(a.getAttribute('href')||''))},true)})()</script>
@@ -6323,5 +6366,12 @@ for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
 function notifyAdminCrash() {
   const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
   deliver(ADMIN_EMAIL, 'Studies Hub restarted unexpectedly', 'The site stopped without shutting down cleanly and has started again. If it keeps happening, check the logs in Railway.', emailShell('<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">The site restarted unexpectedly</h2><p>It stopped without shutting down cleanly and has started again. If this keeps happening, check the logs in Railway.</p>', base)).catch(() => {});
+}
+try { console.log('Shared page parts ready:', harvestAssets()); } catch (e) { console.error('Shared page parts failed (pages keep their own copy):', e.message); }
+if (process.env.DUMP_ASSETS) {
+  fs.mkdirSync(process.env.DUMP_ASSETS, { recursive: true });
+  for (const [n, t] of ASSET_MEM) fs.writeFileSync(path.join(process.env.DUMP_ASSETS, n), t);
+  console.log('Wrote', ASSET_MEM.size, 'files to', process.env.DUMP_ASSETS);
+  process.exit(0);
 }
 app.listen(PORT, () => console.log(`Studies Hub running on http://localhost:${PORT}`));

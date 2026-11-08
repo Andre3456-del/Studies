@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['android/**', '.github/workflows/android-apk.yml']
+    paths: ['android/**', '.github/workflows/android-apk.yml', 'server.js', 'public_pages.js', 'calling.js', 'lecturer_admin.js', 'university_admin.js', 'pdf_viewer.js', 'fcm.js']
 permissions:
   contents: write
 concurrency:
@@ -14,21 +14,48 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Copy the site's shared styles and scripts into the app
+        run: |
+          npm install --omit=dev --no-audit --no-fund
+          rm -rf android/app/src/main/assets/webassets
+          DUMP_ASSETS=$PWD/android/app/src/main/assets/webassets DATA_DIR=$RUNNER_TEMP/shdata node --disable-warning=ExperimentalWarning server.js
+          echo "ASSETS_ID=$(cat android/app/src/main/assets/webassets/* | sha1sum | cut -c1-12)" >> "$GITHUB_ENV"
+      - name: Decide whether a new app is needed
+        id: chk
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          NEED=true
+          if [ "${{ github.event_name }}" = "push" ]; then
+            CH=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" 2>/dev/null || echo android/)
+            if ! echo "$CH" | grep -qE '^(android/|\.github/workflows/android-apk\.yml)'; then
+              if gh release view app-latest --json body -q .body 2>/dev/null | grep -q "assets: $ASSETS_ID"; then NEED=false; fi
+            fi
+          fi
+          echo "need=$NEED" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
+        if: steps.chk.outputs.need == 'true'
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
+        if: steps.chk.outputs.need == 'true'
         with: { gradle-version: '8.9' }
       - name: Build the app
+        if: steps.chk.outputs.need == 'true'
         working-directory: android
         run: gradle assembleRelease -PverCode=${{ github.run_number }} --no-daemon
       - name: Name the file
+        if: steps.chk.outputs.need == 'true'
         run: cp android/app/build/outputs/apk/release/app-release.apk StudiesHub.apk
       - uses: actions/upload-artifact@v4
+        if: steps.chk.outputs.need == 'true'
         with: { name: StudiesHub-app, path: StudiesHub.apk }
       - name: Publish a download link
+        if: steps.chk.outputs.need == 'true'
         env: { GH_TOKEN: '${{ github.token }}' }
         run: |
-          NOTES="Download StudiesHub.apk on your Android phone and open it to install. versionCode: ${{ github.run_number }}"
+          NOTES="Download StudiesHub.apk on your Android phone and open it to install. versionCode: ${{ github.run_number }} assets: $ASSETS_ID"
           if gh release view app-latest >/dev/null 2>&1; then
             gh release upload app-latest StudiesHub.apk --clobber
             gh release edit app-latest --notes "$NOTES"
