@@ -232,6 +232,19 @@ app.use((req, res, next) => {
   };
   next();
 });
+// ---- live updates: when content changes (an upload, a news post, an approval), every open page is told, so counts and lists change at once ----
+const liveClients = new Set();
+let liveTimer = null;
+function liveBump() {
+  if (liveTimer) return;
+  liveTimer = setTimeout(() => { liveTimer = null; for (const r of liveClients) { try { r.write('data: content\n\n'); } catch (e) { liveClients.delete(r); } } }, 700);
+}
+app.use((req, res, next) => {
+  if (req.method === 'POST' || req.method === 'DELETE') {
+    res.on('finish', () => { if (res.statusCode < 400 && /^\/(admin|lecturer|uni)\//.test(req.path) && !/^\/admin\/(checks|maintenance)/.test(req.path)) liveBump(); });
+  }
+  next();
+});
 app.use(express.urlencoded({ extended: false }));
 const jsonSmall = express.json({ limit: '20kb' }), jsonBackup = express.json({ limit: '1mb' });
 app.use((req, res, next) => (req.path === '/api/backup' ? jsonBackup : jsonSmall)(req, res, next));
@@ -1204,6 +1217,15 @@ const pingHandler = (req, res) => {
 };
 app.get('/api/ping', pingHandler);
 app.post('/api/ping', pingHandler);
+app.get('/api/live', (req, res) => {
+  if (!req.user) return res.status(401).end();
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n');
+  liveClients.add(res);
+  const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch (e) { /* closed */ } }, 25000);
+  req.on('close', () => { clearInterval(hb); liveClients.delete(res); });
+});
 
 // Is this request from the Studies Hub Android app? The app's name is in its user-agent, but the browser's background page loader does not send
 // that, so the app also keeps a small "shapp" cookie. Both count.
@@ -2068,6 +2090,7 @@ document.addEventListener('click',function(e){var t=e.target.closest&&e.target.c
 document.addEventListener('keydown',function(e){if(e.key==='Escape')close()});
 window.addEventListener('pagehide',close)})()</script>` : ''}
 ${user ? `<script>${PUSH_CLIENT_JS.replace('__KEY__', VAPID_PUBLIC)}</script><script>${CALLING_CLIENT_JS}</script>` : ''}
+${user ? `<script>${LIVE_CLIENT_JS}</script>` : ''}
 <script>(function(){var h=document.querySelector('header.top');if(!h||h.hasAttribute('hidden'))return;var y=window.pageYOffset||0;window.addEventListener('scroll',function(){var n=window.pageYOffset||0;if(n<60)h.classList.remove('hide');else if(n>y+8)h.classList.add('hide');else if(n<y-4)h.classList.remove('hide');y=n},{passive:true})})()</script>
 <script>(function(){if(!window.StudiesApp)return;function fail(m){var b=document.querySelector('a.gbtn');if(b)b.style.opacity='';if(m)alert(m)}window.studiesGoogleFail=fail;window.studiesGoogle=function(t,l){fetch('/auth/google/app',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:t,lecturer:!!l})}).then(function(r){return r.json()}).then(function(j){if(j.ok)location.href=j.url||'/';else fail(j.error)}).catch(function(){fail('No connection. Please try again.')})};document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a.gbtn');if(!a)return;e.preventDefault();a.style.opacity='.6';StudiesApp.google(/as=lecturer/.test(a.getAttribute('href')||''))},true)})()</script>
 <script>(function(){window.studiesNote=function(ok){alert(ok?'Notifications are on for this device.':'Notifications are off. Turn them on in your phone settings for Studies Hub.')};if(window.StudiesApp)return;var native=window.alert;window.alert=function(m){try{var o=document.createElement('div');o.setAttribute('role','alertdialog');o.style.cssText='position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px';var b=document.createElement('div');b.style.cssText='max-width:420px;width:100%;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:16px;padding:20px;font:16px/1.45 system-ui,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.45)';var t=document.createElement('div');t.textContent=String(m);t.style.whiteSpace='pre-wrap';var k=document.createElement('button');k.type='button';k.textContent='OK';k.style.cssText='margin-top:16px;float:right;border:0;border-radius:10px;padding:10px 22px;background:#6c63ff;color:#fff;font:600 15px system-ui,sans-serif;cursor:pointer';k.onclick=function(){o.remove()};b.appendChild(t);b.appendChild(k);o.appendChild(b);document.body.appendChild(o);k.focus()}catch(e){native.call(window,m)}}})()</script>
@@ -2162,6 +2185,24 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 // or not, "/" and "/news" show the same thing -- the news feed. Everything else (dashboard,
 // browse pages, admin, chat, settings) lives one tap away in the navigation drawer instead.
 // Visitors who just open the link land on the news; anyone logged in lands on their dashboard.
+// Keeps an open page accurate: when the server says content changed, fetch this same page again and swap in only the parts that differ.
+const LIVE_CLIENT_JS = `(function(){var p=location.pathname;if(!window.EventSource||window.top!==window.self||!/^\\/($|dashboard|news|uni|lecturer|admin)/.test(p)||/^\\/admin\\/checks/.test(p))return;
+var dirty=false,busy=false,pend=false;
+document.addEventListener('input',function(e){if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))dirty=true},true);
+function ok(){var a=document.activeElement;return !dirty&&!document.hidden&&!(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))}
+function keep(e){return e.tagName!=='SCRIPT'&&e.id!=='pushBar'&&!e.classList.contains('vtoggle')}
+function refresh(){if(busy)return;if(!ok()){pend=true;return}busy=true;pend=false;
+ fetch(location.href,{credentials:'same-origin',headers:{'X-Live':'1'}}).then(function(r){return r.ok&&/text\\/html/.test(r.headers.get('content-type')||'')?r.text():null}).then(function(t){
+  if(!t)return;var d=new DOMParser().parseFromString(t,'text/html'),n=d.querySelector('main'),pb=document.getElementById('paneBody'),m=pb&&pb.children.length?pb:document.querySelector('main');if(!n||!m)return;
+  var o=[].filter.call(m.children,keep),w=[].filter.call(n.children,keep),y=window.pageYOffset;
+  if(o.length===w.length){o.forEach(function(x,i){if(x.outerHTML!==w[i].outerHTML)x.replaceWith(document.importNode(w[i],true))})}
+  else if(o.length){var f=o[0];w.forEach(function(x){m.insertBefore(document.importNode(x,true),f)});o.forEach(function(x){x.remove()})}
+  window.scrollTo(0,y)}).catch(function(){}).then(function(){busy=false})}
+function onEv(){setTimeout(refresh,Math.random()*1200)}
+try{var es=new EventSource('/api/live');es.onmessage=onEv}catch(e){return}
+document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh()});
+window.addEventListener('shnet',refresh);
+setInterval(function(){if(pend&&ok())refresh()},4000)})();`;
 const HOME_INTRO = `<section style="max-width:820px;margin:18px auto 8px;padding:0 4px;line-height:1.7"><h1 style="font-size:clamp(24px,5vw,34px);line-height:1.2;margin:0 0 8px">Studies Hub: free study materials for Nigerian university students</h1><p class="mut" style="margin:0 0 10px">Find course materials, past questions, timetables and campus news in one place, and chat with your coursemates. <a href="/about">About us</a> &middot; <a href="/how-it-works">How it works</a> &middot; <a href="/guides">Study guides</a></p></section>`;
 app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', HOME_INTRO + newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD, description: 'Studies Hub is a free study platform for Nigerian university students: course materials, past questions, timetables, campus news and student chats.' })));
 
