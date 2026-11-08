@@ -1414,6 +1414,7 @@ a.news-card{color:inherit;text-decoration:none;display:flex}
 .chat-item .meta{min-width:0;flex:1}
 .chat-item .meta b{display:block}
 .chat-item .meta span{display:block;font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-item .meta span span.tick{display:inline;overflow:visible;font-size:13px}.chat-item .meta span span.tick-un{color:#dc2626}.chat-item .meta span span.tick-read{color:#22c55e}.chat-item .meta span span.tick-queued{color:#93a0bd}
 .chat-label{color:var(--mut);letter-spacing:2px;font-size:11px;text-transform:uppercase;margin:18px 0 6px}
 .thread{display:flex;flex-direction:column;gap:8px;padding:6px 2px 90px}
 body.msg-selecting .chat-head{display:none}
