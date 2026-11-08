@@ -889,7 +889,7 @@ const profileComplete = u => u.role === 'uniadmin' ? !!u.username && !!u.name : 
 let adminTab = '';
 const TAB_OF = p => /^\/admin\/(payments|sponsors)/.test(p) ? 'payments' : /^\/admin\/(upload|pages)/.test(p) ? 'pages' : /^\/admin\/lecturers/.test(p) ? 'lecturers' : /^\/(admin\/positions|positions|admin\/departments)/.test(p) ? 'positions' : /^\/admin\/news/.test(p) ? 'news' : /^\/admin\/users/.test(p) ? 'users' : '';
 app.use((req, res, next) => { adminTab = TAB_OF(req.path); next(); });
-const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/health', '/sw.js', '/offline.html', '/app', '/app/version', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/about', '/how-it-works', '/contact', '/guides', '/sitemap.xml', '/robots.txt', '/health', '/sw.js', '/offline.html', '/app', '/app/version', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
   next();
@@ -1958,7 +1958,7 @@ ${drawerNav}
 </nav>
 <div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
 ${user && !opts.hideTop ? '<aside id="pane" class="pane"><div class="pane-head" id="paneHead"></div><div class="pane-body" id="paneBody"></div></aside>' : ''}<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}">${esc(topTitle(title))}</a><span style="width:40px"></span></header>
-<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/about">About</a><a href="/guides">Study guides</a><a href="/contact">Contact</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
 <script>(function(){if(innerWidth<1024||window.top!==window.self||document.documentElement.getAttribute('data-dev')==='phone')return;
 document.querySelectorAll('.drawer-item').forEach(function(a){a.title=a.textContent.trim()});
 var pane=document.getElementById('pane'),main=document.querySelector('main');if(!pane||!main)return;
@@ -2143,7 +2143,8 @@ const checkEmailPage = email => notice('Check your email', `We sent a verificati
 // or not, "/" and "/news" show the same thing -- the news feed. Everything else (dashboard,
 // browse pages, admin, chat, settings) lives one tap away in the navigation drawer instead.
 // Visitors who just open the link land on the news; anyone logged in lands on their dashboard.
-app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD })));
+const HOME_INTRO = `<section style="max-width:820px;margin:18px auto 8px;padding:0 4px;line-height:1.7"><h1 style="font-size:clamp(24px,5vw,34px);line-height:1.2;margin:0 0 8px">Studies Hub: free study materials for Nigerian university students</h1><p class="mut" style="margin:0 0 10px">Find course materials, past questions, timetables and campus news in one place, and chat with your coursemates. <a href="/about">About us</a> &middot; <a href="/how-it-works">How it works</a> &middot; <a href="/guides">Study guides</a></p></section>`;
+app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', HOME_INTRO + newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD, description: 'Studies Hub is a free study platform for Nigerian university students: course materials, past questions, timetables, campus news and student chats.' })));
 
 app.get('/browse', (req, res) => {
   const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level,author_id,course_id,semester,university FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
@@ -2293,6 +2294,8 @@ const ADSENSE_HEAD = `<meta name="google-adsense-account" content="${ADSENSE_CLI
 const ADSENSE_FEED_SLOT = String(process.env.ADSENSE_FEED_SLOT || '').replace(/[^0-9]/g, '');
 const ADSENSE_FEED_LAYOUT_KEY = String(process.env.ADSENSE_FEED_LAYOUT_KEY || '').replace(/[^A-Za-z0-9_+=-]/g, '');
 const feedAdCard = () => `<div class="news-card ad-card"><div class="ad-label">Advertisement</div><ins class="adsbygoogle" style="display:block" data-ad-client="${ADSENSE_CLIENT}" data-ad-slot="${ADSENSE_FEED_SLOT}"${ADSENSE_FEED_LAYOUT_KEY ? ` data-ad-format="fluid" data-ad-layout-key="${ADSENSE_FEED_LAYOUT_KEY}"` : ' data-ad-format="auto" data-full-width-responsive="true"'}></ins><script>(adsbygoogle = window.adsbygoogle || []).push({});</script></div>`;
+// Public reading pages (About, How it works, Contact, Study guides, sitemap, robots): anyone can read them without logging in.
+require('./public_pages').register(app, { layout, esc, adHead: ADSENSE_HEAD, baseUrl: String(process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org').replace(/\/+$/, ''), contactEmail: (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim() });
 app.get('/ads.txt', (req, res) => res.type('text/plain').send(`google.com, pub-${ADSENSE_CLIENT.replace('ca-pub-', '')}, DIRECT, f08c47fec0942fa0\n`));
 function newsFeedBody(req, home = false) {
   const all = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
