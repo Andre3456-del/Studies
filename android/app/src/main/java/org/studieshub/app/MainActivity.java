@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
     private boolean inCall, frameBusy;
     private static final int REQ_PROJ = 17;
     private int dismissedVersion;
+    private int retryN;
     private volatile String uaCache = "";
     private boolean updateAsked;
     private GeolocationPermissions.Callback geoCb;
@@ -322,6 +323,7 @@ public class MainActivity extends Activity {
                 return OfflineStore.serve(MainActivity.this, r.getUrl(), r.getMethod(), r.getRequestHeaders(), r.isForMainFrame());
             }
             @Override public void onPageFinished(WebView v, String url) {
+                if (url != null && url.startsWith("https://")) retryN = 0;
                 CookieManager.getInstance().flush();
                 if (!"online".equals(net)) v.evaluateJavascript("window.__net&&__net('" + net + "',1)", null);
                 else if (url != null) { OfflineStore.remember(MainActivity.this, url); warmUp(); }
@@ -355,8 +357,14 @@ public class MainActivity extends Activity {
                         v.post(() -> { if (v.canGoBack()) v.goBack(); });
                         return;
                     }
+                    final String failed = r.getUrl().toString();
                     v.loadDataWithBaseURL(null, OfflineStore.offlinePage(MainActivity.this),
                         "text/html", "utf-8", null);
+                    // The phone has a connection but the site did not answer (it is restarting after an update): keep trying quietly, then open the page by itself.
+                    if (!OfflineStore.hard && retryN < 40) {
+                        retryN++;
+                        v.postDelayed(() -> { if (!isFinishing() && "Offline".equals(v.getTitle())) v.loadUrl(failed); }, 3000);
+                    }
                 }
             }
         });

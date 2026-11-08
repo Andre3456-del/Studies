@@ -2199,7 +2199,7 @@ function refresh(){if(busy)return;if(!ok()){pend=true;return}busy=true;pend=fals
   else if(o.length){var f=o[0];w.forEach(function(x){m.insertBefore(document.importNode(x,true),f)});o.forEach(function(x){x.remove()})}
   window.scrollTo(0,y)}).catch(function(){}).then(function(){busy=false})}
 function onEv(){setTimeout(refresh,Math.random()*1200)}
-try{var es=new EventSource('/api/live');es.onmessage=onEv}catch(e){return}
+try{var es=new EventSource('/api/live'),was=false;es.onmessage=onEv;es.onerror=function(){was=true};es.onopen=function(){if(was){was=false;refresh()}}}catch(e){return}
 document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh()});
 window.addEventListener('shnet',refresh);
 setInterval(function(){if(pend&&ok())refresh()},4000)})();`;
@@ -6314,7 +6314,12 @@ try {
   }
   setSecret('run_state', 'running');
 } catch (e) { console.error(e.message); }
-for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { setSecret('run_state', 'stopped'); } catch (e) { console.error('Shutdown note failed:', e.message); } process.exit(0); });
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
+  try { setSecret('run_state', 'stopped'); } catch (e) { console.error('Shutdown note failed:', e.message); }
+  // Let go of open live connections at once, so a restart is over as quickly as possible and the pages reconnect themselves.
+  try { for (const r of liveClients) r.end(); } catch (e) { /* ignore */ }
+  setTimeout(() => process.exit(0), 300);
+});
 function notifyAdminCrash() {
   const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
   deliver(ADMIN_EMAIL, 'Studies Hub restarted unexpectedly', 'The site stopped without shutting down cleanly and has started again. If it keeps happening, check the logs in Railway.', emailShell('<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">The site restarted unexpectedly</h2><p>It stopped without shutting down cleanly and has started again. If this keeps happening, check the logs in Railway.</p>', base)).catch(() => {});
