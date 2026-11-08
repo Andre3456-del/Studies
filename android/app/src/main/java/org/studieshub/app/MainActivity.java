@@ -232,6 +232,9 @@ public class MainActivity extends Activity {
             @JavascriptInterface public void offRemove(String slug) { OfflineStore.remove(MainActivity.this, slug); }
             @JavascriptInterface public String offList() { return OfflineStore.list(MainActivity.this); }
             @JavascriptInterface public String netState() { return net; }
+            @JavascriptInterface public String bkGet() { return Backup.get(MainActivity.this); }
+            @JavascriptInterface public void bkSet(String freq, boolean wifiOnly) { Backup.set(MainActivity.this, freq, wifiOnly); }
+            @JavascriptInterface public String bkSpace() { return Backup.space(MainActivity.this); }
             @JavascriptInterface public boolean notifOn() {
                 try {
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
