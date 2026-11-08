@@ -2077,8 +2077,10 @@ function toast(msg,kind){if(!bar){bar=document.createElement('div');bar.style.cs
  bar.style.background=kind==='ok'?'#16a34a':kind==='err'?'#b91c1c':'#334155';bar.textContent=msg;bar.hidden=false;if(tm)clearTimeout(tm);tm=setTimeout(function(){bar.hidden=true},4000)}
 window.__toast=toast;window.__noInet=function(){toast(NOINET,'err')};
 // No "you are offline" notices. The app only remembers the state, tells the chat to send what is waiting once the internet is back, and shows an error only when something truly needs the internet.
-window.__net=function(s){window.__netState=s;if(s==='online'){try{window.dispatchEvent(new Event('shnet'))}catch(e){}}};
+function offPill(){var on=window.__netState==='offline',p=document.getElementById('shOffPill');if(on&&!p&&document.body){p=document.createElement('div');p.id='shOffPill';p.textContent='Offline';p.style.cssText='position:fixed;top:8px;right:10px;z-index:2147483000;background:rgba(60,60,70,.92);color:#fff;font:600 12px system-ui,sans-serif;padding:4px 10px;border-radius:999px;pointer-events:none';document.body.appendChild(p)}else if(!on&&p)p.remove()}
+window.__net=function(s){window.__netState=s;offPill();if(s==='online'){try{window.dispatchEvent(new Event('shnet'))}catch(e){}}};
 try{window.__netState=String(A.netState()||'online')}catch(e){}
+offPill();document.addEventListener('DOMContentLoaded',offPill);
 document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM'||f.hasAttribute('data-offok'))return;var st='online';try{st=String(A.netState())}catch(x){}if(st!=='offline')return;if((f.getAttribute('method')||'get').toLowerCase()!=='post')return;e.preventDefault();e.stopImmediatePropagation();toast(NOINET,'err')},true);
 var ob=document.getElementById('offBar');
 if(ob){var slug=ob.getAttribute('data-slug'),ttl=ob.getAttribute('data-title')||'',kd=ob.getAttribute('data-kind')||'',crs=ob.getAttribute('data-course')||'',fl=ob.getAttribute('data-file')||'',tick=null;

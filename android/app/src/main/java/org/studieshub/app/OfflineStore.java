@@ -392,23 +392,11 @@ final class OfflineStore {
 
     private static String esc(String s) { return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;"); }
 
+    /** A page that was never opened on this phone: it looks like the app, with a quiet line, and no "try again". */
     static String offlinePage(Context c) {
-        StringBuilder b = new StringBuilder();
-        try {
-            JSONArray a = new JSONArray(list(c));
-            for (int i = 0; i < a.length(); i++) {
-                JSONObject o = a.getJSONObject(i);
-                String k = o.optString("kind");
-                b.append("<a class='it' href='/p/").append(esc(o.optString("slug"))).append("'><span class='ic'>").append("pdf".equals(k) ? "\uD83D\uDCD5" : "video".equals(k) ? "\uD83C\uDFAC" : "\uD83D\uDCC4").append("</span><span class='tx'><b>").append(esc(o.optString("title"))).append("</b><small>").append(esc(o.optString("course"))).append(o.optString("course").isEmpty() ? "" : " \u00b7 ").append(String.format("%.1f MB", o.optLong("size") / 1048576.0)).append("</small></span></a>");
-            }
-        } catch (Exception e) { }
-        String list = b.length() == 0 ? "<p class='mut'>Nothing is saved on this phone yet.<br>When you are online, open a material and tap <b>Save for offline</b>.</p>" : b.toString();
         return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Offline</title><style>"
-            + ":root{color-scheme:dark light}body{margin:0;background:#000;color:#fff;font-family:system-ui,sans-serif;padding:20px 16px 40px}@media(prefers-color-scheme:light){body{background:#fff;color:#111}.it{background:#f1f1f5!important}}"
-            + "h1{margin:6px 0 4px;font-size:24px}.mut{opacity:.7;line-height:1.5}.top{background:#1d1b3a;border-radius:16px;padding:16px;margin-bottom:18px}@media(prefers-color-scheme:light){.top{background:#ecebff}}"
-            + ".it{display:flex;gap:12px;align-items:center;text-decoration:none;color:inherit;background:#15151f;border-radius:14px;padding:14px;margin:10px 0}.ic{font-size:28px}.tx{display:block;min-width:0}.tx b{display:block}.tx small{opacity:.65}"
-            + "button{font-size:16px;padding:12px 24px;border:0;border-radius:12px;background:#6c63ff;color:#fff;margin-top:8px}"
-            + "</style></head><body><div class='top'><h1>No internet connection</h1><p class='mut' style='margin:0'>Check your internet connection and try again.</p><button onclick=\"location.reload()\">Try again</button></div>"
-            + "<h3>Saved on this phone</h3>" + list + "</body></html>";
+            + ":root{color-scheme:dark light}body{margin:0;background:#000;color:#fff;font-family:system-ui,sans-serif;padding:80px 24px;text-align:center}@media(prefers-color-scheme:light){body{background:#fff;color:#111}}"
+            + "p{opacity:.65;line-height:1.6}</style></head><body><p>This page has not been opened on this phone yet.<br>It will open as soon as you are online.</p>"
+            + "<script>(function(){var A=window.StudiesApp;function pill(){var on=false;try{on=String(A.netState())==='offline'}catch(e){}var p=document.getElementById('shOffPill');if(on&&!p){p=document.createElement('div');p.id='shOffPill';p.textContent='Offline';p.style.cssText='position:fixed;top:8px;right:10px;background:rgba(60,60,70,.92);color:#fff;font:600 12px system-ui;padding:4px 10px;border-radius:999px';document.body.appendChild(p)}else if(!on&&p)p.remove()}window.__net=function(){pill()};pill()})()</script></body></html>";
     }
 }

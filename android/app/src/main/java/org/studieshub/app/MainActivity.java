@@ -339,8 +339,7 @@ public class MainActivity extends Activity {
                     }
                     v.loadDataWithBaseURL(null,
                         "<html><head><title>Offline</title></head><body style='margin:0;background:#000;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center'>"
-                        + "<div style='padding:24px'><h2>No internet connection</h2><p style='opacity:.7'>Check your internet connection and try again.</p>"
-                        + "<button style='font-size:16px;padding:12px 28px;border:0;border-radius:10px;background:#6c63ff;color:#fff' onclick=\"location.href='" + HOME + "'\">Try again</button></div></body></html>",
+                        + "<div style='padding:24px'><p style='opacity:.65;line-height:1.6'>This page has not been opened on this phone yet.<br>It will open as soon as you are online.</p></div></body></html>",
                         "text/html", "utf-8", null);
                 }
             }
