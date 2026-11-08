@@ -355,9 +355,7 @@ public class MainActivity extends Activity {
                         v.post(() -> { if (v.canGoBack()) v.goBack(); });
                         return;
                     }
-                    v.loadDataWithBaseURL(null,
-                        "<html><head><title>Offline</title></head><body style='margin:0;background:#000;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center'>"
-                        + "<div style='padding:24px'><p style='opacity:.65;line-height:1.6'>This page has not been opened on this phone yet.<br>It will open as soon as you are online.</p></div></body></html>",
+                    v.loadDataWithBaseURL(null, OfflineStore.offlinePage(MainActivity.this),
                         "text/html", "utf-8", null);
                 }
             }
@@ -818,7 +816,7 @@ public class MainActivity extends Activity {
     private void warmUp() {
         if (System.currentTimeMillis() - lastWarm < 6 * 3600 * 1000L) return;
         lastWarm = System.currentTimeMillis();
-        for (String p : new String[]{"/", "/dashboard", "/chat", "/news", "/settings", "/settings/profile", "/settings/active-status", "/settings/appearance", "/settings/notifications", "/settings/security", "/saved"})
+        for (String p : new String[]{"/", "/dashboard", "/chat", "/news", "/settings", "/settings/profile", "/settings/active-status", "/settings/appearance", "/settings/notifications", "/settings/security", "/saved", "/chat/starred", "/chat/group/new", "/chat/feedback", "/settings/devices", "/settings/backup", "/uni", "/uni/news", "/uni/uploads", "/uni/support"})
             OfflineStore.remember(this, "https://studieshub.org" + p);
         OfflineStore.prune(this);
     }
@@ -832,7 +830,7 @@ public class MainActivity extends Activity {
         if (n.equals(net)) return;
         String old = net;
         net = n;
-        OfflineStore.offline = !"online".equals(n);
+        OfflineStore.offline = !"online".equals(n); OfflineStore.hard = "offline".equals(n);
         synchronized (flips) { flips.add(System.currentTimeMillis()); }
         runOnUiThread(() -> { try { web.evaluateJavascript("window.__net&&__net('" + n + "')", null); if ("online".equals(n)) web.evaluateJavascript("if(document.title==='Offline')location.reload()", null); } catch (Throwable t) { } });
     }

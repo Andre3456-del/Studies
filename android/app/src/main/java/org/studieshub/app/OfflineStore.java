@@ -28,6 +28,7 @@ final class OfflineStore {
     static final String BASE = "https://studieshub.org";
     static volatile String userId = "0";
     /** true while the phone is offline or the network is not steady */
+    static volatile boolean hard = false;
     static volatile boolean offline = false;
     static final ConcurrentHashMap<String, String> STATUS = new ConcurrentHashMap<>();
 
@@ -373,6 +374,8 @@ final class OfflineStore {
                     Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "no-store");
                     return resp(cmime == null ? "text/html" : cmime, cmime != null && cmime.startsWith("text/") ? "utf-8" : null, 200, "OK", h, new FileInputStream(cf));
                 }
+                // A weak connection is not "no connection": let the page try the network. Only when there truly is none, show the app's own empty frame.
+                if (!hard) return null;
                 if (mainFrame) {
                     Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "no-store");
                     return resp("text/html", "utf-8", 200, "OK", h, new ByteArrayInputStream(offlinePage(c).getBytes(StandardCharsets.UTF_8)));
@@ -392,11 +395,16 @@ final class OfflineStore {
 
     private static String esc(String s) { return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;"); }
 
-    /** A page that was never opened on this phone: it looks like the app, with a quiet line, and no "try again". */
+    /** A page never opened on this phone, with no internet: the app's own frame (top bar, empty cards, bottom tabs), no message to read. */
     static String offlinePage(Context c) {
+        String ico = "<svg width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>";
         return "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Offline</title><style>"
-            + ":root{color-scheme:dark light}body{margin:0;background:#000;color:#fff;font-family:system-ui,sans-serif;padding:80px 24px;text-align:center}@media(prefers-color-scheme:light){body{background:#fff;color:#111}}"
-            + "p{opacity:.65;line-height:1.6}</style></head><body><p>This page has not been opened on this phone yet.<br>It will open as soon as you are online.</p>"
-            + "<script>(function(){var A=window.StudiesApp;function pill(){var on=false;try{on=String(A.netState())==='offline'}catch(e){}var p=document.getElementById('shOffPill');if(on&&!p){p=document.createElement('div');p.id='shOffPill';p.textContent='Offline';p.style.cssText='position:fixed;top:8px;right:10px;background:rgba(60,60,70,.92);color:#fff;font:600 12px system-ui;padding:4px 10px;border-radius:999px';document.body.appendChild(p)}else if(!on&&p)p.remove()}window.__net=function(){pill()};pill()})()</script></body></html>";
+            + ":root{color-scheme:dark light}*{box-sizing:border-box}body{margin:0;background:#0b0d14;color:#fff;font-family:system-ui,sans-serif;min-height:100vh}@media(prefers-color-scheme:light){body{background:#f3f4f8;color:#111}}"
+            + ".bar{height:56px;display:flex;align-items:center;padding:0 20px;font-weight:700;font-size:20px;background:rgba(127,127,140,.12)}"
+            + ".sk{margin:16px;height:92px;border-radius:18px;background:rgba(127,127,140,.14)}.sk.s{height:56px}"
+            + ".tab{position:fixed;left:0;right:0;bottom:0;height:64px;display:flex;justify-content:space-around;align-items:center;background:rgba(127,127,140,.16)}.tab a{color:#5bc8ff;padding:14px}"
+            + "</style></head><body><div class='bar'>Studies Hub</div><div class='sk'></div><div class='sk s'></div><div class='sk'></div><div class='sk s'></div><div class='sk'></div>"
+            + "<div class='tab'><a href='/dashboard'>" + ico + "<path d='M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z'/></svg></a><a href='/news'>" + ico + "<rect x='4' y='3' width='16' height='18' rx='2'/><path d='M8 8h8M8 12h8M8 16h5'/></svg></a><a href='/chat'>" + ico + "<path d='M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z'/></svg></a><a href='/settings'>" + ico + "<path d='M4 6h16M4 12h16M4 18h16'/></svg></a></div>"
+            + "<script>(function(){var A=window.StudiesApp;function pill(){var on=false;try{on=String(A.netState())==='offline'}catch(e){}var p=document.getElementById('shOffPill');if(on&&!p){p=document.createElement('div');p.id='shOffPill';p.textContent='Offline';p.style.cssText='position:fixed;top:14px;right:12px;background:rgba(60,60,70,.92);color:#fff;font:600 12px system-ui;padding:4px 10px;border-radius:999px';document.body.appendChild(p)}else if(!on&&p)p.remove()}window.__net=function(){pill()};pill()})()</script></body></html>";
     }
 }
