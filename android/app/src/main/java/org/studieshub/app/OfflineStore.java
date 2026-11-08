@@ -335,7 +335,7 @@ final class OfflineStore {
                     InputStream in = c.getAssets().open("webassets/" + am.group(1));
                     Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "public, max-age=31536000, immutable"); h.put("Access-Control-Allow-Origin", "*");
                     return resp("js".equals(am.group(2)) ? "application/javascript" : "text/css", "utf-8", 200, "OK", h, in);
-                } catch (IOException e) { /* not in this version of the app: fetch it from the site */ }
+                } catch (java.io.IOException e) { /* not in this version of the app: fetch it from the site */ }
             }
             Matcher m = Pattern.compile("^/p/([A-Za-z0-9_-]+)(/raw)?/?$").matcher(path);
             if (m.find()) {
