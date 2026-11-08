@@ -53,6 +53,7 @@
         <provider android:name="androidx.core.content.FileProvider" android:authorities="org.studieshub.app.fileprovider" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
+        <service android:name=".PingJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".ScreenShareService" android:exported="false" android:foregroundServiceType="mediaProjection" />
         <service android:name=".PresenceService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Shows the person as online to their friends while the phone has internet" />

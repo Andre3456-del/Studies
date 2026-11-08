@@ -486,6 +486,7 @@ public class MainActivity extends Activity {
 
     private void startPresence() {
         try { stopService(new Intent(this, PresenceService.class)); } catch (Throwable t) { /* ignore */ }
+        PingJob.schedule(this);
     }
 
     /** Asks once for permission to show notifications (Android 13 and newer), so progress and "complete" notices can appear. */
