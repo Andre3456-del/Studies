@@ -149,15 +149,27 @@ final class Gdrive {
                 h.setDoOutput(true); h.getOutputStream().write(json.getBytes("UTF-8"));
             }
             int code = h.getResponseCode();
-            read(h);
+            String resp = read(h);
             if (code >= 200 && code < 300) {
                 p(c).edit().putLong("gd_last", System.currentTimeMillis()).putString("gd_found", new JSONObject().put("at", System.currentTimeMillis()).put("items", pl.getJSONArray("items").length()).toString()).apply();
                 msg = "Backed up to Google Drive.";
                 return true;
             }
-            msg = "Google Drive did not accept the backup (" + code + ").";
+            msg = "Google Drive did not accept the backup (" + code + "): " + why(resp);
         } catch (Throwable t) { msg = "Could not reach Google Drive."; }
         return false;
+    }
+
+    /** Google's own words for what went wrong, shortened. */
+    private static String why(String resp) {
+        try {
+            JSONObject e = new JSONObject(resp).getJSONObject("error");
+            String m = e.optString("message", "");
+            JSONArray er = e.optJSONArray("errors");
+            String r = er != null && er.length() > 0 ? er.getJSONObject(0).optString("reason", "") : "";
+            String t = (r.isEmpty() ? "" : r + ". ") + m;
+            return t.length() > 220 ? t.substring(0, 220) : t;
+        } catch (Throwable t) { return resp == null ? "" : (resp.length() > 160 ? resp.substring(0, 160) : resp); }
     }
 
     /** The backup stored in the person's Drive, or null. */
