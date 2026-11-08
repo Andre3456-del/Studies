@@ -42,7 +42,9 @@ function register(db) {
       const tk = await accessToken(a);
       return Promise.all(rows.map(async ({ token }) => {
         const r = await fetch(`https://fcm.googleapis.com/v1/projects/${a.project_id}/messages:send`, { method: 'POST', headers: { Authorization: 'Bearer ' + tk, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { token, data: { type: 'note', title: 'Studies Hub test', body: 'If you can see this, notifications work.', url: '/', tag: 'test' }, android: { priority: 'HIGH', ttl: '60s' } } }) });
-        return { phone: token.slice(0, 8) + '...', status: r.status, answer: (await r.text()).slice(0, 300) };
+        const answer = (await r.text()).slice(0, 300);
+        if ((r.status === 404 || r.status === 400) && /UNREGISTERED|NOT_FOUND|INVALID_ARGUMENT/.test(answer)) { this.forget(token); return { phone: token.slice(0, 8) + '...', status: r.status, old: true, answer }; }
+        return { phone: token.slice(0, 8) + '...', status: r.status, answer };
       }));
     },
     // Remember which phone belongs to which signed-in person.
