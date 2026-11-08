@@ -70,7 +70,8 @@ public class MainActivity extends Activity {
     private int dismissedVersion;
     private int retryN;
     private volatile String uaCache = "";
-    private boolean updateAsked;
+    private boolean updateFetching;
+    private View updateBar;
     private GeolocationPermissions.Callback geoCb;
     private String geoOrigin;
 
@@ -667,6 +668,7 @@ public class MainActivity extends Activity {
     @Override protected void onPause() { super.onPause(); fg = false; if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
     @Override protected void onResume() {
         super.onResume(); fg = true; if (getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("off_auto", false) && System.currentTimeMillis() - lastTopUp > 1800000L) topUp(); if (OfflineStore.queued(this) > 0) OfflineService.start(this); web.onResume(); skipLock = false; if (!locked) secure(false);
+        showUpdateBar();
         if (System.currentTimeMillis() - lastUpdateCheck > 120000L) checkUpdate();
     }
 
@@ -698,25 +700,86 @@ public class MainActivity extends Activity {
                 while ((ln = br.readLine()) != null) sb.append(ln);
                 final int latest = new JSONObject(sb.toString()).getInt("versionCode");
                 final int mine = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
-                if (latest > mine && latest != dismissedVersion && !updateAsked) {
-                    updateAsked = true;
-                    runOnUiThread(() -> askUpdate(latest));
-                }
+                if (latest > mine && latest != dismissedVersion) runOnUiThread(() -> { if (!showUpdateBar()) fetchUpdate(); });
             } catch (Exception e) { }
         }).start();
     }
 
-    private void askUpdate(final int latest) {
-        new android.app.AlertDialog.Builder(this).setTitle("Update ready")
-            .setMessage("A new version of Studies Hub is ready. Update now? It takes a few seconds.")
-            .setPositiveButton("Update now", (d, w) -> { updateAsked = false; startUpdate(); })
-            .setNegativeButton("Later", (d, w) -> { dismissedVersion = latest; updateAsked = false; })
-            .setOnCancelListener(d -> { dismissedVersion = latest; updateAsked = false; }).show();
+    private java.io.File updateFile() { return new java.io.File(getExternalFilesDir("updates"), "StudiesHub.apk"); }
+
+    /** True when a finished, newer update file is waiting on the phone (and the "Install now" bar is showing). */
+    private boolean showUpdateBar() {
+        try {
+            java.io.File f = updateFile();
+            if (!f.exists() || f.length() < 1000000) return false;
+            android.content.pm.PackageInfo pi = getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0);
+            if (pi == null || pi.versionCode <= getPackageManager().getPackageInfo(getPackageName(), 0).versionCode) { f.delete(); return false; }
+            if (updateBar != null && updateBar.getParent() != null) return true;
+            final float d = getResources().getDisplayMetrics().density;
+            android.widget.LinearLayout bar = new android.widget.LinearLayout(this);
+            bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            bar.setPadding((int) (16 * d), (int) (10 * d), (int) (8 * d), (int) (10 * d));
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(0xFF111111); bg.setCornerRadius(14 * d); bg.setStroke((int) d, 0xFF2A2A2A);
+            bar.setBackground(bg); bar.setElevation(8 * d);
+            android.widget.TextView t = new android.widget.TextView(this);
+            t.setText("A new version is ready"); t.setTextColor(0xFFFFFFFF); t.setTextSize(14);
+            bar.addView(t, new android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            android.widget.TextView go = new android.widget.TextView(this);
+            go.setText("Install now"); go.setTextColor(0xFF000000); go.setTextSize(14); go.setTypeface(null, android.graphics.Typeface.BOLD);
+            go.setPadding((int) (14 * d), (int) (8 * d), (int) (14 * d), (int) (8 * d));
+            android.graphics.drawable.GradientDrawable gb = new android.graphics.drawable.GradientDrawable();
+            gb.setColor(0xFFFFFFFF); gb.setCornerRadius(10 * d); go.setBackground(gb);
+            go.setOnClickListener(v -> startUpdate());
+            bar.addView(go);
+            android.widget.TextView x = new android.widget.TextView(this);
+            x.setText("\u2715"); x.setTextColor(0xFF9A9A9A); x.setTextSize(16); x.setPadding((int) (12 * d), (int) (6 * d), (int) (8 * d), (int) (6 * d));
+            x.setOnClickListener(v -> { dismissedVersion = pi.versionCode; hideUpdateBar(); });
+            bar.addView(x);
+            android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.BOTTOM);
+            lp.setMargins((int) (12 * d), 0, (int) (12 * d), (int) (16 * d));
+            ((android.view.ViewGroup) findViewById(android.R.id.content)).addView(bar, lp);
+            updateBar = bar;
+            return true;
+        } catch (Exception e) { return false; }
     }
 
+    private void hideUpdateBar() {
+        if (updateBar != null && updateBar.getParent() instanceof android.view.ViewGroup) ((android.view.ViewGroup) updateBar.getParent()).removeView(updateBar);
+        updateBar = null;
+    }
+
+    /** Downloads the new app quietly in the background while the person keeps using the app. Nothing is asked until it is ready. */
+    private void fetchUpdate() {
+        if (updateFetching) return;
+        try {
+            final java.io.File f = updateFile();
+            if (f.exists()) f.delete();
+            final DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse("https://studieshub.org/StudiesHub.apk"));
+            r.setTitle("Studies Hub update");
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN);
+            r.setDestinationInExternalFilesDir(this, "updates", "StudiesHub.apk");
+            final long id = dm.enqueue(r);
+            updateFetching = true;
+            android.content.BroadcastReceiver rc = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(android.content.Context c2, Intent i) {
+                    if (i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) != id) return;
+                    try { c2.getApplicationContext().unregisterReceiver(this); } catch (Exception e) { }
+                    updateFetching = false;
+                    if (!showUpdateBar()) { try { f.delete(); } catch (Exception e) { } }
+                }
+            };
+            android.content.IntentFilter flt = new android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+            if (Build.VERSION.SDK_INT >= 33) getApplicationContext().registerReceiver(rc, flt, RECEIVER_EXPORTED); else getApplicationContext().registerReceiver(rc, flt);
+        } catch (Exception e) { updateFetching = false; }
+    }
+
+    /** Runs when the person taps "Install now": the file is already here, so Android's install screen opens straight away. */
     private void startUpdate() {
         if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
-            new android.app.AlertDialog.Builder(this).setMessage("To update, allow Studies Hub to install updates. Turn on the switch on the next screen, then come back.")
+            new android.app.AlertDialog.Builder(this).setMessage("To update, allow Studies Hub to install updates. Turn on the switch on the next screen, then come back and tap Install now.")
                 .setPositiveButton("OK", (d, w) -> {
                     skipLock = true;
                     try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); } catch (Exception e) { }
@@ -724,46 +787,15 @@ public class MainActivity extends Activity {
             return;
         }
         try {
-            final java.io.File dir = getExternalFilesDir("updates");
-            final java.io.File f = new java.io.File(dir, "StudiesHub.apk");
-            if (f.exists()) f.delete();
-            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            DownloadManager.Request r = new DownloadManager.Request(Uri.parse("https://studieshub.org/StudiesHub.apk"));
-            r.setTitle("Studies Hub update");
-            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            r.setDestinationInExternalFilesDir(this, "updates", "StudiesHub.apk");
-            final long id = dm.enqueue(r);
-            android.widget.Toast.makeText(this, "Downloading the update...", android.widget.Toast.LENGTH_LONG).show();
-            android.content.BroadcastReceiver rc = new android.content.BroadcastReceiver() {
-                @Override public void onReceive(android.content.Context c2, Intent i) {
-                    if (i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) != id) return;
-                    try { unregisterReceiver(this); } catch (Exception e) { }
-                    try {
-                        // only install if the download really finished and is a newer build
-                        DownloadManager.Query q = new DownloadManager.Query().setFilterById(id);
-                        android.database.Cursor cu = dm.query(q);
-                        boolean ok = false;
-                        if (cu != null) { if (cu.moveToFirst()) ok = cu.getInt(cu.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) == DownloadManager.STATUS_SUCCESSFUL; cu.close(); }
-                        android.content.pm.PackageInfo pi = ok && f.length() > 1000000 ? getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0) : null;
-                        if (pi == null || pi.versionCode <= getPackageManager().getPackageInfo(getPackageName(), 0).versionCode) {
-                            f.delete();
-                            android.widget.Toast.makeText(MainActivity.this, pi == null ? "The update did not download fully. Please try again." : "The update is not ready yet. Please try again in a minute.", android.widget.Toast.LENGTH_LONG).show();
-                            return;
-                        }
-                        Uri u = androidx.core.content.FileProvider.getUriForFile(MainActivity.this, "org.studieshub.app.fileprovider", f);
-                        Intent in = new Intent(Intent.ACTION_VIEW).setDataAndType(u, "application/vnd.android.package-archive")
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                        skipLock = true;
-                        startActivity(in);
-                    } catch (Exception e) {
-                        android.widget.Toast.makeText(MainActivity.this, "The update could not be opened. Try again later.", android.widget.Toast.LENGTH_LONG).show();
-                    }
-                }
-            };
-            android.content.IntentFilter flt = new android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
-            if (Build.VERSION.SDK_INT >= 33) registerReceiver(rc, flt, RECEIVER_EXPORTED); else registerReceiver(rc, flt);
+            java.io.File f = updateFile();
+            if (!f.exists()) { hideUpdateBar(); fetchUpdate(); return; }
+            Uri u = androidx.core.content.FileProvider.getUriForFile(this, "org.studieshub.app.fileprovider", f);
+            Intent in = new Intent(Intent.ACTION_VIEW).setDataAndType(u, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            skipLock = true;
+            startActivity(in);
         } catch (Exception e) {
-            android.widget.Toast.makeText(this, "The update could not start. Try again later.", android.widget.Toast.LENGTH_LONG).show();
+            android.widget.Toast.makeText(this, "The update could not be opened. Try again later.", android.widget.Toast.LENGTH_LONG).show();
         }
     }
 
