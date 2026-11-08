@@ -72,17 +72,23 @@ public class CallService extends FirebaseMessagingService {
 
     static void ack(final String method, final String path) {
         new Thread(() -> {
-            try {
-                String cookie = CookieManager.getInstance().getCookie("https://studieshub.org");
-                if (cookie == null || !cookie.contains("sid=")) return;
-                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://studieshub.org" + path).openConnection();
-                h.setRequestMethod(method);
-                h.setConnectTimeout(8000); h.setReadTimeout(8000);
-                h.setRequestProperty("Cookie", cookie);
-                if (method.equals("POST")) { h.setRequestProperty("Content-Type", "application/json"); h.setDoOutput(true); h.getOutputStream().write("{}".getBytes()); }
-                h.getResponseCode();
-                h.disconnect();
-            } catch (Throwable t) { }
+            // The phone has only just got its data back, so the first try can fail: try a few times, a little further apart each time.
+            long[] wait = {0, 2500, 6000, 15000};
+            for (long w : wait) {
+                try {
+                    if (w > 0) Thread.sleep(w);
+                    String cookie = CookieManager.getInstance().getCookie("https://studieshub.org");
+                    if (cookie == null || !cookie.contains("sid=")) return;
+                    java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://studieshub.org" + path).openConnection();
+                    h.setRequestMethod(method);
+                    h.setConnectTimeout(8000); h.setReadTimeout(8000);
+                    h.setRequestProperty("Cookie", cookie);
+                    if (method.equals("POST")) { h.setRequestProperty("Content-Type", "application/json"); h.setDoOutput(true); h.getOutputStream().write("{}".getBytes()); }
+                    int code = h.getResponseCode();
+                    h.disconnect();
+                    if (code >= 200 && code < 300) return;
+                } catch (Throwable t) { }
+            }
         }).start();
     }
 
