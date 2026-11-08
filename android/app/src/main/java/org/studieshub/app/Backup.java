@@ -72,21 +72,35 @@ final class Backup {
         } catch (Throwable t) { return false; }
     }
 
+    /** Why a backup must not be made right now, or null when it can go ahead. */
+    static String payloadError(Context c) {
+        try {
+            SharedPreferences s = p(c);
+            OfflineStore.userId = s.getString("off_uid", "0");
+            if (busy()) return "Saving is still running. Try again when it is done.";
+            // An empty phone must never replace a backup that is waiting to be restored.
+            if (new JSONArray(OfflineStore.list(c)).length() == 0) return "Nothing saved on this phone yet.";
+            return null;
+        } catch (Throwable t) { return "Could not read what is saved."; }
+    }
+
+    static JSONObject payload(Context c) throws Exception {
+        SharedPreferences s = p(c);
+        OfflineStore.userId = s.getString("off_uid", "0");
+        JSONObject prefs = new JSONObject().put("auto", s.getBoolean("off_auto", false)).put("wifi", s.getBoolean("off_wifi", false))
+            .put("bkFreq", s.getString("bk_freq", "off")).put("bkWifi", s.getBoolean("bk_wifi", true));
+        return new JSONObject().put("items", new JSONArray(OfflineStore.list(c))).put("prefs", prefs);
+    }
+
     /** Sends the backup now. Returns "ok" or a short reason. */
     static String run(Context c) {
         try {
             SharedPreferences s = p(c);
-            String uid = s.getString("off_uid", "0");
-            OfflineStore.userId = uid;
-            if (busy()) return "Saving is still running. Try again when it is done.";
-            JSONArray items = new JSONArray(OfflineStore.list(c));
-            // An empty phone must never replace a backup that is waiting to be restored.
-            if (items.length() == 0) return "Nothing saved on this phone yet.";
+            String err = payloadError(c);
+            if (err != null) return err;
             String cookie = CookieManager.getInstance().getCookie("https://studieshub.org");
             if (cookie == null || !cookie.contains("sid=")) return "Log in first.";
-            JSONObject prefs = new JSONObject().put("auto", s.getBoolean("off_auto", false)).put("wifi", s.getBoolean("off_wifi", false))
-                .put("bkFreq", s.getString("bk_freq", "off")).put("bkWifi", s.getBoolean("bk_wifi", true));
-            byte[] body = new JSONObject().put("items", items).put("prefs", prefs).toString().getBytes("UTF-8");
+            byte[] body = payload(c).toString().getBytes("UTF-8");
             java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL("https://studieshub.org/api/backup").openConnection();
             h.setRequestMethod("POST");
             h.setConnectTimeout(15000); h.setReadTimeout(30000);

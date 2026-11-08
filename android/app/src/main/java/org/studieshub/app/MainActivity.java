@@ -235,6 +235,17 @@ public class MainActivity extends Activity {
             @JavascriptInterface public String bkGet() { return Backup.get(MainActivity.this); }
             @JavascriptInterface public void bkSet(String freq, boolean wifiOnly) { Backup.set(MainActivity.this, freq, wifiOnly); }
             @JavascriptInterface public String bkSpace() { return Backup.space(MainActivity.this); }
+            @JavascriptInterface public void gdConnect() { runOnUiThread(() -> Gdrive.connect(MainActivity.this)); }
+            @JavascriptInterface public String gdInfo() { return Gdrive.info(MainActivity.this); }
+            @JavascriptInterface public void gdOff() { Gdrive.off(MainActivity.this); }
+            @JavascriptInterface public void gdBackup() { new Thread(() -> Gdrive.backupNow(MainActivity.this)).start(); }
+            @JavascriptInterface public void gdRestore() {
+                new Thread(() -> {
+                    String d = Gdrive.restoreData(MainActivity.this);
+                    final String q = org.json.JSONObject.quote(d == null ? "" : d);
+                    runOnUiThread(() -> web.evaluateJavascript("window.__gdData&&__gdData(" + q + ")", null));
+                }).start();
+            }
             @JavascriptInterface public boolean notifOn() {
                 try {
                     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
@@ -593,6 +604,10 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onActivityResult(int code, int result, Intent data) {
+        if (code == Gdrive.REQ) {
+            if (result == RESULT_OK) Gdrive.granted(this); else Gdrive.msg = "Google Drive was not allowed.";
+            return;
+        }
         if (code == REQ_SND) {
             if (result == RESULT_OK && soundCat != null && data != null) {
                 Uri picked = data.getParcelableExtra(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
