@@ -182,7 +182,11 @@ public class MainActivity extends Activity {
                 try {
                     askNotif();
                     String cookie = android.webkit.CookieManager.getInstance().getCookie("https://studieshub.org");
-                    String name = (file == null || file.trim().isEmpty() ? slug : file).replaceAll("[\\\\/:*?\"<>|]", "_");
+                    String tailExt = "";
+                    if (file != null) { int d0 = file.lastIndexOf('.'); if (d0 > 0 && file.length() - d0 <= 7) tailExt = file.substring(d0); }
+                    String headStem = title == null ? "" : title.replaceAll("[\\\\/:*?\"<>|]", "_").replaceAll("\\s+", " ").trim();
+                    if (headStem.length() > 100) headStem = headStem.substring(0, 100);
+                    String name = !headStem.isEmpty() ? headStem + tailExt : (file == null || file.trim().isEmpty() ? slug : file).replaceAll("[\\\\/:*?\"<>|]", "_");
                     java.io.File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                     if (new java.io.File(dl, name).exists()) { int dot = name.lastIndexOf('.'); String stem = dot > 0 ? name.substring(0, dot) : name, ext = dot > 0 ? name.substring(dot) : ""; name = stem + " (" + (System.currentTimeMillis() % 10000) + ")" + ext; }
                     DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);

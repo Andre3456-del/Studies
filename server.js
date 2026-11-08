@@ -4757,6 +4757,12 @@ window.__gdData=function(t){if(!t){msg('No backup found in your Google Drive.',1
 gdDraw();setInterval(function(){if(!document.hidden)gdDraw()},2000);
 $('bkRestore').onclick=function(){if(!window.__bkRestore){msg('Update the app to use this.',1);return}msg('Looking for your backup…');window.__bkRestore(function(t,bad){msg(t,bad)})}})()</script>`, req.user));
 });
+// A downloaded material carries the name it has on Studies Hub (for example GET 212), with the original file's ending (.pdf and so on).
+function shFileName(p) {
+  const ext = (/\.[A-Za-z0-9]{1,6}$/.exec(String(p.file_name || '')) || [''])[0];
+  const stem = String(p.title || '').replace(/[^\w .()-]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 100);
+  return stem ? stem + ext : String(p.file_name || p.slug).replace(/[^\w. -]/g, '_');
+}
 app.get('/saved', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/saved');
   // Saved offline belongs to the app only; the website never shows it.
@@ -4855,14 +4861,14 @@ app.get('/p/:slug/raw', (req, res) => {
     const buf = Buffer.from(row.b);
     res.setHeader('Content-Type', vmime);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Disposition', `${req.query.dl ? 'attachment' : 'inline'}; filename="${String(p.file_name || p.slug).replace(/[^\w. -]/g, '_')}"`);
+    res.setHeader('Content-Disposition', `${req.query.dl ? 'attachment' : 'inline'}; filename="${shFileName(p)}"`);
     if (partial) { res.status(206); res.setHeader('Content-Range', `bytes ${start}-${start + buf.length - 1}/${total}`); }
     res.setHeader('Content-Length', buf.length);
     return res.end(buf);
   }
   const safeMime = /^(application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.[a-z.]+|image\/(png|jpe?g|gif|webp))$/i.test(String(p.file_mime || ''));
   res.setHeader('Content-Type', safeMime ? p.file_mime : 'application/octet-stream');
-  res.setHeader('Content-Disposition', `${(p.kind === 'pdf' || p.kind === 'image') && safeMime && !req.query.dl ? 'inline' : 'attachment'}; filename="${(p.file_name || p.slug).replace(/"/g, '')}"`);
+  res.setHeader('Content-Disposition', `${(p.kind === 'pdf' || p.kind === 'image') && safeMime && !req.query.dl ? 'inline' : 'attachment'}; filename="${shFileName(p)}"`);
   res.send(Buffer.from(db.prepare('SELECT file_data FROM pages WHERE id=?').get(p.id).file_data));
 });
 
