@@ -317,6 +317,9 @@ public class MainActivity extends Activity {
                     return true;
                 }
                 if (ours(u)) return false;
+                // Our own empty frame or an inner page is never sent to the browser.
+                String sc = u.getScheme() == null ? "" : u.getScheme();
+                if (sc.equals("about") || sc.equals("data") || sc.equals("blob") || sc.equals("file")) return false;
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception e) { }
                 return true;
             }
@@ -359,7 +362,7 @@ public class MainActivity extends Activity {
                         return;
                     }
                     final String failed = r.getUrl().toString();
-                    v.loadDataWithBaseURL(null, OfflineStore.offlinePage(MainActivity.this),
+                    v.loadDataWithBaseURL("https://studieshub.org/", OfflineStore.offlinePage(MainActivity.this),
                         "text/html", "utf-8", null);
                     // The phone has a connection but the site did not answer (it is restarting after an update): keep trying quietly, then open the page by itself.
                     if (!OfflineStore.hard && retryN < 40) {
