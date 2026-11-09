@@ -412,6 +412,21 @@ final class OfflineStore {
         return null;
     }
 
+    /** The saved copy of a page, for when the phone says it is online but the site cannot be reached. Null if none was kept. */
+    static String cachedHtml(Context c, Uri u) {
+        try {
+            if ("0".equals(userId) || !ourHost(u)) return null;
+            String path = u.getPath() == null ? "" : u.getPath();
+            File cf = new File(pdir(c), pkey(u.toString()));
+            if (!new File(cf.getPath() + ".mime").exists() && (path.isEmpty() || path.equals("/"))) cf = new File(pdir(c), pkey(BASE + "/dashboard"));
+            if (!new File(cf.getPath() + ".mime").exists() && u.getQuery() != null) cf = new File(pdir(c), pkey(BASE + path));
+            if (!cf.exists() || !new File(cf.getPath() + ".mime").exists()) return null;
+            String m = readLine(new File(cf.getPath() + ".mime"));
+            if (m == null || !m.startsWith("text/html")) return null;
+            return new String(readAll(new FileInputStream(cf), 6000000), StandardCharsets.UTF_8);
+        } catch (Throwable t) { return null; }
+    }
+
     private static String esc(String s) { return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;"); }
 
     /** A page never opened on this phone, with no internet: the app's own frame (top bar, empty cards, bottom tabs), no message to read. */

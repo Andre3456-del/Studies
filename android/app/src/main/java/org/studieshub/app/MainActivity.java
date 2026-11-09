@@ -71,6 +71,7 @@ public class MainActivity extends Activity {
     private int retryN;
     private volatile String uaCache = "";
     private boolean updateFetching;
+    private String frameUrl;
     private View updateBar;
     private GeolocationPermissions.Callback geoCb;
     private String geoOrigin;
@@ -362,12 +363,14 @@ public class MainActivity extends Activity {
                         return;
                     }
                     final String failed = r.getUrl().toString();
-                    v.loadDataWithBaseURL("https://studieshub.org/", OfflineStore.offlinePage(MainActivity.this),
+                    String saved = OfflineStore.cachedHtml(MainActivity.this, r.getUrl());
+                    frameUrl = failed;
+                    v.loadDataWithBaseURL("https://studieshub.org/", saved != null ? saved : OfflineStore.offlinePage(MainActivity.this),
                         "text/html", "utf-8", null);
                     // The phone has a connection but the site did not answer (it is restarting after an update): keep trying quietly, then open the page by itself.
                     if (!OfflineStore.hard && retryN < 40) {
                         retryN++;
-                        v.postDelayed(() -> { if (!isFinishing() && "Offline".equals(v.getTitle())) v.loadUrl(failed); }, 3000);
+                        v.postDelayed(() -> { if (!isFinishing() && frameUrl != null && ("Offline".equals(v.getTitle()) || "https://studieshub.org/".equals(v.getUrl()))) { frameUrl = null; v.loadUrl(failed); } }, 3000);
                     }
                 }
             }
