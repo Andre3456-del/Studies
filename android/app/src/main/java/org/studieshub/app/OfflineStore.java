@@ -378,6 +378,14 @@ final class OfflineStore {
             }
             if (offline) {
                 File cf = new File(pdir(c), pkey(u.toString())), cm = new File(cf.getPath() + ".mime");
+                // The front door "/" sends a signed-in person on to their dashboard, so there is no copy of "/" itself: use the dashboard copy.
+                if (!(cf.exists() && cm.exists()) && !"0".equals(userId) && (path.isEmpty() || path.equals("/"))) {
+                    cf = new File(pdir(c), pkey("https://studieshub.org/dashboard")); cm = new File(cf.getPath() + ".mime");
+                }
+                // The same page with a different tail on the address (like ?tab=) still shows the copy of that page.
+                if (!(cf.exists() && cm.exists()) && u.getQuery() != null) {
+                    cf = new File(pdir(c), pkey("https://studieshub.org" + path)); cm = new File(cf.getPath() + ".mime");
+                }
                 if (cf.exists() && cm.exists()) {
                     String cmime = readLine(cm);
                     Map<String, String> h = new HashMap<>(); h.put("Cache-Control", "no-store");
