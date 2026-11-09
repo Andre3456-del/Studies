@@ -2180,12 +2180,13 @@ if(ob){var slug=ob.getAttribute('data-slug'),ttl=ob.getAttribute('data-title')||
  function chip(t){var d=document.createElement('div');d.className='ok';d.textContent=t;box.appendChild(d)}
  var msg='';function note(t){if(!t)return;var d=document.createElement('div');d.style.cssText='flex:1 1 100%;color:#ef4444;font:600 13px system-ui,sans-serif';d.textContent=t;box.appendChild(d)}
  function btn(t,fn){var b=document.createElement('button');b.type='button';b.innerHTML=ICON+'<span></span>';b.lastChild.textContent=t;b.onclick=fn;box.appendChild(b)}
- function draw(){clearTimeout(tick);var a=sa(),p=sp();
+ var wasBusy=false,okmsg='';
+ function draw(){clearTimeout(tick);var a=sa(),p=sp();if(p==='done'&&wasBusy){wasBusy=false;okmsg='Downloaded successfully';setTimeout(function(){okmsg='';draw()},4000)}
   if(a==='queued'||a.indexOf('saving')===0){busy(a==='queued'?'Waiting to start…':'Saving to app… '+pc(a)+'%',pc(a),a==='queued');tick=setTimeout(draw,600);return}
-  if(p==='pending'||p.indexOf('saving')===0){busy(p==='pending'?'Waiting to start…':'Downloading to phone… '+pc(p)+'%',pc(p),p==='pending');tick=setTimeout(draw,600);return}
+  if(p==='pending'||p.indexOf('saving')===0){wasBusy=true;okmsg='';busy(p==='pending'?'Waiting to start…':'Downloading to phone… '+pc(p)+'%',pc(p),p==='pending');tick=setTimeout(draw,600);return}
   box.innerHTML='';hideLinks();var why=a.indexOf('error')===0?a.slice(6):p.indexOf('error')===0?p.slice(6):msg;
   if(a==='saved'){chip('✓ Saved in the app');viewOnly()}else btn(a.indexOf('error')===0?'Could not save. Tap to try again':'Save to app',function(){msg='';var ok=false;try{ok=A.offSave(slug,ttl,kd,crs)}catch(e){}if(!ok&&sa()==='none')msg='Could not start saving. Please update the Studies Hub app and try again.';draw()});
-  if(p==='done')chip('✓ Downloaded to phone');else btn(p.indexOf('error')===0?'Download failed. Tap to try again':'Download to phone',function(){msg='';var ok=false;try{ok=A.dlStart(slug,ttl,fl)}catch(e){}if(!ok&&sp()==='none')msg='Could not start the download. Please update the Studies Hub app and try again.';draw()});note(why)}
+  btn(p.indexOf('error')===0?'Download failed. Tap to try again':'Download to phone',function(){msg='';var ok=false;try{ok=A.dlStart(slug,ttl,fl)}catch(e){}if(!ok&&sp()==='none')msg='Could not start the download. Please update the Studies Hub app and try again.';draw()});note(why);if(okmsg){var g=document.createElement('div');g.style.cssText='flex:1 1 100%;color:#22c55e;font:600 14px system-ui,sans-serif';g.textContent=okmsg;box.appendChild(g)}}
  draw()}
 })()</script>`}${`<script>(function(){var A=window.StudiesApp;if(!A||!A.privatePage)return;var last=null;
 function chk(){var p=location.pathname,v=/^\\/(settings\\/(profile|security|devices)|login|signup|forgot|reset|verify|welcome|pay|admin)(\\/|$)/.test(p);if(v!==last){last=v;try{A.privatePage(v)}catch(e){}}}
