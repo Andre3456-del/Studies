@@ -238,14 +238,16 @@ final class OfflineStore {
             BG.execute(() -> {
                 try {
                     HttpURLConnection h = get(fu, ua, android.webkit.CookieManager.getInstance().getCookie(BASE));
-                    h.setInstanceFollowRedirects(false);
+                    h.setInstanceFollowRedirects(true);
                     String ct = h.getContentType();
-                    if (h.getResponseCode() != 200 || ct == null || !ct.toLowerCase().startsWith("text/html")) { h.disconnect(); return; }
+                    String fp = h.getURL() == null || h.getURL().getPath() == null || h.getURL().getPath().isEmpty() ? "/" : h.getURL().getPath();
+                    // a page that sends you on to another (like the front door to the dashboard) is kept too, but never a sign-in page
+                    if (h.getResponseCode() != 200 || ct == null || !ct.toLowerCase().startsWith("text/html") || !pageOk(fp)) { h.disconnect(); synchronized (recent) { recent.remove(fu); } return; }
                     byte[] body = readAll(h.getInputStream(), 3000000);
                     h.disconnect();
                     if (body == null || !uid.equals(userId)) return;
                     store(new File(pdir(c), pkey(fu)), "text/html", body);
-                } catch (Throwable t) { }
+                } catch (Throwable t) { synchronized (recent) { recent.remove(fu); } }
             });
         } catch (Throwable t) { }
     }

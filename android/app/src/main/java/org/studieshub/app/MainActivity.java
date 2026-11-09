@@ -857,7 +857,7 @@ public class MainActivity extends Activity {
     private long lastWarm = 0;
     /** Once in a while, quietly keeps the main pages so they open with no internet even if they were not visited first. */
     private void warmUp() {
-        if (System.currentTimeMillis() - lastWarm < 6 * 3600 * 1000L) return;
+        if (System.currentTimeMillis() - lastWarm < 3600 * 1000L) return;
         lastWarm = System.currentTimeMillis();
         for (String p : new String[]{"/", "/dashboard", "/chat", "/news", "/settings", "/settings/profile", "/settings/active-status", "/settings/appearance", "/settings/notifications", "/settings/security", "/saved", "/chat/starred", "/chat/group/new", "/chat/feedback", "/settings/devices", "/settings/backup", "/uni", "/uni/news", "/uni/uploads", "/uni/support"})
             OfflineStore.remember(this, "https://studieshub.org" + p);
