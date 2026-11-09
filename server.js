@@ -408,10 +408,15 @@ async function pushTo(sub, payload) {
 // Sent one at a time, with a daily ceiling (MAIL_ALERTS_PER_DAY, default 80) so the email provider's free limit is never
 // burned through; sign-up links and reset codes are sent separately and are never held back by this.
 const MAIL_ALERT_TAGS = new Set(['news', 'upload', 'news-review', 'friend-request', 'friend-accept', 'position', 'lecturer', 'payment', 'sponsor', 'level']);
+// Every alert email carries a link that opens a small page (no sign-in) where the person can switch these emails off, and on again.
+// Verification codes, password resets and site notices are never affected. The link is signed, so nobody can change another person's choice.
+function mailKey() { let k = getSecret('mail_pref_key'); if (!k) { k = crypto.randomBytes(24).toString('hex'); setSecret('mail_pref_key', k); } return k; }
+const mailSig = id => crypto.createHmac('sha256', mailKey()).update('pref:' + id).digest('hex').slice(0, 32);
+const mailPrefLink = (id, base) => `${base}/email/preferences?u=${id}&t=${mailSig(id)}`;
 const mailQueue = []; let mailBusy = false, mailDay = '', mailCount = 0;
 function emailAlso(ids, p) {
   if (!MAIL_ALERT_TAGS.has(p.tag) || process.env.MAIL_ALERTS_OFF === '1') return;
-  const rows = db.prepare(`SELECT id,email,name FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND verified=1`).all(...ids);
+  const rows = db.prepare(`SELECT id,email,name FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND verified=1 AND email_notify!=0`).all(...ids);
   for (const u of rows) mailQueue.push({ u, p });
   if (rows.length) setImmediate(pumpMail);
 }
@@ -426,8 +431,8 @@ async function pumpMail() {
       const { u, p } = mailQueue.shift();
       const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org', link = base + (p.url || '/');
       const first = esc(String(u.name || '').trim().split(/\s+/)[0] || 'there');
-      const text = `Hi ${String(u.name || '').trim().split(/\s+/)[0] || 'there'},\n\n${p.title}${p.body ? '\n' + p.body : ''}\n\nOpen it: ${link}\n\nYou get this email because you have a Studies Hub account.`;
-      const html = emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">${esc(p.title)}</h2><p style="margin:0 0 12px"><b>Hi ${first},</b></p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p style="margin:0 0 20px"><a href="${esc(link)}" style="background:#6d5efc;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:12px;display:inline-block;font-weight:700;font-size:16px">Open on Studies Hub</a></p>`, base);
+      const text = `Hi ${String(u.name || '').trim().split(/\s+/)[0] || 'there'},\n\n${p.title}${p.body ? '\n' + p.body : ''}\n\nOpen it: ${link}\n\nYou get this email because you have a Studies Hub account.\nTo stop these emails (or turn them back on): ${mailPrefLink(u.id, base)}`;
+      const html = emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">${esc(p.title)}</h2><p style="margin:0 0 12px"><b>Hi ${first},</b></p>${p.body ? `<p style="margin:0 0 16px">${esc(p.body)}</p>` : ''}<p style="margin:0 0 20px"><a href="${esc(link)}" style="background:#6d5efc;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:12px;display:inline-block;font-weight:700;font-size:16px">Open on Studies Hub</a></p><p style="margin:22px 0 0;font-size:12px;line-height:1.5;color:#8a93a3">You get this email because you have a Studies Hub account. <a href="${esc(mailPrefLink(u.id, base))}" style="color:#8a93a3">Unsubscribe</a></p>`, base);
       mailCount++;
       try { await deliver(u.email, p.title, text, html); } catch (e) { console.error('Alert email failed:', e.message); }
       await new Promise(r => setTimeout(r, 700));
@@ -2259,6 +2264,34 @@ app.get('/browse', (req, res) => {
 // Privacy policy -- public, no login needed. Describes what this app actually does, in plain language.
 // NOTE: this is a plain-language description of the app's real behavior, not legal advice -- have it
 // checked by a lawyer for your jurisdiction (e.g. Nigeria's NDPA) before you rely on it.
+// The page behind the link at the bottom of alert emails: no sign-in needed; the signed link proves whose choice it is.
+function mailPrefPage(req, u, note) {
+  const on = u.email_notify !== 0;
+  const t = mailSig(u.id);
+  return layout('Email preferences', `<div style="max-width:460px;margin:40px auto;padding:0 16px;text-align:center"><div class="card" style="padding:28px 22px">
+<h2 style="margin:0 0 10px">${on ? 'You are subscribed' : 'You are unsubscribed'}</h2>
+${note ? `<p style="margin:0 0 12px;color:#22c55e;font-weight:600">${esc(note)}</p>` : ''}
+<p style="opacity:.8;margin:0 0 20px">${on ? 'You get Studies Hub emails about uploads, news and other updates.' : 'You will not get Studies Hub emails about uploads, news and other updates. Important emails, like verification codes and site notices, still reach you.'}</p>
+<form method="post" action="/email/preferences"><input type="hidden" name="u" value="${u.id}"><input type="hidden" name="t" value="${t}"><input type="hidden" name="do" value="${on ? 'off' : 'on'}">
+<button type="submit" style="padding:12px 26px;font-size:16px;font-weight:700;border:0;border-radius:12px;background:#5bc8ff;color:#04101f;cursor:pointer">${on ? 'Unsubscribe' : 'Subscribe again'}</button></form></div></div>`, req.user);
+}
+function mailPrefUser(id, t) {
+  id = Number(id);
+  if (!id || String(t || '').length !== 32 || !crypto.timingSafeEqual(Buffer.from(String(t)), Buffer.from(mailSig(id)))) return null;
+  return db.prepare('SELECT id,email_notify FROM users WHERE id=?').get(id) || null;
+}
+app.get('/email/preferences', (req, res) => {
+  const u = mailPrefUser(req.query.u, req.query.t);
+  if (!u) return res.status(400).send(layout('Email preferences', '<div style="max-width:460px;margin:40px auto;padding:0 16px;text-align:center"><h2>This link is not valid</h2><p style="opacity:.8">Please use the link in the latest email we sent you.</p></div>', req.user));
+  res.send(mailPrefPage(req, u));
+});
+app.post('/email/preferences', (req, res) => {
+  const u = mailPrefUser(req.body.u, req.body.t);
+  if (!u) return res.sendStatus(400);
+  const on = req.body.do === 'on';
+  db.prepare('UPDATE users SET email_notify=? WHERE id=?').run(on ? 1 : 0, u.id);
+  res.send(mailPrefPage(req, { id: u.id, email_notify: on ? 1 : 0 }, on ? 'You will get these emails again.' : 'Done. You will not get these emails any more.'));
+});
 app.get('/privacy', (req, res) => {
   const updated = new Date().toISOString().slice(0, 10);
   const contactEmail = (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim();
