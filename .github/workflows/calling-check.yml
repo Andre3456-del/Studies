@@ -14,5 +14,5 @@ jobs:
           node-version: '22'
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: node --check server.js
-      - run: node --check calling.js
-      - run: node -e "require('./calling')"
+      - run: node --check lib/calling.js
+      - run: node -e "require('./lib/calling')"

@@ -469,7 +469,7 @@ function emailEveryone(subject, heading, message) {
 const MAINT_START = 'Studies Hub is being upgraded right now. The site may be slow or unavailable for a few minutes. Please bear with us. We will email you again the moment we are back.';
 const MAINT_BACK = 'We are back in business. Thank you for your patience. Everything is running normally again.';
 function maintenanceBack() { setSecret('maintenance_since', null); return emailEveryone('Studies Hub is back', 'We are back', MAINT_BACK); }
-const fcm = require('./fcm').register(db);
+const fcm = require('./lib/fcm').register(db);
 // Send a notification to these people (all their devices). Never throws and is never awaited by callers.
 function notify(userIds, payload) {
   const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
@@ -781,12 +781,12 @@ app.use((req, res, next) => {
   res.send(layout(pg ? pg.title : 'Studies Hub', `<iframe class="reader" src="${esc(url)}" title="Page"></iframe>`, req.user));
 });
 // LiveKit calling module; credentials stay in server-side environment variables.
-const { pdfViewerHtml } = require('./pdf_viewer');
-const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./calling');
-const { registerLecturerAdmin } = require('./lecturer_admin');
-const { registerUniversityAdmin } = require('./university_admin');
+const { pdfViewerHtml } = require('./lib/pdf_viewer');
+const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./lib/calling');
+const { registerLecturerAdmin } = require('./lib/lecturer_admin');
+const { registerUniversityAdmin } = require('./lib/university_admin');
 // ---------- semesters (semester.js): first and second semester uploads never mix ----------
-const SEM = require('./semester');
+const SEM = require('./lib/semester');
 SEM.ensureSchema(db);
 SEM.addSemesterColumn(db, 'pages', 'title');
 // Reads the semester from the course code in each new upload's title (GST 121 -> second semester); no code = shows in both.
@@ -2432,7 +2432,7 @@ const ADSENSE_FEED_SLOT = String(process.env.ADSENSE_FEED_SLOT || '').replace(/[
 const ADSENSE_FEED_LAYOUT_KEY = String(process.env.ADSENSE_FEED_LAYOUT_KEY || '').replace(/[^A-Za-z0-9_+=-]/g, '');
 const feedAdCard = () => `<div class="news-card ad-card"><div class="ad-label">Advertisement</div><ins class="adsbygoogle" style="display:block" data-ad-client="${ADSENSE_CLIENT}" data-ad-slot="${ADSENSE_FEED_SLOT}"${ADSENSE_FEED_LAYOUT_KEY ? ` data-ad-format="fluid" data-ad-layout-key="${ADSENSE_FEED_LAYOUT_KEY}"` : ' data-ad-format="auto" data-full-width-responsive="true"'}></ins><script>(adsbygoogle = window.adsbygoogle || []).push({});</script></div>`;
 // Public reading pages (About, How it works, Contact, Study guides, sitemap, robots): anyone can read them without logging in.
-require('./public_pages').register(app, { layout, esc, adHead: ADSENSE_HEAD, baseUrl: String(process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org').replace(/\/+$/, ''), contactEmail: (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim() });
+require('./lib/public_pages').register(app, { layout, esc, adHead: ADSENSE_HEAD, baseUrl: String(process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org').replace(/\/+$/, ''), contactEmail: (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim() });
 app.get('/ads.txt', (req, res) => res.type('text/plain').send(`google.com, pub-${ADSENSE_CLIENT.replace('ca-pub-', '')}, DIRECT, f08c47fec0942fa0\n`));
 function newsFeedBody(req, home = false) {
   const all = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
@@ -5380,7 +5380,7 @@ app.post('/lecturer/signup', async (req, res) => {
 // ---------- link a laptop from your phone (like WhatsApp Web) ----------
 // A laptop cannot log in with a password. It shows a QR code; a phone that is already logged in scans it and approves.
 // The phone can cut the laptop off at any time from Settings > Linked devices.
-const { qrSvg } = require('./qr');
+const { qrSvg } = require('./lib/qr');
 const isPhoneAgent = req => /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(String(req.headers['user-agent'] || ''));
 // A laptop = a computer browser, or any screen wide enough for the laptop layout (the page tells us its width in a cookie).
 const cookieOf = (req, name) => { const m = new RegExp('(?:^|;\\s*)' + name + '=([^;]*)').exec(String(req.headers.cookie || '')); return m ? decodeURIComponent(m[1]) : ''; };

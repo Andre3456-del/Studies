@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['android/**', '.github/workflows/android-apk.yml', 'server.js', 'public_pages.js', 'calling.js', 'lecturer_admin.js', 'university_admin.js', 'pdf_viewer.js', 'fcm.js']
+    paths: ['android/**', '.github/workflows/android-apk.yml', 'server.js', 'lib/**']
 permissions:
   contents: write
 concurrency:

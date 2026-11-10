@@ -2,6 +2,27 @@
 
 A study hub for a university: sign up, get sorted into your department and level, browse pages and CBT practice made just for you, read news, and chat with friends and groups — with push notifications. One Node.js app, one file. Needs Node.js 22.13 or newer (no native modules, so it installs anywhere).
 
+## Where things live
+
+```
+server.js            the website itself (this is what Railway starts)
+package.json         what the site needs to run, and the start command
+railway.json         Railway deploy settings
+env.example          the settings (variables) the site understands
+lib/                 the site's separate parts
+  calling.js           voice and video calls
+  fcm.js               notifications to the Android app
+  lecturer_admin.js    lecturer admin area
+  university_admin.js  university admin area
+  public_pages.js      About, guides, sitemap (for Google)
+  pdf_viewer.js        in-page PDF reader
+  qr.js                QR codes for laptop sign-in
+  semester.js          first/second semester sorting
+android/             the Android app
+.github/workflows/   automatic checks and the Android app build
+archive/             old files kept for reference, not used by the site
+```
+
 ## What is inside
 
 - **Home (`/`) is the news feed** for anyone not logged in — just the news cards, nothing else, no share form. **Logging in takes you straight to your Dashboard.**
@@ -327,7 +348,7 @@ The site now has two different layouts, chosen by screen width (so a phone set t
 Also fixed: the chat message box was squeezed on narrow phones after the bigger buttons; it now has room to type.
 
 ## Logging in on a laptop (link with your phone)
-A laptop cannot log in with a password. It shows a QR code (made by `qr.js`, no outside package). On the phone, go to Settings → Linked devices → Link a device, scan the code and approve. The phone lists every linked laptop and can log any of them out (or all) at any time. Codes last 5 minutes and work once. Admin accounts can still sign in on a laptop with a password (`/login?admin=1`). Phones and tablets log in as before.
+A laptop cannot log in with a password. It shows a QR code (made by `lib/qr.js`, no outside package). On the phone, go to Settings → Linked devices → Link a device, scan the code and approve. The phone lists every linked laptop and can log any of them out (or all) at any time. Codes last 5 minutes and work once. Admin accounts can still sign in on a laptop with a password (`/login?admin=1`). Phones and tablets log in as before.
 
 ## Page names at the top
 Like WhatsApp, the top bar shows the page's own name (News, Settings, Chat…) and "Studies Hub" on the dashboard — text only, no logo.
@@ -345,4 +366,4 @@ On a phone or tablet the log-in page also has **Log in with a QR code**. The dev
 
 ### Ringing calls and notifications when the app is closed
 
-`fcm.js` sends calls and notifications to the Android app through Firebase Cloud Messaging. Set the Railway variable `FIREBASE_SERVICE_ACCOUNT` to the Firebase service-account key JSON (pasted as is, or base64). Without it nothing changes. The app tells the site its phone ID through a cookie called `fcm`; logging out forgets it. `android/app/google-services.json` is Firebase's public app config (not a secret).
+`lib/fcm.js` sends calls and notifications to the Android app through Firebase Cloud Messaging. Set the Railway variable `FIREBASE_SERVICE_ACCOUNT` to the Firebase service-account key JSON (pasted as is, or base64). Without it nothing changes. The app tells the site its phone ID through a cookie called `fcm`; logging out forgets it. `android/app/google-services.json` is Firebase's public app config (not a secret).
