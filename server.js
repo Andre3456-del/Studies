@@ -4766,7 +4766,7 @@ function paywallBody(p, req) {
     action = '<p class="err" style="margin:0">Payments are not available right now. Please try again a little later.</p>';
   } else {
     const back = req.query && req.query.paid;
-    const waiting = back === '1' && db.prepare("SELECT 1 FROM flw_payments WHERE user_id=? AND kind='page' AND item_id=? AND status='pending' AND created_at>?").get(req.user.id, p.id, Date.now() - 864e5);
+    const waiting = back === '1' && db.prepare("SELECT 1 FROM flw_payments WHERE user_id=? AND kind='page' AND item_id=? AND status='pending' AND created_at>?").get(req.user.id, p.id, Date.now() - FLW_WINDOW);
     action = (back === 'cancelled' ? '<p class="mut" style="margin:0 0 10px">The payment was not completed. You can try again.</p>' : '')
       + (waiting ? '<p class="pill pending" style="margin:0 0 10px">Confirming your payment&hellip;</p><p class="mut" style="margin:0 0 10px">This page unlocks by itself as soon as the payment is confirmed. You do not need to do anything.</p><script>setTimeout(function(){location.reload()},7000)</script>' : '')
       + `<form method="post" action="/pay/start"><input type="hidden" name="slug" value="${esc(p.slug)}"><button class="btn" style="width:100%">Continue to payment</button></form>`;
@@ -4909,7 +4909,7 @@ app.get('/p/:slug', async (req, res) => {
   if (!canViewPage(p, req.user)) {
     if (p.members_only && !p.paid) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
     if (req.user) { // paid a moment ago and left before coming back? Ask Flutterwave now, so it opens straight away
-      const pend = db.prepare("SELECT tx_ref FROM flw_payments WHERE user_id=? AND kind='cbt' AND item_id=? AND status='pending' AND created_at>?").get(req.user.id, p.id, Date.now() - 172800000);
+      const pend = db.prepare("SELECT tx_ref FROM flw_payments WHERE user_id=? AND kind='cbt' AND item_id=? AND status='pending' AND created_at>?").get(req.user.id, p.id, Date.now() - FLW_WINDOW);
       if (pend) { await flwSettle(pend.tx_ref); if (canViewPage(p, req.user)) return res.redirect(req.path); }
     }
     return res.send(layout(p.title, paywallBody(p, req), req.user));
@@ -5001,6 +5001,20 @@ app.post('/pay/verify', async (req, res) => {
 // Flutterwave directly whether the money really arrived and for how much, so a forged request cannot unlock anything.
 db.exec(`CREATE TABLE IF NOT EXISTS flw_payments(tx_ref TEXT PRIMARY KEY, user_id INTEGER NOT NULL, kind TEXT NOT NULL, item_id INTEGER NOT NULL, amount_kobo INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', transaction_id TEXT, created_at INTEGER NOT NULL)`);
 const FLW_HASH = process.env.FLUTTERWAVE_SECRET_HASH || '';
+const FLW_WINDOW = 15 * 60 * 1000; // each payment attempt lasts 15 minutes; after that, if Flutterwave has not confirmed it, it is cleared
+// A real payment that arrives after its record was cleared (a slow bank, say) must still unlock what was paid for.
+// The person, the item and the time are written in the payment's own reference, so the record can be rebuilt, and the price checked again.
+function flwRecover(txRef) {
+  const m = /^(cbt|sponsor)_(\d+)_(\d+)_\d+$/.exec(String(txRef || ''));
+  if (!m) return null;
+  const uid = Number(m[2]), item = Number(m[3]);
+  if (!db.prepare('SELECT 1 FROM users WHERE id=?').get(uid)) return null;
+  let kobo;
+  if (m[1] === 'sponsor') { const sp = db.prepare("SELECT amount_kobo FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(item, uid); if (!sp) return null; kobo = sp.amount_kobo; }
+  else { const pg = db.prepare('SELECT price_kobo FROM pages WHERE id=? AND paid=1').get(item); if (!pg) return null; kobo = pg.price_kobo || PRICE_KOBO; }
+  db.prepare('INSERT OR IGNORE INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, uid, m[1], item, kobo, Date.now());
+  return db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(txRef);
+}
 async function flwGet(path) {
   try {
     const r = await fetch('https://api.flutterwave.com/v3/' + path, { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } });
@@ -5012,10 +5026,15 @@ async function flwGet(path) {
 const flwItemUrl = row => row.kind === 'sponsor' ? '/sponsor/' + row.item_id : '/p/' + ((db.prepare('SELECT slug FROM pages WHERE id=?').get(row.item_id) || {}).slug || '');
 // Checks one payment with Flutterwave and, if it is real and the right amount, gives the person what they paid for. Safe to run many times.
 async function flwSettle(txRef, transactionId) {
-  const row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(String(txRef || ''));
-  if (!row) return { ok: false, row: null };
+  let row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(String(txRef || '')), data = null;
+  if (!row) { // the record was cleared: only a payment Flutterwave itself confirms can bring it back
+    if (!transactionId) return { ok: false, row: null };
+    data = await flwGet('transactions/' + encodeURIComponent(transactionId) + '/verify');
+    row = data && data.tx_ref === String(txRef) ? flwRecover(txRef) : null;
+    if (!row) return { ok: false, row: null };
+  }
   if (row.status === 'paid') return { ok: true, row };
-  const data = transactionId ? await flwGet('transactions/' + encodeURIComponent(transactionId) + '/verify') : await flwGet('transactions/verify_by_reference?tx_ref=' + encodeURIComponent(row.tx_ref));
+  if (!data) data = transactionId ? await flwGet('transactions/' + encodeURIComponent(transactionId) + '/verify') : await flwGet('transactions/verify_by_reference?tx_ref=' + encodeURIComponent(row.tx_ref));
   if (!data || data.tx_ref !== row.tx_ref || data.currency !== 'NGN' || Number(data.amount) < row.amount_kobo / 100) return { ok: false, row };
   const tid = String(data.id);
   const used = db.prepare('SELECT 1 FROM flw_payments WHERE transaction_id=? AND tx_ref!=?').get(tid, row.tx_ref);
@@ -5082,8 +5101,12 @@ app.post('/sponsor/:id/pay', async (req, res) => {
 // Where Flutterwave sends the person back to after paying (or cancelling): a short page that asks Flutterwave, shows a tick or a cross, then goes on.
 const flwPage = (req, inner) => layout('Payment', `<div style="max-width:460px;margin:50px auto;padding:0 16px;text-align:center"><div class="card" style="padding:30px 22px">${inner}</div></div>`, req.user);
 app.get('/pay/return', (req, res) => {
-  const txRef = String(req.query.tx_ref || ''), row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(txRef);
-  if (!row) return res.redirect('/');
+  const txRef = String(req.query.tx_ref || ''); let row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(txRef);
+  if (!row) { // cleared after its 15 minutes: build the address from the reference; a payment Flutterwave confirms still unlocks
+    const m = /^(cbt|sponsor)_(\d+)_(\d+)_\d+$/.exec(txRef);
+    if (!m || !req.query.transaction_id || String(req.query.status || '') === 'cancelled') return res.send(flwPage(req, `<div style="font-size:54px;color:#ef4444;line-height:1">&#10007;</div><h2 style="margin:12px 0 6px">Verification failed</h2><p class="mut" style="margin:0 0 18px">This payment time has ended. Please start again.</p><a class="btn" href="/">Back</a>`));
+    row = { kind: m[1], item_id: Number(m[3]) };
+  }
   const url = flwItemUrl(row);
   if (String(req.query.status || '') === 'cancelled') {
     db.prepare("UPDATE flw_payments SET status='cancelled' WHERE tx_ref=? AND status='pending'").run(txRef);
@@ -5110,12 +5133,17 @@ app.post('/flw/webhook', jsonSmall, async (req, res) => {
     if (d.tx_ref && d.status === 'successful') await flwSettle(d.tx_ref, d.id);
   } catch (e) { console.error('Flutterwave webhook failed:', e.message); }
 });
-// Anything still waiting (the person closed the page before coming back, say) is checked again every half minute for two days.
+// Every half minute: attempts still inside their 15 minutes are checked with Flutterwave; attempts past 15 minutes get one last check
+// and, if Flutterwave still has no payment, are cleared completely, so nothing is left behind and the person simply starts a new one.
 setInterval(async () => {
   if (!FLW_ON) return;
   try {
-    const waiting = db.prepare("SELECT tx_ref FROM flw_payments WHERE status='pending' AND created_at<? AND created_at>? ORDER BY created_at LIMIT 15").all(Date.now() - 20000, Date.now() - 172800000);
-    for (const w of waiting) await flwSettle(w.tx_ref);
+    const now = Date.now();
+    for (const w of db.prepare("SELECT tx_ref FROM flw_payments WHERE status='pending' AND created_at<? AND created_at>? ORDER BY created_at LIMIT 15").all(now - 20000, now - FLW_WINDOW)) await flwSettle(w.tx_ref);
+    for (const w of db.prepare("SELECT tx_ref FROM flw_payments WHERE status!='paid' AND created_at<=? LIMIT 30").all(now - FLW_WINDOW)) {
+      const r = await flwSettle(w.tx_ref);
+      if (!r.ok) db.prepare("DELETE FROM flw_payments WHERE tx_ref=? AND status!='paid'").run(w.tx_ref);
+    }
   } catch (e) { }
 }, 30000);
 // You can clear your own payment attempts that Flutterwave never confirmed. A verified payment, or anyone else's, cannot be deleted.
@@ -5192,7 +5220,7 @@ app.post('/sponsor', upload.single('image'), (req, res) => {
 app.get('/sponsor/:id', async (req, res) => {
   if (!req.user) return res.redirect('/login');
   let s = db.prepare('SELECT * FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
-  if (s && s.status === 'pending_payment') { const pend = db.prepare("SELECT tx_ref FROM flw_payments WHERE kind='sponsor' AND item_id=? AND status='pending' AND created_at>?").get(s.id, Date.now() - 172800000); if (pend) { await flwSettle(pend.tx_ref); s = db.prepare('SELECT * FROM sponsor_posts WHERE id=?').get(s.id); } }
+  if (s && s.status === 'pending_payment') { const pend = db.prepare("SELECT tx_ref FROM flw_payments WHERE kind='sponsor' AND item_id=? AND status='pending' AND created_at>?").get(s.id, Date.now() - FLW_WINDOW); if (pend) { await flwSettle(pend.tx_ref); s = db.prepare('SELECT * FROM sponsor_posts WHERE id=?').get(s.id); } }
   if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
   const statusLine = s.status === 'approved' ? `<p class="pill">&#10003; Live until ${esc((s.expires_at || '').slice(0, 10))}</p>` : s.status === 'rejected' ? '<p class="err">This submission was not approved.</p>' : '<p class="pill pending">Waiting for payment to be confirmed</p>';
   res.send(layout('Your sponsor post', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>${esc(s.title)}</h1>${statusLine}
@@ -5722,11 +5750,11 @@ app.get('/admin', adminish, (req, res) => {
   const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${ROLES.map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
   // Central admin only: every payment Flutterwave has handled, with its tick or cross. Nothing here needs approving by hand.
   const flwSection = cf ? (() => {
-    const rows = db.prepare("SELECT f.*, u.name un, u.email ue FROM flw_payments f JOIN users u ON u.id=f.user_id ORDER BY f.created_at DESC LIMIT 60").all();
+    const rows = db.prepare("SELECT f.*, u.name un, u.email ue FROM flw_payments f JOIN users u ON u.id=f.user_id WHERE f.status='paid' OR f.created_at>? ORDER BY f.created_at DESC LIMIT 60").all(Date.now() - FLW_WINDOW);
     if (!rows.length) return '<h3 id="payments">Flutterwave payments</h3><p class="mut">No payments yet.</p>';
-    const mark = r => r.status === 'paid' ? '<span style="color:#22c55e;font-weight:700">&#10003; Verified</span>' : r.status === 'cancelled' || r.created_at < Date.now() - 172800000 ? '<span style="color:#ef4444;font-weight:700">&#10007; Not completed</span>' : '<span style="color:#f59e0b;font-weight:700">Waiting for Flutterwave</span>';
+    const mark = r => r.status === 'paid' ? '<span style="color:#22c55e;font-weight:700">&#10003; Verified</span>' : r.status === 'cancelled' || r.created_at < Date.now() - 172800000 ? '<span style="color:#ef4444;font-weight:700">&#10007; Not completed</span>' : `<span style="color:#f59e0b;font-weight:700">Waiting for Flutterwave &middot; <span class="flwLeft" data-end="${r.created_at + FLW_WINDOW}"></span> left</span>`;
     const total = db.prepare("SELECT COALESCE(SUM(amount_kobo),0) n FROM flw_payments WHERE status='paid'").get().n;
-    return `<h3 id="payments">Flutterwave payments</h3><p class="mut">Verified in total: <b>₦${(total / 100).toLocaleString()}</b>. Flutterwave confirms everything by itself.</p>${rows.map(r => `<div class="card"><b>${esc(r.un)}</b> <span class="mut">${esc(r.ue)}</span><br>${r.kind === 'sponsor' ? 'Sponsor post' : 'Locked page'} &middot; ₦${(r.amount_kobo / 100).toLocaleString()} &middot; ${mark(r)}<br><span class="mut">${new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ')}</span>${r.user_id === me.id && r.status !== 'paid' ? `<form method="post" action="/admin/flw/delete" style="margin-top:8px"><input type="hidden" name="ref" value="${esc(r.tx_ref)}"><button class="link">Delete</button></form>` : ''}</div>`).join('')}`;
+    return `<script>(function(){function t(){document.querySelectorAll('.flwLeft').forEach(function(e){var s=Math.max(0,Math.round((e.dataset.end-Date.now())/1000));e.textContent=Math.floor(s/60)+':'+('0'+s%60).slice(-2)})}t();setInterval(t,1000)})()</script><h3 id="payments">Flutterwave payments</h3><p class="mut">Each payment has 15 minutes. If Flutterwave has not confirmed it by then, it is cleared by itself. Verified in total: <b>₦${(total / 100).toLocaleString()}</b>. Flutterwave confirms everything by itself.</p>${rows.map(r => `<div class="card"><b>${esc(r.un)}</b> <span class="mut">${esc(r.ue)}</span><br>${r.kind === 'sponsor' ? 'Sponsor post' : 'Locked page'} &middot; ₦${(r.amount_kobo / 100).toLocaleString()} &middot; ${mark(r)}<br><span class="mut">${new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ')}</span>${r.user_id === me.id && r.status !== 'paid' ? `<form method="post" action="/admin/flw/delete" style="margin-top:8px"><input type="hidden" name="ref" value="${esc(r.tx_ref)}"><button class="link">Delete</button></form>` : ''}</div>`).join('')}`;
   })() : '';
   const paymentsSection = cf ? (() => {
     const claims = db.prepare("SELECT p.*, u.name un, u.email ue, pg.title pt, pg.slug ps, pg.price_kobo FROM purchases p JOIN users u ON u.id=p.user_id JOIN pages pg ON pg.id=p.page_id WHERE p.status='pending' ORDER BY p.id DESC").all();
