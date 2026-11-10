@@ -18,6 +18,7 @@ lib/                 the site's separate parts
   pdf_viewer.js        in-page PDF reader
   qr.js                QR codes for laptop sign-in
   ai_assistant.js      the AI assistant
+  chat_messages.js     chat message helpers (ticks, reactions, edit, delete)
   semester.js          first/second semester sorting
 routes/              parts of the website moved out of server.js, one section per file
   security.js          app lock and change password
@@ -31,6 +32,9 @@ routes/              parts of the website moved out of server.js, one section pe
   groups.js            chat groups
   levels.js            levels, news, page and user admin actions
   admin_team.js        the central admin's team of admins
+  chatprefs.js         chat list: pin, archive, mute, favourites
+  stickers.js          each member's saved stickers
+  lecturer_portal.js   lecturer welcome, uploads, edit, courses
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site
