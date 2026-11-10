@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
     private volatile String uaCache = "";
     private boolean updateFetching;
     private String frameUrl;
+    private boolean inPay;
     private View updateBar;
     private GeolocationPermissions.Callback geoCb;
     private String geoOrigin;
@@ -317,7 +318,10 @@ public class MainActivity extends Activity {
                     startGoogle("lecturer".equals(u.getQueryParameter("as")));
                     return true;
                 }
-                if (ours(u)) return false;
+                if (ours(u)) { inPay = false; return false; }
+                // Paying: Flutterwave's page, and the bank's own pages it passes through, open inside the app so the person comes back to the app.
+                String ph = u.getHost() == null ? "" : u.getHost(), ps = u.getScheme() == null ? "" : u.getScheme();
+                if ((ps.equals("https") || ps.equals("http")) && (inPay || ph.equals("flutterwave.com") || ph.endsWith(".flutterwave.com"))) { inPay = true; return false; }
                 // Our own empty frame or an inner page is never sent to the browser.
                 String sc = u.getScheme() == null ? "" : u.getScheme();
                 if (sc.equals("about") || sc.equals("data") || sc.equals("blob") || sc.equals("file")) return false;

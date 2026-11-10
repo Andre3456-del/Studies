@@ -948,7 +948,7 @@ const profileComplete = u => u.role === 'uniadmin' ? !!u.username && !!u.name : 
 let adminTab = '';
 const TAB_OF = p => /^\/admin\/(payments|sponsors)/.test(p) ? 'payments' : /^\/admin\/(upload|pages)/.test(p) ? 'pages' : /^\/admin\/lecturers/.test(p) ? 'lecturers' : /^\/(admin\/positions|positions|admin\/departments)/.test(p) ? 'positions' : /^\/admin\/news/.test(p) ? 'news' : /^\/admin\/users/.test(p) ? 'users' : '';
 app.use((req, res, next) => { adminTab = TAB_OF(req.path); next(); });
-const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/about', '/how-it-works', '/contact', '/guides', '/sitemap.xml', '/robots.txt', '/health', '/sw.js', '/offline.html', '/app', '/app/version', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/about', '/how-it-works', '/contact', '/guides', '/sitemap.xml', '/robots.txt', '/pay/return', '/health', '/sw.js', '/offline.html', '/app', '/app/version', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
   next();
@@ -4763,33 +4763,13 @@ function paywallBody(p, req) {
   if (!req.user) {
     action = `<a class="btn" href="/login?next=${encodeURIComponent('/p/' + p.slug)}">Log in to pay</a>`;
   } else if (!FLW_ON) {
-    // Graceful fallback if the Flutterwave keys have not been added to the environment yet -- the old manual
-    // route still works underneath, so the site keeps functioning instead of showing a dead end.
-    action = claim && claim.status === 'pending'
-      ? '<p class="pill pending">Payment claimed &mdash; waiting for confirmation</p><p class="mut">This is usually checked and unlocked by hand, so it can take a little while.</p>'
-      : `<p class="err" style="margin:0 0 10px">Card/transfer payment isn't set up yet.</p><div class="card" style="text-align:left;max-width:340px;margin:0 auto"><p class="mut" style="margin:0 0 6px">For now, pay by bank transfer to:</p>
-<p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p>
-<p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p>
-<form method="post" action="/pay/claim"><input type="hidden" name="slug" value="${esc(p.slug)}"><button style="width:100%">I have made this payment</button></form></div>`;
+    action = '<p class="err" style="margin:0">Payments are not available right now. Please try again a little later.</p>';
   } else {
-    const txRef = `cbt_${req.user.id}_${p.id}_${Date.now()}`;
-    action = `<button id="flwPayBtn" class="btn" style="width:100%">Pay ₦${priceNgn.toFixed(0)} now</button>
-<script src="https://checkout.flutterwave.com/v3.js"></script>
-<script>document.getElementById('flwPayBtn').addEventListener('click',function(){
-  FlutterwaveCheckout({
-    public_key: ${jsForScript(FLW_PUBLIC_KEY)},
-    tx_ref: ${jsForScript(txRef)},
-    amount: ${priceNgn},
-    currency: 'NGN',
-    customer: { email: ${jsForScript(req.user.email)}, name: ${jsForScript(req.user.name)} },
-    customizations: { title: 'Studies Hub', description: ${jsForScript(p.title)} },
-    callback: function(data){
-      fetch('/pay/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction_id:data.transaction_id,slug:${jsForScript(p.slug)}})})
-        .then(function(r){return r.json()}).then(function(j){ if(j&&j.ok)location.reload(); else alert((j&&j.error)||'Could not confirm payment.') });
-    },
-    onclose: function(){}
-  });
-});</script>`;
+    const back = req.query && req.query.paid;
+    const waiting = back === '1' && db.prepare("SELECT 1 FROM flw_payments WHERE user_id=? AND kind='page' AND item_id=? AND status='pending' AND created_at>?").get(req.user.id, p.id, Date.now() - 864e5);
+    action = (back === 'cancelled' ? '<p class="mut" style="margin:0 0 10px">The payment was not completed. You can try again.</p>' : '')
+      + (waiting ? '<p class="pill pending" style="margin:0 0 10px">Confirming your payment&hellip;</p><p class="mut" style="margin:0 0 10px">This page unlocks by itself as soon as the payment is confirmed. You do not need to do anything.</p><script>setTimeout(function(){location.reload()},7000)</script>' : '')
+      + `<form method="post" action="/pay/start"><input type="hidden" name="slug" value="${esc(p.slug)}"><button class="btn" style="width:100%">Continue to payment</button></form>`;
   }
   return `<div class="dash-hero"><p class="eyebrow" style="margin:0">Locked</p><h1 style="margin:.2em 0">${esc(p.title)}</h1><p class="mut" style="margin:0">This content needs a one-time payment to unlock.</p></div>
 <div class="card" style="text-align:center"><p style="font-size:32px;font-weight:700;margin:8px 0">₦${priceNgn.toFixed(0)}</p>${action}</div>`;
@@ -5011,16 +4991,112 @@ app.post('/pay/verify', async (req, res) => {
   else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,'approved')").run(req.user.id, page.id, String(transactionId), Math.round(data.amount * 100));
   res.json({ ok: true });
 });
-app.post('/pay/claim', (req, res) => {
+// ---------- Flutterwave: the person is sent to Flutterwave's own payment page, comes back, and is unlocked automatically ----------
+// Nobody has to approve anything by hand. Three things confirm a payment, and any one of them is enough: the person coming back
+// to the site, Flutterwave's own message to /flw/webhook, and a background check of anything still waiting. Every one of them asks
+// Flutterwave directly whether the money really arrived and for how much, so a forged request cannot unlock anything.
+db.exec(`CREATE TABLE IF NOT EXISTS flw_payments(tx_ref TEXT PRIMARY KEY, user_id INTEGER NOT NULL, kind TEXT NOT NULL, item_id INTEGER NOT NULL, amount_kobo INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', transaction_id TEXT, created_at INTEGER NOT NULL)`);
+const FLW_HASH = process.env.FLUTTERWAVE_SECRET_HASH || '';
+async function flwGet(path) {
+  try {
+    const r = await fetch('https://api.flutterwave.com/v3/' + path, { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}` } });
+    const j = await r.json();
+    if (j && j.status === 'success' && j.data && j.data.status === 'successful') return j.data;
+  } catch (e) { }
+  return null;
+}
+const flwItemUrl = row => row.kind === 'sponsor' ? '/sponsor/' + row.item_id : '/p/' + ((db.prepare('SELECT slug FROM pages WHERE id=?').get(row.item_id) || {}).slug || '');
+// Checks one payment with Flutterwave and, if it is real and the right amount, gives the person what they paid for. Safe to run many times.
+async function flwSettle(txRef, transactionId) {
+  const row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(String(txRef || ''));
+  if (!row) return { ok: false, row: null };
+  if (row.status === 'paid') return { ok: true, row };
+  const data = transactionId ? await flwGet('transactions/' + encodeURIComponent(transactionId) + '/verify') : await flwGet('transactions/verify_by_reference?tx_ref=' + encodeURIComponent(row.tx_ref));
+  if (!data || data.tx_ref !== row.tx_ref || data.currency !== 'NGN' || Number(data.amount) < row.amount_kobo / 100) return { ok: false, row };
+  const tid = String(data.id);
+  const used = db.prepare('SELECT 1 FROM flw_payments WHERE transaction_id=? AND tx_ref!=?').get(tid, row.tx_ref);
+  if (used) return { ok: false, row };
+  try {
+    if (row.kind === 'sponsor') {
+      const sp = db.prepare('SELECT * FROM sponsor_posts WHERE id=?').get(row.item_id);
+      if (!sp) return { ok: false, row };
+      if (sp.status !== 'approved') {
+        db.prepare("UPDATE sponsor_posts SET status='approved', reference=?, expires_at=datetime('now','+' || ? || ' days') WHERE id=?").run(tid, sp.duration_days, sp.id);
+        notify([sp.user_id], { title: 'Your sponsor post is live', body: `"${sp.title}" is now showing in News for ${sp.duration_days} days.`, url: '/sponsor/' + sp.id, tag: 'sponsor' });
+      }
+    } else {
+      const pg = db.prepare('SELECT id,title,slug FROM pages WHERE id=?').get(row.item_id);
+      if (!pg) return { ok: false, row };
+      const had = db.prepare('SELECT id,status FROM purchases WHERE user_id=? AND page_id=?').get(row.user_id, pg.id);
+      if (had) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(tid, Math.round(Number(data.amount) * 100), had.id);
+      else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,'approved')").run(row.user_id, pg.id, tid, Math.round(Number(data.amount) * 100));
+      if (!had || had.status !== 'approved') notify([row.user_id], { title: 'Payment confirmed', body: `${pg.title} is now unlocked for you`, url: '/p/' + pg.slug, tag: 'payment' });
+    }
+    db.prepare("UPDATE flw_payments SET status='paid', transaction_id=? WHERE tx_ref=?").run(tid, row.tx_ref);
+    return { ok: true, row: Object.assign({}, row, { status: 'paid' }) };
+  } catch (e) { console.error('Flutterwave settle failed:', e.message); return { ok: false, row }; }
+}
+// Sends the person to Flutterwave's payment page for one item.
+async function flwCheckout(req, res, o) {
+  const fail = msg => res.status(502).send(layout('Payment', `<div style="max-width:460px;margin:40px auto;padding:0 16px;text-align:center"><h2>${esc(msg)}</h2><p><a href="${esc(o.back)}">&larr; Go back</a></p></div>`, req.user));
+  if (!FLW_ON) return fail('Payments are not available right now. Please try again later.');
+  const base = baseUrl(req), txRef = `${o.kind}_${req.user.id}_${o.item}_${Date.now()}`;
+  try {
+    const r = await fetch('https://api.flutterwave.com/v3/payments', {
+      method: 'POST', headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tx_ref: txRef, amount: o.kobo / 100, currency: 'NGN', redirect_url: base + '/pay/return',
+        customer: { email: req.user.email, name: req.user.name },
+        customizations: { title: 'Studies Hub', description: o.desc, logo: base + '/icon-192.png' }, meta: { kind: o.kind, item: o.item, user: req.user.id } })
+    });
+    const j = await r.json();
+    if (j && j.status === 'success' && j.data && j.data.link) {
+      db.prepare('INSERT INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, req.user.id, o.kind, o.item, o.kobo, Date.now());
+      return res.redirect(j.data.link);
+    }
+    console.error('Flutterwave did not give a payment link:', JSON.stringify(j).slice(0, 300));
+  } catch (e) { console.error('Flutterwave checkout failed:', e.message); }
+  return fail('Could not open the payment page. Please try again.');
+}
+app.post('/pay/start', async (req, res) => {
   if (!req.user) return res.redirect('/login');
-  const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.body.slug);
+  const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(String(req.body.slug || ''));
   if (!page || !page.paid || !sortedFor(page, req.user)) return res.redirect('/');
-  const reference = `manual_${req.user.id}_${page.id}_${Date.now()}`;
-  db.prepare('INSERT OR IGNORE INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,?)')
-    .run(req.user.id, page.id, reference, page.price_kobo || PRICE_KOBO, 'pending');
-  notify(fullAdminIds(), { title: 'Payment claim', body: `${req.user.name} says they paid for ${page.title}`, url: '/admin#payments', tag: 'payment' });
-  res.redirect('/p/' + page.slug);
+  if (hasPurchased(req.user.id, page.id)) return res.redirect('/p/' + page.slug);
+  await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: page.price_kobo || PRICE_KOBO, desc: page.title, back: '/p/' + page.slug });
 });
+app.post('/sponsor/:id/pay', async (req, res) => {
+  if (!req.user) return res.redirect('/login');
+  const sp = db.prepare("SELECT * FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(req.params.id, req.user.id);
+  if (!sp) return res.redirect('/sponsor/' + req.params.id);
+  await flwCheckout(req, res, { kind: 'sponsor', item: sp.id, kobo: sp.amount_kobo, desc: sp.title, back: '/sponsor/' + sp.id });
+});
+// Where Flutterwave sends the person back to after paying (or cancelling).
+app.get('/pay/return', async (req, res) => {
+  const txRef = String(req.query.tx_ref || ''), row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(txRef);
+  if (!row) return res.redirect('/');
+  const url = flwItemUrl(row);
+  if (String(req.query.status || '') === 'cancelled') return res.redirect(url + '?paid=cancelled');
+  const r = await flwSettle(txRef, req.query.transaction_id);
+  res.redirect(url + (r.ok ? '?paid=ok' : '?paid=1'));
+});
+// Flutterwave's own message that a payment happened (set this address and the secret hash in the Flutterwave dashboard).
+app.post('/flw/webhook', jsonSmall, async (req, res) => {
+  const got = Buffer.from(String(req.headers['verif-hash'] || '')), want = Buffer.from(FLW_HASH);
+  if (!FLW_HASH || got.length !== want.length || !crypto.timingSafeEqual(got, want)) return res.sendStatus(401);
+  res.sendStatus(200);
+  try {
+    const d = (req.body && req.body.data) || {};
+    if (d.tx_ref && d.status === 'successful') await flwSettle(d.tx_ref, d.id);
+  } catch (e) { console.error('Flutterwave webhook failed:', e.message); }
+});
+// Anything still waiting (the person closed the page before coming back, say) is checked again every half minute for two days.
+setInterval(async () => {
+  if (!FLW_ON) return;
+  try {
+    const waiting = db.prepare("SELECT tx_ref FROM flw_payments WHERE status='pending' AND created_at<? AND created_at>? ORDER BY created_at LIMIT 15").all(Date.now() - 20000, Date.now() - 172800000);
+    for (const w of waiting) await flwSettle(w.tx_ref);
+  } catch (e) { }
+}, 30000);
 app.post('/admin/payments/:id/approve', admin, (req, res) => {
   const claim = db.prepare('SELECT p.user_id, pg.title, pg.slug FROM purchases p JOIN pages pg ON pg.id=p.page_id WHERE p.id=?').get(req.params.id);
   db.prepare("UPDATE purchases SET status='approved' WHERE id=?").run(req.params.id);
@@ -5093,23 +5169,7 @@ app.get('/sponsor/:id', (req, res) => {
   res.send(layout('Your sponsor post', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>${esc(s.title)}</h1>${statusLine}
 <p class="mut">${s.duration_days} day${s.duration_days === 1 ? '' : 's'} &middot; ₦${(s.amount_kobo / 100).toLocaleString()}</p>
 <p class="mut"><a href="/sponsor/${s.id}/edit">Edit this post &rarr;</a></p>
-${s.status === 'pending_payment' ? (FLW_ON ? `<div class="card" style="text-align:center"><button id="flwSponsorBtn" class="btn" style="width:100%">Pay ₦${(s.amount_kobo / 100).toLocaleString()} now</button>
-<script src="https://checkout.flutterwave.com/v3.js"></script>
-<script>document.getElementById('flwSponsorBtn').addEventListener('click',function(){
-  FlutterwaveCheckout({
-    public_key: ${jsForScript(FLW_PUBLIC_KEY)},
-    tx_ref: ${jsForScript(`sponsor_${s.id}_${Date.now()}`)},
-    amount: ${s.amount_kobo / 100},
-    currency: 'NGN',
-    customer: { email: ${jsForScript(req.user.email)}, name: ${jsForScript(req.user.name)} },
-    customizations: { title: 'Studies Hub Sponsor Post', description: ${jsForScript(s.title)} },
-    callback: function(data){
-      fetch('/sponsor/${s.id}/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction_id:data.transaction_id})})
-        .then(function(r){return r.json()}).then(function(j){ if(j&&j.ok)location.reload(); else alert((j&&j.error)||'Could not confirm payment.') });
-    },
-    onclose: function(){}
-  });
-});</script></div>` : `<div class="card"><p class="err" style="margin:0 0 10px">Card/transfer payment isn't set up yet.</p><p>For now, pay <b>₦${(s.amount_kobo / 100).toLocaleString()}</b> by bank transfer to:</p><p style="margin:2px 0"><b>${esc(BANK_ACCOUNT_NUMBER)}</b> &middot; ${esc(BANK_NAME)}</p><p class="mut" style="margin:2px 0 12px">${esc(BANK_ACCOUNT_NAME)}</p><form method="post" action="/sponsor/${s.id}/claim"><button>I've paid</button></form></div>`) : ''}
+${s.status === 'pending_payment' ? (FLW_ON ? `<div class="card" style="text-align:center">${req.query.paid === 'cancelled' ? '<p class="mut" style="margin:0 0 10px">The payment was not completed. You can try again.</p>' : ''}${req.query.paid === '1' ? '<p class="mut" style="margin:0 0 10px">Confirming your payment. This page updates by itself.</p><script>setTimeout(function(){location.reload()},7000)</script>' : ''}<form method="post" action="/sponsor/${s.id}/pay"><button class="btn" style="width:100%">Continue to payment &middot; ₦${(s.amount_kobo / 100).toLocaleString()}</button></form></div>` : '<div class="card"><p class="err" style="margin:0">Payments are not available right now. Please try again a little later.</p></div>') : ''}
 <form method="post" action="/sponsor/${s.id}/delete" onsubmit="return confirm('Delete this sponsor post? This cannot be undone.')" style="margin-top:14px"><button class="link">Delete this post</button></form>`, req.user));
 });
 app.get('/sponsor/:id/edit', (req, res) => {
@@ -5164,12 +5224,6 @@ app.post('/sponsor/:id/verify', async (req, res) => {
   } catch { return res.status(400).json({ error: 'That transaction has already been used.' }); }
   notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for ${s.duration_days} days.`, url: '/sponsor/' + s.id, tag: 'sponsor' });
   res.json({ ok: true });
-});
-app.post('/sponsor/:id/claim', (req, res) => {
-  if (!req.user) return res.redirect('/login');
-  const s = db.prepare("SELECT id FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(req.params.id, req.user.id);
-  if (s) notify(fullAdminIds(), { title: 'Sponsor post payment claim', body: `${req.user.name} says they paid for their sponsor post`, url: '/admin#sponsors', tag: 'sponsor' });
-  res.redirect('/sponsor/' + req.params.id);
 });
 app.get('/sponsor-image/:id', (req, res) => {
   const row = db.prepare('SELECT image_data, image_mime FROM sponsor_posts WHERE id=?').get(req.params.id);
