@@ -784,6 +784,7 @@ app.use((req, res, next) => {
 const { pdfViewerHtml } = require('./lib/pdf_viewer');
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./lib/calling');
 const { registerLecturerAdmin } = require('./lib/lecturer_admin');
+const { register: registerAI } = require('./lib/ai_assistant');
 const { registerUniversityAdmin } = require('./lib/university_admin');
 // ---------- semesters (semester.js): first and second semester uploads never mix ----------
 const SEM = require('./lib/semester');
@@ -5182,46 +5183,6 @@ app.post('/auth/google/app', async (req, res) => {
   }
 });
 
-// ---------- AI assistant (Groq or Claude; members only, rate-limited) ----------
-async function askAI(messages, system) {
-  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);
-  try {
-    if (AI === 'groq') {
-      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST', signal: ctl.signal,
-        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 500, temperature: 0.5, messages: [{ role: 'system', content: system }, ...messages] })
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error((j.error && j.error.message) || r.status);
-      return j.choices[0].message.content;
-    }
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST', signal: ctl.signal,
-      headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, max_tokens: 500, system, messages })
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error((j.error && j.error.message) || r.status);
-    return j.content.filter(b => b.type === 'text').map(b => b.text).join('');
-  } finally { clearTimeout(timer); }
-}
-
-app.post('/api/chat', async (req, res) => {
-  if (!req.user) return res.status(401).json({ error: 'Please log in to use the assistant.' });
-  if (!AI) return res.status(503).json({ error: 'The assistant is not set up yet.' });
-  if (limited('chat:' + req.user.id, 20, 10 * 60e3)) return res.status(429).json({ error: 'Slow down a little and try again in a few minutes.' });
-  const msgs = (Array.isArray(req.body.messages) ? req.body.messages : [])
-    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
-    .slice(-10).map(m => ({ role: m.role, content: m.content.slice(0, 1000) }));
-  while (msgs.length && msgs[0].role !== 'user') msgs.shift();
-  if (!msgs.length || msgs[msgs.length - 1].role !== 'user') return res.status(400).json({ error: 'Send a question first.' });
-  const pages = db.prepare('SELECT slug,title,dept,level,author_id,course_id,semester,university FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, req.user)).slice(0, 50);
-  const system = `You are the assistant for Studies Hub, a website that hosts study pages. Answer clearly and briefly in plain language, and say so when you are not sure. Pages currently on the site: ${pages.map(p => `${p.title} (/p/${p.slug})`).join(', ') || 'none yet'}. Do not invent pages or features that are not listed.`;
-  try { res.json({ reply: await askAI(msgs, system) }); }
-  catch (e) { console.error('AI error:', e.message); res.status(502).json({ error: 'The assistant could not answer right now. Please try again.' }); }
-});
-
 app.post('/logout', (req, res) => {
   { const f = /(?:^|;\s*)fcm=([\w:.\-]+)/.exec(req.headers.cookie || ''); if (f) fcm.forget(f[1]); } // stop ringing this phone for the person who just left
   if (req.sid) db.prepare('DELETE FROM sessions WHERE id=?').run(sidKey(req.sid));
@@ -6039,6 +6000,7 @@ app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Somet
 
 const uni = registerUniversityAdmin(app, { applySemester, semesterField, videoMimeOf, db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
+registerAI(app, { db, limited, sortedFor, AI, AI_MODEL, hasPurchased, can });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.
 setTimeout(() => { try { if (getSecret('maintenance_since')) maintenanceBack(); } catch (e) { console.error('Back-online notice failed:', e.message); } }, 15000).unref();
