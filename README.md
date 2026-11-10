@@ -18,6 +18,11 @@ lib/                 the site's separate parts
   pdf_viewer.js        in-page PDF reader
   qr.js                QR codes for laptop sign-in
   semester.js          first/second semester sorting
+routes/              parts of the website moved out of server.js, one section per file
+  security.js          app lock and change password
+  checks.js            admin connection checks
+  backup.js            backup of the app's saved list and settings
+  payments.js          Flutterwave payments and sponsor posts
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site
