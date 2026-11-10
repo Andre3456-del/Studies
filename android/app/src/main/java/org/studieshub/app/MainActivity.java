@@ -88,8 +88,15 @@ public class MainActivity extends Activity {
         return n != null && n.isConnected();
     }
 
+    static java.lang.ref.WeakReference<MainActivity> live;
+    /** The page asked to hang up from the notification area's Hang up button. */
+    boolean hangUpFromNotification() {
+        try { web.post(() -> web.evaluateJavascript("window.__shHangup&&__shHangup()", null)); return true; } catch (Throwable t) { return false; }
+    }
+
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        live = new java.lang.ref.WeakReference<>(this);
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF12121C);
         web = new WebView(this) {
@@ -262,6 +269,12 @@ public class MainActivity extends Activity {
             }
             @JavascriptInterface public void incomingCall(final String id, final String title, final String body) {
                 try { CallService.showCall(MainActivity.this, id, title, body); } catch (Throwable t) { }
+            }
+            @JavascriptInterface public void callOngoing(final String id, final String name, final String text, final double since, final boolean video) {
+                try { ongoingCallId = id; CallService.showOngoing(MainActivity.this, id, name, text, (long) since, video); } catch (Throwable t) { }
+            }
+            @JavascriptInterface public void callOngoingEnd(final String id) {
+                try { CallService.endOngoing(MainActivity.this, id); } catch (Throwable t) { }
             }
             @JavascriptInterface public void incomingEnd(final String id) {
                 try { ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(id.hashCode()); } catch (Throwable t) { }
@@ -461,6 +474,7 @@ public class MainActivity extends Activity {
     /** Opened from a ringing call or a notification: work out where to go. */
     private String fromIntent(Intent in, String dflt) {
         if (in == null) return dflt;
+        if (in.getBooleanExtra("ongoing", false)) return dflt;
         String callId = in.getStringExtra("callId");
         if (callId != null) {
             ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(callId.hashCode());
@@ -475,6 +489,7 @@ public class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent in) {
         super.onNewIntent(in);
         setIntent(in);
+        if (in.getBooleanExtra("ongoing", false)) return; // back to the call: nothing to reload
         web.loadUrl(fromIntent(in, HOME));
     }
 
@@ -672,7 +687,8 @@ public class MainActivity extends Activity {
         super.onActivityResult(code, result, data);
     }
 
-    @Override protected void onDestroy() { if (ScreenShareService.ui == this) ScreenShareService.ui = null; super.onDestroy(); }
+    @Override protected void onDestroy() { if (ScreenShareService.ui == this) ScreenShareService.ui = null; if (ongoingCallId != null) { CallService.endOngoing(this, ongoingCallId); ongoingCallId = null; } super.onDestroy(); }
+    private String ongoingCallId;
 
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
     @Override protected void onPause() { super.onPause(); fg = false; if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }

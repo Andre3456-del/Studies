@@ -95,6 +95,39 @@ public class CallService extends FirebaseMessagingService {
     static int flags() { return PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0); }
 
     /** A call notification with Answer / Decline. While the phone is in use it is a small banner at the top; only a sleeping or locked phone gets the full call screen. */
+    /** The notification for a call the person is on or making: "Calling…", "Ringing…", then the running time, with a Hang up button. */
+    static void showOngoing(Context c, String id, String name, String text, long since, boolean video) {
+        if (id == null) return;
+        NotificationManager nm = (NotificationManager) c.getSystemService(NOTIFICATION_SERVICE);
+        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel("call_ongoing_v1") == null) {
+            NotificationChannel ch = new NotificationChannel("call_ongoing_v1", "Calls in progress", NotificationManager.IMPORTANCE_LOW);
+            ch.setSound(null, null); ch.enableVibration(false); ch.setShowBadge(false);
+            nm.createNotificationChannel(ch);
+        }
+        int nid = ("ongoing:" + id).hashCode();
+        Intent open = new Intent(c, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT).putExtra("ongoing", true);
+        Intent end = new Intent(c, CallActionReceiver.class).putExtra("callId", id).putExtra("hangup", true);
+        PendingIntent tap = PendingIntent.getActivity(c, nid, open, flags());
+        PendingIntent hang = PendingIntent.getBroadcast(c, nid + 1, end, flags());
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, "call_ongoing_v1") : new Notification.Builder(c);
+        b.setSmallIcon(android.R.drawable.sym_call_outgoing).setContentTitle(name).setContentText(text)
+         .setColor(0xFF000000).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(false).setOnlyAlertOnce(true)
+         .setVisibility(Notification.VISIBILITY_PUBLIC).setContentIntent(tap);
+        if (since > 0) b.setUsesChronometer(true).setWhen(since); else b.setWhen(System.currentTimeMillis());
+        if (Build.VERSION.SDK_INT >= 31) {
+            android.app.Person p = new android.app.Person.Builder().setName(name).setImportant(true).build();
+            b.setStyle(Notification.CallStyle.forOngoingCall(p, hang));
+        } else {
+            b.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Hang up", hang).build());
+        }
+        nm.notify(nid, b.build());
+    }
+
+    static void endOngoing(Context c, String id) {
+        if (id == null) return;
+        ((NotificationManager) c.getSystemService(NOTIFICATION_SERVICE)).cancel(("ongoing:" + id).hashCode());
+    }
+
     static void showCall(Context c, String id, String title, String body) {
         if (id == null) return;
         channels(c);
