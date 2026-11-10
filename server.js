@@ -5118,6 +5118,13 @@ setInterval(async () => {
     for (const w of waiting) await flwSettle(w.tx_ref);
   } catch (e) { }
 }, 30000);
+// You can clear your own payment attempts that Flutterwave never confirmed. A verified payment, or anyone else's, cannot be deleted.
+app.post('/admin/flw/delete', admin, (req, res) => {
+  const row = db.prepare('SELECT user_id,status FROM flw_payments WHERE tx_ref=?').get(String(req.body.ref || ''));
+  if (!row || row.user_id !== req.user.id || row.status === 'paid') return res.redirect(back('That payment cannot be deleted.'));
+  db.prepare('DELETE FROM flw_payments WHERE tx_ref=?').run(String(req.body.ref));
+  res.redirect(back('Payment deleted.'));
+});
 app.post('/admin/payments/:id/approve', admin, (req, res) => {
   const claim = db.prepare('SELECT p.user_id, pg.title, pg.slug FROM purchases p JOIN pages pg ON pg.id=p.page_id WHERE p.id=?').get(req.params.id);
   db.prepare("UPDATE purchases SET status='approved' WHERE id=?").run(req.params.id);
@@ -5719,7 +5726,7 @@ app.get('/admin', adminish, (req, res) => {
     if (!rows.length) return '<h3 id="payments">Flutterwave payments</h3><p class="mut">No payments yet.</p>';
     const mark = r => r.status === 'paid' ? '<span style="color:#22c55e;font-weight:700">&#10003; Verified</span>' : r.status === 'cancelled' || r.created_at < Date.now() - 172800000 ? '<span style="color:#ef4444;font-weight:700">&#10007; Not completed</span>' : '<span style="color:#f59e0b;font-weight:700">Waiting for Flutterwave</span>';
     const total = db.prepare("SELECT COALESCE(SUM(amount_kobo),0) n FROM flw_payments WHERE status='paid'").get().n;
-    return `<h3 id="payments">Flutterwave payments</h3><p class="mut">Verified in total: <b>₦${(total / 100).toLocaleString()}</b>. Flutterwave confirms everything by itself.</p>${rows.map(r => `<div class="card"><b>${esc(r.un)}</b> <span class="mut">${esc(r.ue)}</span><br>${r.kind === 'sponsor' ? 'Sponsor post' : 'Locked page'} &middot; ₦${(r.amount_kobo / 100).toLocaleString()} &middot; ${mark(r)}<br><span class="mut">${new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ')}</span></div>`).join('')}`;
+    return `<h3 id="payments">Flutterwave payments</h3><p class="mut">Verified in total: <b>₦${(total / 100).toLocaleString()}</b>. Flutterwave confirms everything by itself.</p>${rows.map(r => `<div class="card"><b>${esc(r.un)}</b> <span class="mut">${esc(r.ue)}</span><br>${r.kind === 'sponsor' ? 'Sponsor post' : 'Locked page'} &middot; ₦${(r.amount_kobo / 100).toLocaleString()} &middot; ${mark(r)}<br><span class="mut">${new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ')}</span>${r.user_id === me.id && r.status !== 'paid' ? `<form method="post" action="/admin/flw/delete" style="margin-top:8px"><input type="hidden" name="ref" value="${esc(r.tx_ref)}"><button class="link">Delete</button></form>` : ''}</div>`).join('')}`;
   })() : '';
   const paymentsSection = cf ? (() => {
     const claims = db.prepare("SELECT p.*, u.name un, u.email ue, pg.title pt, pg.slug ps, pg.price_kobo FROM purchases p JOIN users u ON u.id=p.user_id JOIN pages pg ON pg.id=p.page_id WHERE p.status='pending' ORDER BY p.id DESC").all();
