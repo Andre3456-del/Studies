@@ -23,6 +23,10 @@ routes/              parts of the website moved out of server.js, one section pe
   checks.js            admin connection checks
   backup.js            backup of the app's saved list and settings
   payments.js          Flutterwave payments and sponsor posts
+  link_login.js        linking a laptop, devices, sign-in, email verification
+  forgot.js            forgot password (6-digit email code)
+  google.js            Continue with Google
+  ai.js                the AI assistant
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site

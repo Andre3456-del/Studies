@@ -784,7 +784,6 @@ app.use((req, res, next) => {
 const { pdfViewerHtml } = require('./lib/pdf_viewer');
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./lib/calling');
 const { registerLecturerAdmin } = require('./lib/lecturer_admin');
-const { register: registerAI } = require('./lib/ai_assistant');
 const { registerUniversityAdmin } = require('./lib/university_admin');
 // ---------- semesters (semester.js): first and second semester uploads never mix ----------
 const SEM = require('./lib/semester');
@@ -4916,280 +4915,17 @@ app.post('/lecturer/signup', async (req, res) => {
   res.send(checkEmailPage(email));
 });
 
-// ---------- link a laptop from your phone (like WhatsApp Web) ----------
-// A laptop cannot log in with a password. It shows a QR code; a phone that is already logged in scans it and approves.
-// The phone can cut the laptop off at any time from Settings > Linked devices.
-const { qrSvg } = require('./lib/qr');
-const isPhoneAgent = req => /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(String(req.headers['user-agent'] || ''));
-// A laptop = a computer browser, or any screen wide enough for the laptop layout (the page tells us its width in a cookie).
-const cookieOf = (req, name) => { const m = new RegExp('(?:^|;\\s*)' + name + '=([^;]*)').exec(String(req.headers.cookie || '')); return m ? decodeURIComponent(m[1]) : ''; };
-// What kind of device is this? phone | tablet | laptop (the page also reports it in a cookie after its first load, which is how
-// an iPad that pretends to be a Mac, or a phone set to "desktop site", is recognised).
-function deviceOf(req) {
-  const ua = String(req.headers['user-agent'] || '');
-  if (/iPhone|iPod|Windows Phone/i.test(ua) || (/Android/i.test(ua) && /Mobile/i.test(ua))) return 'phone';
-  const c = cookieOf(req, 'dev');
-  if (c === 'phone' || c === 'tablet' || c === 'laptop') return c;
-  if (/iPad|Android/i.test(ua)) return 'tablet';
-  return 'laptop';
-}
-const isLaptop = req => deviceOf(req) === 'laptop';
-const isWideScreen = req => deviceOf(req) !== 'phone' && /(^|;\s*)wide=1/.test(String(req.headers.cookie || ''));
-const deviceLabel = req => {
-  const ua = String(req.headers['user-agent'] || '');
-  const app = /StudiesHubApp\/[\d.]+(?: \(([^)]{2,60})\))?/.exec(ua);
-  if (app) return `${app[1] ? app[1].trim() : 'Android phone'} (Studies Hub app)`; // the phone's own name
-  const os = /iPhone|iPod/i.test(ua) ? 'iPhone' : /iPad/i.test(ua) ? 'iPad' : /Android/i.test(ua) ? 'Android' : /Windows/i.test(ua) ? 'Windows' : /Mac OS X|Macintosh/i.test(ua) ? 'Mac' : /CrOS/i.test(ua) ? 'Chromebook' : /Linux/i.test(ua) ? 'Linux' : 'a computer';
-  const br = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /SamsungBrowser/.test(ua) ? 'Samsung Internet' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
-  const model = os === 'Android' ? ((/Android [\d.]+; ([^;)]+)/.exec(ua) || [])[1] || '').trim() : '';
-  return `${br} on ${os}${model && model !== 'K' ? ' (' + model + ')' : ''}`;
-};
-// A device that was logged in by scanning a code is a "linked" device: it cannot see or use Linked devices (only the main phone can).
-const isLinkedSession = req => !!req.sid && !!db.prepare('SELECT 1 FROM linked_devices WHERE sid=?').get(sidKey(req.sid));
-const canLinkOthers = req => !isLaptop(req) && !isLinkedSession(req);
-const LINK_TTL = 5 * 60 * 1000;
-// A code made on the Lecturer Portal can only be approved by a lecturer / school-staff account; a student code only by a non-lecturer account.
-const linkKindOf = next => /^\/(lecturer|uni)/.test(String(next || '')) ? 'lecturer' : 'student';
-const staffAccount = u => !!u && (!!u.is_lecturer || u.role === 'uniadmin' || u.role === 'admin' || canLecturerAdmin(u));
-const studentAccount = u => !!u && !u.is_lecturer && u.role !== 'uniadmin';
-const mayApproveKind = (u, kind) => kind === 'lecturer' ? staffAccount(u) : studentAccount(u);
-function linkPage(req, next, note) {
-  db.prepare('DELETE FROM device_links WHERE created<?').run(Date.now() - 3600e3);
-  const token = crypto.randomBytes(16).toString('hex');
-  const kind = linkKindOf(next);
-  db.prepare('INSERT INTO device_links(token,created,label,kind) VALUES(?,?,?,?)').run(sha(token), Date.now(), deviceLabel(req), kind);
-  const origin = baseUrl(req).replace(/\/$/, '');
-  const svg = qrSvg(`${origin}/link/${token}`, 6);
-  return layout('Log in', `<div class="card auth" style="text-align:center"><h1 style="margin-top:0">${kind === 'lecturer' ? 'Lecturer Portal: log in with your phone' : 'Log in with your phone'}</h1>${kind === 'lecturer' ? '<p class="mut" style="margin-top:0">For lecturers and school staff.</p>' : ''}
-${note ? `<p class="err">${esc(note)}</p>` : ''}
-<div style="display:inline-block;background:#fff;padding:6px;border-radius:14px;max-width:100%"><div id="qrBox" style="width:min(300px,80vw)">${svg.replace(/width="\d+" height="\d+"/, 'width="100%" height="auto"')}</div></div>
-<p id="linkMsg" class="mut" style="margin:10px 0 0">Waiting for your phone&hellip;</p>
-<ol style="text-align:left;line-height:1.7;margin:14px auto 6px;max-width:340px;padding-left:20px"><li>Open Studies Hub on your ${isLaptop(req) ? 'phone' : 'main phone (already logged in)'}.</li><li>Go to <b>Settings &rarr; Linked devices</b>.</li><li>Tap <b>Link a device</b> and point the phone at this code.</li></ol>${isLaptop(req) ? '' : '<p style="margin:10px 0 0"><a href="/login">Use email and password instead</a></p>'}
-</div>
-<script>(function(){var t=${JSON.stringify(token)},next=${JSON.stringify(next || '/dashboard')},m=document.getElementById('linkMsg'),stop=false;
-function tick(){if(stop)return;fetch('/link/status/'+t,{credentials:'same-origin',cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
-if(j.state==='ok'){stop=true;m.textContent='Linked! Opening…';location.href=next}
-else if(j.state==='expired'){stop=true;m.innerHTML='This code timed out. <a href="/login">Get a new one</a>'}
-else setTimeout(tick,2000)}).catch(function(){setTimeout(tick,3000)})}
-tick()})()</script>`, null);
-}
-app.get('/link/status/:token', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(sha(String(req.params.token)));
-  if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.json({ state: 'expired' });
-  if (!row.approved || !row.user_id) return res.json({ state: 'wait' });
-  const claimed = db.prepare('UPDATE device_links SET done=1 WHERE token=? AND done=0').run(row.token);
-  if (!claimed.changes) return res.json({ state: 'expired' });
-  const key = startSession(res, row.user_id);
-  db.prepare('INSERT OR REPLACE INTO linked_devices(sid,user_id,label,created) VALUES(?,?,?,?)').run(key, row.user_id, row.label || 'Computer', Date.now());
-  res.json({ state: 'ok' });
-});
-app.get('/link/:token', (req, res) => {
-  if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl || req.url));
-  if (!canLinkOthers(req)) return res.status(403).send(notice('Not from this device', 'This device was linked by a code, so it cannot link other devices. Use your main phone.', '<p><a href="/">Home</a></p>'));
-  const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(sha(String(req.params.token)));
-  if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
-  const kindNow = row.kind === 'lecturer' ? 'lecturer' : 'student';
-  if (!mayApproveKind(req.user, kindNow)) return res.status(403).send(notice(kindNow === 'lecturer' ? 'Lecturer Portal code' : 'Student code', kindNow === 'lecturer' ? 'This laptop is on the Lecturer Portal, which needs a lecturer account. You are logged in with a student account, so you cannot link it.' : 'This laptop is on the student login. You are logged in with a lecturer account, so use the Lecturer Portal code on the laptop instead.', '<p><a href="/settings/devices">Back</a></p>'));
-  res.send(layout('Link a device', `<div class="card auth"><h1 style="margin-top:0">Link this laptop?</h1><p>A computer (<b>${esc(row.label || 'Computer')}</b>) wants to log in as <b>${esc(req.user.name)}</b>.</p><p class="mut">Only continue if you are looking at that laptop right now and it is yours. Anyone you link can see your account until you remove them.</p>
-<form method="post" action="/link/${esc(req.params.token)}"><button>Yes, link it</button> <a class="btn ghost" href="/settings/devices" style="margin-left:8px">Cancel</a></form></div>`, req.user));
-});
-app.post('/link/:token', (req, res) => {
-  if (!req.user) return res.sendStatus(401);
-  if (!canLinkOthers(req)) return res.sendStatus(403);
-  const h = sha(String(req.params.token));
-  const row = db.prepare('SELECT * FROM device_links WHERE token=?').get(h);
-  if (!row || row.done || Date.now() - row.created > LINK_TTL) return res.status(404).send(notice('Code expired', 'This code is no longer valid. Ask the laptop to show a fresh one.', '<p><a href="/settings/devices">Back</a></p>'));
-  if (!mayApproveKind(req.user, row.kind === 'lecturer' ? 'lecturer' : 'student')) return res.status(403).send(notice('Wrong portal', row.kind === 'lecturer' ? 'This code is for the Lecturer Portal. It needs a lecturer account.' : 'This code is for the student login. Use the Lecturer Portal code with a lecturer account.', '<p><a href="/settings/devices">Back</a></p>'));
-  db.prepare('UPDATE device_links SET user_id=?, approved=1 WHERE token=? AND approved IS NULL').run(req.user.id, h);
-  res.send(notice('Linked', 'Your laptop is opening Studies Hub now. You can remove it any time from Settings → Linked devices.', '<p><a href="/settings/devices">Linked devices</a></p>'));
-});
-app.get('/settings/devices', (req, res) => {
-  if (!req.user) return res.redirect('/login?next=/settings/devices');
-  if (!canLinkOthers(req)) return res.redirect('/settings');
-  db.prepare('DELETE FROM linked_devices WHERE sid NOT IN (SELECT id FROM sessions WHERE expires>?)').run(Date.now());
-  const list = db.prepare('SELECT * FROM linked_devices WHERE user_id=? ORDER BY created DESC').all(req.user.id);
-  const rows = list.length ? list.map(d => `<div class="card row" style="align-items:center;justify-content:space-between;gap:12px"><div><b>${esc(d.label)}</b><br><span class="mut" style="font-size:13px">Linked ${esc(new Date(d.created).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))}</span></div><form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="${esc(d.sid)}"><button class="ghost">Log out</button></form></div>`).join('') : '<p class="mut">No devices are linked yet.</p>';
-  res.send(layout('Linked devices', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Linked devices</h1>
-<div class="card"><p style="margin-top:0">To use Studies Hub on a laptop, phone or tablet: open it there, choose <b>Log in with a QR code</b>, then scan the code it shows.</p><button id="scanBtn" type="button">Link a device</button>
-<div id="scanBox" hidden style="margin-top:12px"><video id="scanVid" playsinline muted style="width:100%;max-width:360px;border-radius:12px;background:#000"></video><p id="scanMsg" class="mut"></p></div></div>
-<h2 style="font-size:18px">Linked devices</h2>${rows}${list.length > 1 ? '<form method="post" action="/settings/devices/remove"><input type="hidden" name="sid" value="all"><button class="ghost">Log out of all linked devices</button></form>' : ''}
-<script>(function(){var b=document.getElementById('scanBtn'),box=document.getElementById('scanBox'),v=document.getElementById('scanVid'),m=document.getElementById('scanMsg'),stream=null,go=false;
-function end(){go=false;if(stream)stream.getTracks().forEach(function(t){t.stop()})}
-b.onclick=function(){box.hidden=false;
-if(!('BarcodeDetector' in window)||!navigator.mediaDevices){m.textContent='This browser cannot scan inside the page. Open your phone\\u2019s Camera app and point it at the code on the laptop; it will open here.';return}
-var det=new BarcodeDetector({formats:['qr_code']});
-navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(s){stream=s;v.srcObject=s;v.play();go=true;m.textContent='Point at the code on your laptop\\u2026';
-(function loop(){if(!go)return;det.detect(v).then(function(r){for(var i=0;i<r.length;i++){var x=/\\/link\\/([0-9a-f]{32})/.exec(r[i].rawValue||'');if(x){end();location.href='/link/'+x[1];return}}setTimeout(loop,250)}).catch(function(){setTimeout(loop,400)})})()
-}).catch(function(){m.textContent='Camera permission was blocked. Allow the camera, or use your phone\\u2019s Camera app on the laptop code.'})};
-window.addEventListener('pagehide',end)})()</script>`, req.user));
-});
-app.post('/settings/devices/remove', (req, res) => {
-  if (!req.user) return res.sendStatus(401);
-  if (!canLinkOthers(req)) return res.sendStatus(403);
-  const sid = String(req.body.sid || '');
-  const mine = sid === 'all' ? db.prepare('SELECT sid FROM linked_devices WHERE user_id=?').all(req.user.id).map(r => r.sid) : db.prepare('SELECT sid FROM linked_devices WHERE user_id=? AND sid=?').all(req.user.id, sid).map(r => r.sid);
-  for (const k of mine) { db.prepare('DELETE FROM sessions WHERE id=? AND user_id=?').run(k, req.user.id); db.prepare('DELETE FROM linked_devices WHERE sid=?').run(k); }
-  res.redirect('/settings/devices');
-});
+// ---------- Linking a laptop from the phone, devices, sign-in, email verification (now in routes/link_login.js) ----------
+const { canLinkOthers, deviceOf, isLaptop, isWideScreen, linkPage } = require('./routes/link_login')(app, { DUMMY_HASH, authForm, baseUrl, bcrypt, canLecturerAdmin, crypto, db, esc, fails, layout, noteFail, notice, resendForm, safeNext, sendSafely, sha, sidKey, startSession, tooMany });
 
-app.get('/login', (req, res) => {
-  const next = safeNext(req.query.next);
-  if ((isLaptop(req) && !req.query.admin) || req.query.qr) return res.send(linkPage(req, next));
-  res.send(authForm('login', '', next));
-});
-app.post('/login', (req, res) => {
-  const next = safeNext(req.body.next);
-  if (tooMany(req.ip)) return res.status(429).send(authForm('login', 'Too many attempts. Try again in 15 minutes.', next));
-  const who = String(req.body.email || '').trim().toLowerCase().slice(0, 200), acct = 'acct:' + who;
-  if (tooMany(acct)) return res.status(429).send(authForm('login', 'Too many attempts on this account. Try again in 15 minutes, or reset your password.', next));
-  const u = db.prepare('SELECT * FROM users WHERE email=?').get(who);
-  if (!u) bcrypt.compareSync(String(req.body.password || ''), DUMMY_HASH); // same waiting time whether or not the email exists
-  if (!u || !bcrypt.compareSync(String(req.body.password || ''), u.hash)) {
-    noteFail(req.ip); noteFail(acct);
-    return res.status(401).send(authForm('login', 'Wrong email or password.', next));
-  }
-  if (!u.verified) return res.status(403).send(notice('Verify your email', 'Your email is not verified yet. Check your inbox for the link, or request a new one.', resendForm(u.email)));
-  if (isLaptop(req) && u.role !== 'admin') return res.status(403).send(linkPage(req, next, 'Laptops log in by linking with your phone. Scan the code below.'));
-  fails.delete('acct:' + who);
-  startSession(res, u.id);
-  res.redirect(next || '/');
-});
+// ---------- Forgot password: 6-digit email code (now in routes/forgot.js) ----------
+require('./routes/forgot')(app, { bcrypt, crypto, db, forgotForm, limited, notice, resetForm, sendResetCode, weakPw });
 
-app.get('/verify', (req, res) => {
-  const token = String(req.query.token || '');
-  const u = token && db.prepare('SELECT id FROM users WHERE verify_hash=? AND verify_expires>?').get(sha(token), Date.now());
-  if (!u) return res.status(400).send(notice('Link invalid or expired', 'Request a new verification email below.', resendForm()));
-  db.prepare('UPDATE users SET verified=1, verify_hash=NULL, verify_expires=NULL WHERE id=?').run(u.id);
-  res.send(notice('Email verified', 'Your account is active.', '<p><a href="/login">Log in</a></p>'));
-});
+// ---------- Continue with Google (now in routes/google.js) ----------
+const { APP_GOOGLE_IDS } = require('./routes/google')(app, { GOOGLE_ON, SECURE, app, baseUrl, bcrypt, crypto, db, fs, insertUser, isLaptop, limited, notice, path, startSession });
 
-app.post('/resend', async (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const u = db.prepare('SELECT * FROM users WHERE email=? AND verified=0').get(email);
-  if (u) await sendSafely(req, u);
-  res.send(notice('Check your email', 'If that address has an unverified account, a new link is on its way.', resendForm(email)));
-});
-
-// ---------- forgot password: 6-digit email code (same flow for every account, admin included) ----------
-app.get('/forgot', (req, res) => res.send(forgotForm()));
-app.post('/forgot', async (req, res) => {
-  if (limited('forgot-ip:' + req.ip, 10, 15 * 60e3)) return res.status(429).send('Too many requests. Please try again in a few minutes.');
-  const email = String(req.body.email || '').trim().toLowerCase();
-  if (limited('forgot-ip:' + req.ip, 8, 15 * 60e3)) return res.status(429).send(forgotForm('Too many requests. Try again in a few minutes.'));
-  const u = email && db.prepare('SELECT * FROM users WHERE email=?').get(email);
-  if (u && !limited('forgot-em:' + email, 3, 15 * 60e3)) {
-    const code = String(crypto.randomInt(100000, 1000000));
-    db.prepare('UPDATE users SET reset_hash=?, reset_expires=?, reset_attempts=0 WHERE id=?').run(bcrypt.hashSync(code, 10), Date.now() + 600000, u.id);
-    try { await sendResetCode(u.email, code); } catch (e) { console.error('Reset email failed:', e.message); }
-  }
-  res.redirect('/reset?email=' + encodeURIComponent(email)); // identical whether or not the account exists
-});
-
-app.get('/reset', (req, res) => res.send(resetForm(String(req.query.email || ''))));
-app.post('/reset', (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const code = String(req.body.code || '').trim(), pw = String(req.body.password || '');
-  const bad = m => res.status(400).send(resetForm(email, m));
-  if (limited('reset-ip:' + req.ip, 10, 15 * 60e3)) return res.status(429).send(resetForm(email, 'Too many attempts. Try again in a few minutes.'));
-  if (pw.length < 8) return bad('Password must be at least 8 characters.');
-  if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');
-  const u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
-  if (!u || !u.reset_hash || !u.reset_expires) return bad('Invalid or expired code.');
-  const clear = () => db.prepare('UPDATE users SET reset_hash=NULL, reset_expires=NULL, reset_attempts=0 WHERE id=?').run(u.id);
-  if (Date.now() > u.reset_expires) { clear(); return bad('That code expired. Request a new one.'); }
-  const attempts = (u.reset_attempts || 0) + 1;
-  if (attempts > 5) { clear(); return bad('Too many wrong codes. Request a new one.'); }
-  db.prepare('UPDATE users SET reset_attempts=? WHERE id=?').run(attempts, u.id);
-  if (!bcrypt.compareSync(code, u.reset_hash)) return bad('Invalid or expired code.');
-  db.prepare('UPDATE users SET hash=?, verified=1, reset_hash=NULL, reset_expires=NULL, reset_attempts=0 WHERE id=?').run(bcrypt.hashSync(pw, 12), u.id);
-  db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
-  res.send(notice('Password updated', 'You can now log in with your new password.', '<p><a class="btn" href="/login">Log in</a></p>'));
-});
-
-// ---------- Continue with Google ----------
-const gRedirect = req => process.env.GOOGLE_REDIRECT_URI || `${baseUrl(req)}/auth/google/callback`;
-app.get('/auth/google', (req, res) => {
-  if (!GOOGLE_ON) return res.redirect('/login');
-  const state = crypto.randomBytes(16).toString('hex');
-  const cookies = [`gstate=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${SECURE}`];
-  if (req.query.as === 'lecturer') cookies.push(`gaslecturer=1; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${SECURE}`);
-  res.setHeader('Set-Cookie', cookies);
-  res.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID, redirect_uri: gRedirect(req), response_type: 'code',
-    scope: 'openid email profile', state, prompt: 'select_account'
-  }));
-});
-app.get('/auth/google/callback', async (req, res) => {
-  try {
-    const c = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('gstate='));
-    if (!GOOGLE_ON || !req.query.code || !c || c.slice(7) !== req.query.state) throw new Error('state mismatch');
-    const tr = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ code: String(req.query.code), client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET, redirect_uri: gRedirect(req), grant_type: 'authorization_code' })
-    });
-    const t = await tr.json();
-    if (!tr.ok) throw new Error(t.error_description || t.error);
-    const g = await (await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${t.access_token}` } })).json();
-    if (!g.email || !g.email_verified) throw new Error('Google email not verified');
-    const email = g.email.toLowerCase(), rnd = () => bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 10);
-    const asLecturer = (req.headers.cookie || '').split(';').map(x => x.trim()).some(x => x === 'gaslecturer=1');
-    let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
-    if (!u) {
-      const id = insertUser('name,email,hash,verified,is_lecturer,gsignup', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, asLecturer ? 1 : 0, 1]);
-      u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
-    } else if (!u.verified) { // drop any password someone set before the real owner proved the email
-      db.prepare('UPDATE users SET verified=1, hash=?, gsignup=1 WHERE id=?').run(rnd(), u.id);
-      db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
-    }
-    if (isLaptop(req) && u.role !== 'admin') return res.redirect('/login');
-    startSession(res, u.id);
-    res.redirect('/');
-  } catch (e) {
-    console.error('Google sign-in failed:', e.message);
-    res.status(400).send(notice('Google sign-in failed', 'Please try again, or use your email and password.', '<p><a class="btn" href="/login">Back to log in</a></p>'));
-  }
-});
-
-// Android app: the phone's own Google account picker gives the app an ID token; we check it with Google and sign the person in.
-const APP_GOOGLE_IDS = (() => {
-  const ids = [process.env.GOOGLE_APP_CLIENT_ID, process.env.GOOGLE_CLIENT_ID].filter(Boolean);
-  try { const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'android', 'app', 'google-services.json'), 'utf8')); for (const c of j.client || []) for (const o of c.oauth_client || []) if (o.client_type === 3 && o.client_id) ids.push(o.client_id); } catch (e) { /* file missing: fine */ }
-  return [...new Set(ids)];
-})();
-app.post('/auth/google/app', async (req, res) => {
-  try {
-    if (!/StudiesHubApp/.test(req.headers['user-agent'] || '') || !APP_GOOGLE_IDS.length) throw new Error('not the app / not set up');
-    if (limited('gapp:' + (req.ip || ''), 20, 10 * 60 * 1000)) throw new Error('too many tries');
-    const idToken = String((req.body && req.body.idToken) || '');
-    if (idToken.length < 100 || idToken.length > 4000) throw new Error('bad token');
-    const gr = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken));
-    const g = await gr.json();
-    if (!gr.ok || !APP_GOOGLE_IDS.includes(g.aud) || !/^(https:\/\/)?accounts\.google\.com$/.test(g.iss || '') || String(g.email_verified) !== 'true' || !g.email) throw new Error('Google did not accept the token');
-    const email = String(g.email).toLowerCase(), rnd = () => bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 10);
-    let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
-    if (!u) {
-      const id = insertUser('name,email,hash,verified,is_lecturer,gsignup', [String(g.name || email.split('@')[0]).slice(0, 80), email, rnd(), 1, req.body.lecturer ? 1 : 0, 1]);
-      u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
-    } else if (!u.verified) {
-      db.prepare('UPDATE users SET verified=1, hash=?, gsignup=1 WHERE id=?').run(rnd(), u.id);
-      db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
-    }
-    startSession(res, u.id);
-    res.json({ ok: true, url: req.body.lecturer ? '/lecturer' : '/' });
-  } catch (e) {
-    console.error('App Google sign-in failed:', e.message);
-    res.status(400).json({ error: 'Google sign-in failed. Please try again, or use your email and password.' });
-  }
-});
-
-app.post('/logout', (req, res) => {
-  { const f = /(?:^|;\s*)fcm=([\w:.\-]+)/.exec(req.headers.cookie || ''); if (f) fcm.forget(f[1]); } // stop ringing this phone for the person who just left
-  if (req.sid) db.prepare('DELETE FROM sessions WHERE id=?').run(sidKey(req.sid));
-  res.setHeader('Clear-Site-Data', '"cache"'); // nothing from this account stays readable in the browser on a shared phone
-  res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
-  res.redirect('/');
-});
+// ---------- AI assistant (Groq or Claude; members only, rate-limited) (now in routes/ai.js) ----------
+require('./routes/ai')(app, { AI, AI_MODEL, app, db, fcm, limited, sidKey, sortedFor });
 
 // ---------- admin ----------
 const back = msg => '/admin?' + (adminTab ? 'tab=' + adminTab + '&' : '') + 'msg=' + encodeURIComponent(msg);
@@ -6000,7 +5736,6 @@ app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Somet
 
 const uni = registerUniversityAdmin(app, { applySemester, semesterField, videoMimeOf, db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
-registerAI(app, { db, limited, sortedFor, AI, AI_MODEL, hasPurchased, can });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.
 setTimeout(() => { try { if (getSecret('maintenance_since')) maintenanceBack(); } catch (e) { console.error('Back-online notice failed:', e.message); } }, 15000).unref();
