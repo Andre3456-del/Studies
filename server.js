@@ -301,9 +301,9 @@ const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'Esseabasi Usen Inyan
 const PRICE_KOBO = Math.round(PRICE_NGN * 100);
 const SPONSOR_PRICE_NGN = Number(process.env.SPONSOR_PRICE_NGN || 2500);
 const SPONSOR_PRICE_KOBO = Math.round(SPONSOR_PRICE_NGN * 100);
-const FLW_PUBLIC_KEY = process.env.FLUTTERWAVE_PUBLIC_KEY || '';
-const FLW_SECRET_KEY = process.env.FLUTTERWAVE_SECRET_KEY || '';
-const FLW_ON = !!(FLW_PUBLIC_KEY && FLW_SECRET_KEY);
+const FLW_PUBLIC_KEY = process.env.FLUTTERWAVE_PUBLIC_KEY || process.env.FLW_PUBLIC_KEY || '';
+const FLW_SECRET_KEY = process.env.FLUTTERWAVE_SECRET_KEY || process.env.FLW_SECRET_KEY || '';
+const FLW_ON = !!FLW_SECRET_KEY; // the hosted payment page only needs the secret key
 // Always re-verify against Flutterwave's own record of the transaction -- the browser's "payment successful"
 // callback is never trusted by itself, since that could be spoofed by anyone who can run JavaScript.
 // JSON for use inside an inline <script>: also escapes < > & so a title or name containing "</script>" can't break out of it.
