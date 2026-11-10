@@ -784,6 +784,7 @@ app.use((req, res, next) => {
 const { pdfViewerHtml } = require('./lib/pdf_viewer');
 const { registerCalling, clientScript: CALLING_CLIENT_JS } = require('./lib/calling');
 const { registerLecturerAdmin } = require('./lib/lecturer_admin');
+const { register: registerAI } = require('./lib/ai_assistant');
 const { registerUniversityAdmin } = require('./lib/university_admin');
 // ---------- semesters (semester.js): first and second semester uploads never mix ----------
 const SEM = require('./lib/semester');
@@ -4924,8 +4925,14 @@ require('./routes/forgot')(app, { bcrypt, crypto, db, forgotForm, limited, notic
 // ---------- Continue with Google (now in routes/google.js) ----------
 const { APP_GOOGLE_IDS } = require('./routes/google')(app, { GOOGLE_ON, SECURE, app, baseUrl, bcrypt, crypto, db, fs, insertUser, isLaptop, limited, notice, path, startSession });
 
-// ---------- AI assistant (Groq or Claude; members only, rate-limited) (now in routes/ai.js) ----------
-require('./routes/ai')(app, { AI, AI_MODEL, app, db, fcm, limited, sidKey, sortedFor });
+app.post('/logout', (req, res) => {
+  { const f = /(?:^|;\s*)fcm=([\w:.\-]+)/.exec(req.headers.cookie || ''); if (f) fcm.forget(f[1]); } // stop ringing this phone for the person who just left
+  if (req.sid) db.prepare('DELETE FROM sessions WHERE id=?').run(sidKey(req.sid));
+  res.setHeader('Clear-Site-Data', '"cache"'); // nothing from this account stays readable in the browser on a shared phone
+  res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
+  res.redirect('/');
+});
+
 
 // ---------- admin ----------
 const back = msg => '/admin?' + (adminTab ? 'tab=' + adminTab + '&' : '') + 'msg=' + encodeURIComponent(msg);
@@ -5736,6 +5743,7 @@ app.use((err, req, res, next) => res.status(400).send(layout('Error', `<h2>Somet
 
 const uni = registerUniversityAdmin(app, { applySemester, semesterField, videoMimeOf, db, crypto, bcrypt, esc, layout, deliver, emailShell, sha, insertUser, startSession, notify, fullAdminIds, isCentral, purgeUser, LEVELS, TOP_LEVEL, promoteStudents, promoMsg, weakPw, baseUrl, usernameProblem, cleanUsername, positionTaken, upload, broadcastNews, announceUpload, slugify, uniqueSlug, youtubeId, departmentNames, sendSafely, sendResetCode, limited, PRICE_KOBO, });
 registerLecturerAdmin(app, { db, esc, layout, isCentral, purgeUser, notify, renameValue, cleanUsername, stampSemesters, uni });
+registerAI(app, { db, limited, sortedFor, AI, AI_MODEL, hasPurchased, can });
 sweepRemnants();
 // If an upgrade notice was sent, tell everyone we are back a few seconds after the site restarts.
 setTimeout(() => { try { if (getSecret('maintenance_since')) maintenanceBack(); } catch (e) { console.error('Back-online notice failed:', e.message); } }, 15000).unref();

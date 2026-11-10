@@ -17,6 +17,7 @@ lib/                 the site's separate parts
   public_pages.js      About, guides, sitemap (for Google)
   pdf_viewer.js        in-page PDF reader
   qr.js                QR codes for laptop sign-in
+  ai_assistant.js      the AI assistant
   semester.js          first/second semester sorting
 routes/              parts of the website moved out of server.js, one section per file
   security.js          app lock and change password
@@ -26,7 +27,6 @@ routes/              parts of the website moved out of server.js, one section pe
   link_login.js        linking a laptop, devices, sign-in, email verification
   forgot.js            forgot password (6-digit email code)
   google.js            Continue with Google
-  ai.js                the AI assistant
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site
