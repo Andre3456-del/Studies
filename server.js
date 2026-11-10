@@ -2455,7 +2455,7 @@ function newsFeedBody(req, home = false) {
     if (!waiting.length) return '';
     return `<h3>Waiting for your approval (${waiting.length})</h3>${waiting.map(n => `<div class="card"><b>${esc(n.author)}</b> wrote: <b>${esc(n.title)}</b><p class="mut">${esc(n.body.slice(0, 200))}${n.body.length > 200 ? '…' : ''}</p><div class="row" style="gap:6px"><form method="post" action="/news/${n.id}/approver-approve"><button>Approve</button></form><form method="post" action="/news/${n.id}/approver-reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
   })() : '';
-  const sponsorLink = req.user ? `<p class="mut" style="margin:0 0 16px"><a href="/sponsor">Advertise your business or service here -- ₦2000/month &rarr;</a></p>` : '';
+  const sponsorLink = req.user ? `<p class="mut" style="margin:0 0 16px"><a href="/sponsor">Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>` : '';
   return `${adScript}<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${approverQueue}${submitForm}${sponsorLink}${sponsorCards}${cards || empty}`;
 }
 app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));
@@ -5111,8 +5111,8 @@ app.post('/admin/payments/:id/reject', admin, (req, res) => {
 // Paid promotional posts: any logged-in member can pay to advertise a business or service in News for a month.
 app.get('/sponsor', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/sponsor');
-  res.send(layout('Advertise on Studies Hub', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>Advertise your business or service</h1>
-<p class="mut">₦${SPONSOR_PRICE_NGN} a month to show your post in the News section, clearly marked "Sponsored". Pick how long you want it to run and the price is worked out for you.</p>
+  res.send(layout('Advertise on Studies Hub', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>Advertise here</h1>
+<p class="mut">₦${SPONSOR_PRICE_NGN.toLocaleString()} per month</p>
 <form class="card" method="post" action="/sponsor" enctype="multipart/form-data">
 <input name="title" placeholder="What are you advertising?" required maxlength="140">
 <textarea name="body" placeholder="Describe it" required maxlength="2000" style="width:100%;min-height:80px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea>
@@ -5120,7 +5120,7 @@ app.get('/sponsor', (req, res) => {
 <input type="file" name="image" accept="image/*" style="padding:9px 0">
 <label class="mut">Start date</label><input type="date" name="start_date" id="sponsorStart" required>
 <label class="mut">End date</label><input type="date" name="end_date" id="sponsorEnd" required>
-<p class="pill" id="sponsorBill" style="margin:8px 0">Pick your dates to see the price.</p>
+<p class="pill" id="sponsorBill" style="margin:8px 0">Pick your dates</p>
 <button>Continue to payment</button>
 </form>
 <script>(function(){
@@ -5136,7 +5136,7 @@ app.get('/sponsor', (req, res) => {
       var days=Math.round((new Date(ed.value+'T00:00:00')-startD)/86400000);
       var price=Math.ceil((days/30)*rate);
       bp.textContent='₦'+price.toLocaleString()+' for '+days+' day'+(days===1?'':'s')+' ('+sd.value+' to '+ed.value+')';
-    } else bp.textContent='Pick your dates to see the price.';
+    } else bp.textContent='Pick your dates';
   }
   sd.addEventListener('change',sync);ed.addEventListener('change',sync);sync();
 })()</script>`, req.user));
