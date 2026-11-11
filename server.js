@@ -2266,33 +2266,8 @@ app.get('/browse', (req, res) => {
 // NOTE: this is a plain-language description of the app's real behavior, not legal advice -- have it
 // checked by a lawyer for your jurisdiction (e.g. Nigeria's NDPA) before you rely on it.
 // The page behind the link at the bottom of alert emails: no sign-in needed; the signed link proves whose choice it is.
-function mailPrefPage(req, u, note) {
-  const on = u.email_notify !== 0;
-  const t = mailSig(u.id);
-  return layout('Email preferences', `<div style="max-width:460px;margin:40px auto;padding:0 16px;text-align:center"><div class="card" style="padding:28px 22px">
-<h2 style="margin:0 0 10px">${on ? 'You are subscribed' : 'You are unsubscribed'}</h2>
-${note ? `<p style="margin:0 0 12px;color:#22c55e;font-weight:600">${esc(note)}</p>` : ''}
-<p style="opacity:.8;margin:0 0 20px">${on ? 'You get Studies Hub emails about uploads, news and other updates.' : 'You will not get Studies Hub emails about uploads, news and other updates. Important emails, like verification codes and site notices, still reach you.'}</p>
-<form method="post" action="/email/preferences"><input type="hidden" name="u" value="${u.id}"><input type="hidden" name="t" value="${t}"><input type="hidden" name="do" value="${on ? 'off' : 'on'}">
-<button type="submit" style="padding:12px 26px;font-size:16px;font-weight:700;border:0;border-radius:12px;background:#5bc8ff;color:#04101f;cursor:pointer">${on ? 'Unsubscribe' : 'Subscribe again'}</button></form></div></div>`, req.user);
-}
-function mailPrefUser(id, t) {
-  id = Number(id);
-  if (!id || String(t || '').length !== 32 || !crypto.timingSafeEqual(Buffer.from(String(t)), Buffer.from(mailSig(id)))) return null;
-  return db.prepare('SELECT id,email_notify FROM users WHERE id=?').get(id) || null;
-}
-app.get('/email/preferences', (req, res) => {
-  const u = mailPrefUser(req.query.u, req.query.t);
-  if (!u) return res.status(400).send(layout('Email preferences', '<div style="max-width:460px;margin:40px auto;padding:0 16px;text-align:center"><h2>This link is not valid</h2><p style="opacity:.8">Please use the link in the latest email we sent you.</p></div>', req.user));
-  res.send(mailPrefPage(req, u));
-});
-app.post('/email/preferences', (req, res) => {
-  const u = mailPrefUser(req.body.u, req.body.t);
-  if (!u) return res.sendStatus(400);
-  const on = req.body.do === 'on';
-  db.prepare('UPDATE users SET email_notify=? WHERE id=?').run(on ? 1 : 0, u.id);
-  res.send(mailPrefPage(req, { id: u.id, email_notify: on ? 1 : 0 }, on ? 'You will get these emails again.' : 'Done. You will not get these emails any more.'));
-});
+// ---------- Email preferences (unsubscribe link page) (now in routes/mail_prefs.js) ----------
+require('./routes/mail_prefs')(app, { crypto, db, esc, layout, mailSig });
 app.get('/privacy', (req, res) => {
   const updated = new Date().toISOString().slice(0, 10);
   const contactEmail = (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim();
@@ -2435,67 +2410,8 @@ const feedAdCard = () => `<div class="news-card ad-card"><div class="ad-label">A
 // Public reading pages (About, How it works, Contact, Study guides, sitemap, robots): anyone can read them without logging in.
 require('./lib/public_pages').register(app, { layout, esc, adHead: ADSENSE_HEAD, baseUrl: String(process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org').replace(/\/+$/, ''), contactEmail: (process.env.CONTACT_EMAIL || 'studieshub.org@gmail.com').replace(/^.*<([^>]+)>.*$/, '$1').trim() });
 app.get('/ads.txt', (req, res) => res.type('text/plain').send(`google.com, pub-${ADSENSE_CLIENT.replace('ca-pub-', '')}, DIRECT, f08c47fec0942fa0\n`));
-function newsFeedBody(req, home = false) {
-  const all = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
-  const items = all.filter(n => canSeeNewsItem(n, req.user));
-  const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
-  const cardList = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`);
-  const cards = cardList.join('');
-  const empty = '<p class="mut">No news yet. Check back soon.</p>';
-  if (home) return ADSENSE_FEED_SLOT && cardList.length ? cardList.flatMap((c, i) => i === 0 || i % 4 === 3 ? [c, feedAdCard()] : [c]).join('') : (cards || empty);
-  // News section only (not the home page): the sponsor-ad script, any active paid promotional posts, and the
-  // link to buy one.
-  const adScript = `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}" crossorigin="anonymous"></script>`;
-  const sponsors = db.prepare("SELECT * FROM sponsor_posts WHERE status='approved' AND expires_at > datetime('now') ORDER BY id DESC LIMIT 3").all();
-  const sponsorCards = sponsors.map(s => `<div class="card" style="border-color:#ffd166"><p class="pill" style="background:#ffd16622;border-color:#ffd16655;color:#ffd166">Sponsored</p>${s.image_data ? `<img class="news-img" src="/sponsor-image/${s.id}" alt="" style="margin-bottom:8px">` : ''}<h3 style="margin:4px 0">${esc(s.title)}</h3><p class="mut" style="white-space:pre-wrap">${linkify(s.body)}</p>${s.contact ? `<p class="mut" style="margin:4px 0 0">${linkify(s.contact)}</p>` : ''}${req.user && req.user.id === s.user_id ? `<a class="btn" href="/sponsor/${s.id}/edit" style="display:block;text-align:center;margin-top:12px">Edit post</a>` : ''}</div>`).join('');
-  const submitForm = req.user
-    ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
-    : '<p class="mut"><a href="/login?next=/news">Log in</a> to share something.</p>';
-  const approverQueue = req.user ? (() => {
-    const waiting = db.prepare("SELECT n.*, u.name AS author FROM news n JOIN users u ON u.id=n.author_id WHERE n.status='pending_approver' AND n.approver_id=?").all(req.user.id);
-    if (!waiting.length) return '';
-    return `<h3>Waiting for your approval (${waiting.length})</h3>${waiting.map(n => `<div class="card"><b>${esc(n.author)}</b> wrote: <b>${esc(n.title)}</b><p class="mut">${esc(n.body.slice(0, 200))}${n.body.length > 200 ? '…' : ''}</p><div class="row" style="gap:6px"><form method="post" action="/news/${n.id}/approver-approve"><button>Approve</button></form><form method="post" action="/news/${n.id}/approver-reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
-  })() : '';
-  const sponsorLink = req.user ? `<p class="mut" style="margin:0 0 16px"><a href="/sponsor">Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>` : '';
-  return `${adScript}<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${approverQueue}${submitForm}${sponsorLink}${sponsorCards}${cards || empty}`;
-}
-app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));
-app.get('/news-image/:id', (req, res) => {
-  const row = db.prepare('SELECT image_data, image_mime FROM news WHERE id=?').get(req.params.id);
-  if (!row || !row.image_data) return res.sendStatus(404);
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-  res.setHeader('Content-Type', row.image_mime || 'application/octet-stream');
-  res.send(Buffer.from(row.image_data));
-});
-// The bigger, tap-through view of one news item: full picture, and the text exactly as it was
-// typed or pasted -- real line breaks kept (via the .news-full CSS rule), nothing squashed together.
-app.get('/news/:id', (req, res) => {
-  const n = db.prepare("SELECT n.*, u.id AS author_uid, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role, u.avatar_mime FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.id=? AND n.status='approved'").get(req.params.id);
-  if (!n || !canSeeNewsItem(n, req.user)) return res.status(404).send(layout('Not found', '<h2>News item not found</h2><p><a href="/news">Back to News</a></p>', req.user));
-  const img = n.image_data ? `<img src="/news-image/${n.id}" style="width:100%;border-radius:14px;margin-bottom:16px">` : n.image_url ? `<img src="${esc(n.image_url)}" style="width:100%;border-radius:14px;margin-bottom:16px">` : '';
-  const who = n.author_uid ? avatarOr({ id: n.author_uid, name: n.author, avatar_mime: n.avatar_mime }, 40) : '';
-  const nameHtml = n.author_uid && req.user ? `<a href="/u/${n.author_uid}"><b>${esc(n.author)}</b></a>` : `<b>${esc(n.author || 'Studies Hub')}</b>`;
-  const posted = `<div class="row" style="justify-content:flex-start;gap:10px;margin-top:16px">${who}<div>${nameHtml}${n.author_title ? `<span class="role-tag">${esc(n.author_title)}</span>` : ''}${verifiedBadge(n.author_auto_role)}<br><span class="mut" style="font-size:12px">${timeAgo(n.created_at)} ago</span></div></div>`;
-  const adScript = `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}" crossorigin="anonymous"></script>`;
-  res.send(layout(n.title, `${adScript}<p class="mut" style="margin:0 0 12px"><a href="/news">&larr; Back to News</a></p><div class="card">${img}<h1 style="margin-top:0">${esc(n.title)}</h1><p class="news-full">${linkify(n.body)}</p>${posted}</div>`, req.user));
-});
-app.post('/news', upload.single('image'), (req, res) => {
-  if (!req.user) return res.redirect('/login?next=/news');
-  const title = String(req.body.title || '').trim().slice(0, 140);
-  const body = String(req.body.body || '').trim().slice(0, 2000000);
-  if (!title || !body) return res.redirect('/news?msg=' + encodeURIComponent('Enter a headline and a summary.'));
-  if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect('/news?msg=' + encodeURIComponent('That file is not an image.'));
-  const reach = newsReachFor(req.user);
-  const hasApprover = req.user.position_status === 'approved' && req.user.position_approver_id;
-  const status = hasApprover ? 'pending_approver' : 'pending';
-  db.prepare("INSERT INTO news(title,body,image_data,image_mime,author_id,status,scope_type,scope_department,scope_level,scope_faculty,approver_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
-    .run(title, body, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, req.user.id, status, reach.scope_type, reach.scope_department, reach.scope_level, reach.scope_faculty, hasApprover ? req.user.position_approver_id : null);
-  if (hasApprover) notify([req.user.position_approver_id], { title: 'News to review', body: `${req.user.name}: ${title}`, url: '/news', tag: 'news-review' });
-  else notify(db.prepare("SELECT id FROM users WHERE role IN ('admin','news')").all().map(r => r.id), { title: 'News to review', body: `${req.user.name}: ${title}`, url: '/admin#pending-news', tag: 'news-review' });
-  res.redirect('/news?msg=' + encodeURIComponent("Thanks -- we'll review it shortly."));
-});
+// ---------- News feed, news pages and news posting (now in routes/news.js) ----------
+const { newsFeedBody } = require('./routes/news')(app, { ADSENSE_CLIENT, ADSENSE_FEED_SLOT, SPONSOR_PRICE_NGN, canSeeNewsItem, db, esc, feedAdCard, layout, linkify, newsReachFor, notify, timeAgo, upload, get avatarOr() { return avatarOr; }, get byline() { return byline; }, get verifiedBadge() { return verifiedBadge; } });
 
 // Share target: something shared "to Studies Hub" from another app lands here, pre-filled into a News post.
 app.post('/share-target', upload.single('photo'), (req, res) => {
@@ -2572,104 +2488,12 @@ const { MEDIA_KINDS, bubbleHtml, callInfo, fmtBytes, isHiddenFor, isPendingMedia
 const { clearUnreadMark, isMutedChat, prefsOf } = require('./routes/chatprefs')(app, { db, friendStatus, isGroupMember, markRead });
 
 // ---------- star, forward and message info ----------
-const canSeeMsg = (uid, m) => !!m && !isHiddenFor(m.id, uid) && (m.group_id ? isGroupMember(m.group_id, uid) : (m.sender_id === uid || m.recipient_id === uid));
-const cleanIds = (v, max) => [...new Set((Array.isArray(v) ? v : []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))].slice(0, max);
-app.post('/api/messages/star', (req, res) => {
-  if (!req.user) return res.sendStatus(401);
-  const on = !!(req.body && req.body.on), me = req.user.id;
-  let n = 0;
-  for (const id of cleanIds(req.body && req.body.ids, 50)) {
-    const m = db.prepare('SELECT * FROM messages WHERE id=?').get(id);
-    if (!canSeeMsg(me, m) || m.deleted_at || m.kind === 'call') continue;
-    if (on) db.prepare('INSERT OR IGNORE INTO message_stars(user_id,message_id) VALUES(?,?)').run(me, id);
-    else db.prepare('DELETE FROM message_stars WHERE user_id=? AND message_id=?').run(me, id);
-    n++;
-  }
-  res.json({ ok: true, count: n });
-});
-app.get('/api/chats/targets', (req, res) => {
-  if (!req.user) return res.sendStatus(401);
-  const me = req.user.id;
-  const dms = db.prepare('SELECT id,name FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ') ORDER BY name').all().map(u => ({ kind: 'dm', id: u.id, name: u.name }));
-  const groups = db.prepare('SELECT g.id,g.name FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=? ORDER BY g.name').all(me).map(g => ({ kind: 'group', id: g.id, name: g.name }));
-  res.json({ targets: groups.concat(dms) });
-});
-app.post('/api/messages/forward', (req, res) => {
-  if (!req.user) return res.sendStatus(401);
-  const me = req.user.id;
-  if (limited('fwd:' + me, 10, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
-  const targets = (Array.isArray(req.body && req.body.targets) ? req.body.targets : []).slice(0, 5).map(t => t && t.kind === 'group'
-    ? (isGroupMember(Number(t.id), me) ? { recipient_id: 0, group_id: Number(t.id) } : null)
-    : (t && Number(t.id) !== me && friendStatus(me, Number(t.id)) === 'friends' ? { recipient_id: Number(t.id), group_id: null } : null)).filter(Boolean);
-  const msgs = cleanIds(req.body && req.body.ids, 10).map(id => db.prepare('SELECT * FROM messages WHERE id=?').get(id)).filter(m => canSeeMsg(me, m) && !m.deleted_at).sort((a, b) => a.id - b.id);
-  if (!targets.length || !msgs.length) return res.status(400).json({ error: 'Choose who to forward to.' });
-  let count = 0;
-  for (const t of targets) for (const m of msgs) {
-    let newId = 0, preview = '';
-    if (m.kind === 'text' || !m.kind) {
-      const text = decryptMsg(m.body_enc, m.iv), enc = encryptMsg(text);
-      newId = Number(db.prepare('INSERT INTO messages(sender_id,recipient_id,group_id,body_enc,iv,forwarded) VALUES(?,?,?,?,?,1)').run(me, t.recipient_id, t.group_id, enc.body_enc, enc.iv).lastInsertRowid);
-      preview = text.slice(0, 120);
-    } else if (m.media_enc) {
-      const buf = decryptBytes(m.media_enc, m.media_iv);
-      if (!buf) continue;
-      newId = insertMedia(me, t, m.kind, buf, m.media_mime, m.media_ms, m.media_name, null).id;
-      db.prepare('UPDATE messages SET forwarded=1 WHERE id=?').run(newId);
-      preview = m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'video' ? '🎬 Video' : `📄 ${(m.media_name || 'File').slice(0, 60)}`;
-    } else continue;
-    count++;
-    notifyNewMessage(req.user, t, '↪ ' + preview, newId);
-  }
-  res.json({ ok: true, count });
-});
-// Message info: who has received / read a message you sent.
-app.get('/api/messages/:id/info', (req, res) => {
-  if (!req.user) return res.sendStatus(401);
-  const me = req.user.id, m = db.prepare('SELECT * FROM messages WHERE id=?').get(Number(req.params.id));
-  if (!canSeeMsg(me, m) || m.sender_id !== me || m.deleted_at) return res.sendStatus(404);
-  if (m.group_id) {
-    const reads = Object.fromEntries(db.prepare('SELECT user_id,read_at FROM message_reads WHERE message_id=?').all(m.id).map(r => [r.user_id, r.read_at]));
-    const others = groupMembers(m.group_id).filter(u => u.id !== me);
-    return res.json({ group: true, sent: m.created_at, read: others.filter(u => reads[u.id]).map(u => ({ name: u.name, at: reads[u.id] })), waiting: others.filter(u => !reads[u.id]).map(u => u.name) });
-  }
-  const r = db.prepare('SELECT read_at FROM message_reads WHERE message_id=? AND user_id=?').get(m.id, m.recipient_id);
-  res.json({ group: false, sent: m.created_at, delivered: m.delivered_at || (r ? r.read_at : null), read: r ? r.read_at : null });
-});
+// ---------- Starred, forwarded messages and message info (now in routes/message_extras.js) ----------
+const { canSeeMsg } = require('./routes/message_extras')(app, { db, decryptBytes, decryptMsg, encryptMsg, friendIds, friendStatus, groupMembers, isGroupMember, isHiddenFor, limited, notifyNewMessage, get insertMedia() { return insertMedia; } });
 // Starred messages: everything you have starred, with a link back to the chat.
 // ---- site feedback: a small questionnaire people see now and then; the answers land in the owner's chat space (read only) ----
-const feedbackRecent = uid => !!db.prepare("SELECT 1 FROM feedback WHERE user_id=? AND created_at > datetime('now','-14 days')").get(uid);
-app.get('/api/feedback/status', (req, res) => {
-  if (!req.user) return res.json({ show: false });
-  res.json({ show: !isCentral(req.user) && !feedbackRecent(req.user.id) });
-});
-app.post('/api/feedback', (req, res) => {
-  if (!req.user) return res.status(401).json({ error: 'Log in first.' });
-  if (isCentral(req.user)) return res.status(400).json({ error: 'The owner does not send feedback to themselves.' });
-  if (feedbackRecent(req.user.id) || limited('fb:' + req.user.id, 3, 864e5)) return res.status(429).json({ error: 'You already sent feedback recently. Thank you!' });
-  const t = v => String(v || '').trim().replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, 1000);
-  const rating = [1, 2, 3, 4, 5].includes(Number(req.body.rating)) ? Number(req.body.rating) : null, liked = t(req.body.liked), suggest = t(req.body.suggest), other = t(req.body.other);
-  if (!rating && !liked && !suggest && !other) return res.status(400).json({ error: 'Please answer at least one question.' });
-  const u = db.prepare('SELECT id,name,university,department,level,is_lecturer,role FROM users WHERE id=?').get(req.user.id);
-  const who = [u.role === 'uniadmin' ? 'University admin' : u.is_lecturer ? 'Lecturer' : 'Student', u.university, u.department, u.dept_option, u.level ? u.level + ' level' : ''].filter(Boolean).join(' · ');
-  db.prepare('INSERT INTO feedback(user_id,name,who,rating,liked,suggest,other) VALUES(?,?,?,?,?,?,?)').run(u.id, u.name, who, rating, liked, suggest, other);
-  notify(fullAdminIds(), { title: 'New feedback' + (rating ? ' ' + '★'.repeat(rating) : ''), body: `${u.name}: ${(liked || suggest || other || 'rated the site').slice(0, 90)}`, url: '/chat/feedback', tag: 'feedback' });
-  res.json({ ok: true });
-});
-app.get('/chat/feedback', (req, res) => {
-  if (!req.user) return res.redirect('/login?next=/chat/feedback');
-  if (!isCentral(req.user)) return res.redirect('/chat');
-  const rows = db.prepare('SELECT * FROM feedback ORDER BY id DESC LIMIT 300').all();
-  db.prepare('UPDATE feedback SET read=1 WHERE read=0').run();
-  const q = (label, v) => v ? `<p style="margin:6px 0 0"><span class="mut">${label}</span><br>${esc(v).replace(/\n/g, '<br>')}</p>` : '';
-  const avg = rows.filter(r => r.rating).length ? (rows.filter(r => r.rating).reduce((a, r) => a + r.rating, 0) / rows.filter(r => r.rating).length).toFixed(1) : null;
-  res.send(layout('Feedback', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h1 style="margin-bottom:4px">What people say about the site</h1><p class="mut" style="margin-top:0">${rows.length} message${rows.length === 1 ? '' : 's'}${avg ? ' &middot; average rating ' + avg + ' / 5' : ''}. Read only: nobody has to be your friend to send you one.</p>` +
-    (rows.map(r => `<div class="card"><div class="row" style="align-items:flex-start"><span><b>${r.user_id ? `<a href="/u/${r.user_id}" style="color:inherit">${esc(r.name)}</a>` : esc(r.name)}</b><br><span class="mut" style="font-size:13px">${esc(r.who || '')} &middot; ${esc(String(r.created_at).slice(0, 16))}</span></span><span style="font-size:18px;white-space:nowrap">${r.rating ? '★'.repeat(r.rating) + '<span class="mut">' + '★'.repeat(5 - r.rating) + '</span>' : ''}</span></div>${q('What they like', r.liked)}${q('What they would add or change', r.suggest)}${q('Anything else', r.other)}<form method="post" action="/chat/feedback/${r.id}/delete" style="margin:8px 0 0" onsubmit="return confirm('Delete this message?')"><button class="link">Delete</button></form></div>`).join('') || '<p class="mut">Nothing yet. The questionnaire appears for people after they have used a few parts of the site.</p>'), req.user));
-});
-app.post('/chat/feedback/:id/delete', (req, res) => {
-  if (!req.user || !isCentral(req.user)) return res.redirect('/chat');
-  db.prepare('DELETE FROM feedback WHERE id=?').run(Number(req.params.id));
-  res.redirect('/chat/feedback');
-});
+// ---------- Feedback form and the owner's feedback inbox (now in routes/feedback.js) ----------
+require('./routes/feedback')(app, { db, esc, fullAdminIds, isCentral, layout, limited, notify });
 app.get('/chat/starred', (req, res) => {
   if (!req.user) return res.redirect('/login?next=/chat/starred');
   const me = req.user.id;

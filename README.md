@@ -35,6 +35,10 @@ routes/              parts of the website moved out of server.js, one section pe
   chatprefs.js         chat list: pin, archive, mute, favourites
   stickers.js          each member's saved stickers
   lecturer_portal.js   lecturer welcome, uploads, edit, courses
+  mail_prefs.js        the unsubscribe link page for emails
+  news.js              news feed, news pages, posting news
+  message_extras.js    starred and forwarded messages, message info
+  feedback.js          feedback form and the owner's feedback inbox
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site
