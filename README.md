@@ -48,6 +48,8 @@ android/             the Android app
 archive/             old files kept for reference, not used by the site
 ```
 
+> **Rule for new work:** `server.js` must not grow. Any new feature (uploads, pages, routes, helpers) goes in its own small file under `routes/` or `lib/`, and `server.js` only gets one line to hook it in. This keeps every file short enough to read and check from top to bottom.
+
 ## What is inside
 
 - **Home (`/`) is the news feed** for anyone not logged in — just the news cards, nothing else, no share form. **Logging in takes you straight to your Dashboard.**
