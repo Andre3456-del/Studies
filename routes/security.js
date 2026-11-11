@@ -17,7 +17,8 @@ module.exports = function register(app, ctx) {
 ${needPw ? '<input type="password" id="pwOld" placeholder="Current password" autocomplete="current-password" required style="margin-bottom:8px">' : ''}
 <input type="password" id="pwNew" placeholder="New password (8+ characters)" autocomplete="new-password" required minlength="8" style="margin-bottom:8px">
 <input type="password" id="pwNew2" placeholder="New password again" autocomplete="new-password" required minlength="8" style="margin-bottom:10px">
-<button>Change password</button></form>
+<button>Change password</button>
+<p style="text-align:center;margin:14px 0 0"><a href="/forgot" style="color:#5bc8ff;font-weight:600">Forgot password?</a></p></form>
 <script>(function(){var A=window.StudiesApp,$=function(i){return document.getElementById(i)};
 function post(u,b){return fetch(u,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json()})}
 $('pwForm').onsubmit=function(e){e.preventDefault();var n=$('pwNew').value;if(n!==$('pwNew2').value)return alert('The two new passwords are not the same.');post('/settings/security/password',{current:$('pwOld')?$('pwOld').value:'',next:n}).then(function(j){if(j.ok){alert('Your password was changed.');$('pwForm').reset()}else alert(j.error||'Could not change the password.')}).catch(function(){alert('No connection. Please try again.')})};
