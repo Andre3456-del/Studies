@@ -39,6 +39,10 @@ routes/              parts of the website moved out of server.js, one section pe
   news.js              news feed, news pages, posting news
   message_extras.js    starred and forwarded messages, message info
   feedback.js          feedback form and the owner's feedback inbox
+  chat_list.js         starred messages page and the chat list
+  chat_threads.js      one-to-one and group chat pages, group info
+  profile_public.js    share target, open links, member profile pages
+  legal.js             privacy policy and terms pages
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site
