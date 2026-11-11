@@ -20,6 +20,8 @@ lib/                 the site's separate parts
   ai_assistant.js      the AI assistant
   chat_messages.js     chat message helpers (ticks, reactions, edit, delete)
   semester.js          first/second semester sorting
+  sponsor_cards.js     the "Sponsored" cards on the home page and News
+  sponsor_admin.js     the admin list of sponsor posts (waiting and live)
 routes/              parts of the website moved out of server.js, one section per file
   security.js          app lock and change password
   checks.js            admin connection checks
@@ -43,6 +45,7 @@ routes/              parts of the website moved out of server.js, one section pe
   chat_threads.js      one-to-one and group chat pages, group info
   profile_public.js    share target, open links, member profile pages
   legal.js             privacy policy and terms pages
+  sponsor.js           adverts for anyone (no account needed): form, private link, payment, edit, picture/video/audio
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site

@@ -9,12 +9,16 @@ module.exports = function register(app, ctx) {
     const cardList = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${ctx.byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`);
     const cards = cardList.join('');
     const empty = '<p class="mut">No news yet. Check back soon.</p>';
-    if (home) return ADSENSE_FEED_SLOT && cardList.length ? cardList.flatMap((c, i) => i === 0 || i % 4 === 3 ? [c, feedAdCard()] : [c]).join('') : (cards || empty);
+    if (home) {
+      // The public home page: anyone may advertise here, no account needed; live sponsored posts show first.
+      const advertise = `<p style="margin:0 0 14px"><a class="btn" href="/sponsor" style="display:block;text-align:center">Advertise your product &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month</a></p>`;
+      const feed = ADSENSE_FEED_SLOT && cardList.length ? cardList.flatMap((c, i) => i === 0 || i % 4 === 3 ? [c, feedAdCard()] : [c]).join('') : (cards || empty);
+      return advertise + require('../lib/sponsor_cards')({ db, esc, linkify, user: req.user }) + feed;
+    }
     // News section only (not the home page): the sponsor-ad script, any active paid promotional posts, and the
     // link to buy one.
     const adScript = `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}" crossorigin="anonymous"></script>`;
-    const sponsors = db.prepare("SELECT * FROM sponsor_posts WHERE status='approved' AND expires_at > datetime('now') ORDER BY id DESC LIMIT 3").all();
-    const sponsorCards = sponsors.map(s => `<div class="card" style="border-color:#ffd166"><p class="pill" style="background:#ffd16622;border-color:#ffd16655;color:#ffd166">Sponsored</p>${s.image_data ? `<img class="news-img" src="/sponsor-image/${s.id}" alt="" style="margin-bottom:8px">` : ''}<h3 style="margin:4px 0">${esc(s.title)}</h3><p class="mut" style="white-space:pre-wrap">${linkify(s.body)}</p>${s.contact ? `<p class="mut" style="margin:4px 0 0">${linkify(s.contact)}</p>` : ''}${req.user && req.user.id === s.user_id ? `<a class="btn" href="/sponsor/${s.id}/edit" style="display:block;text-align:center;margin-top:12px">Edit post</a>` : ''}</div>`).join('');
+    const sponsorCards = require('../lib/sponsor_cards')({ db, esc, linkify, user: req.user });
     const submitForm = req.user
       ? `<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Share something</summary><form method="post" action="/news" enctype="multipart/form-data" style="margin-top:10px"><input name="title" placeholder="Headline" required maxlength="140"><input type="file" name="image" accept="image/*" style="padding:9px 0"><textarea name="body" placeholder="What's happening?" required maxlength="2000000" style="width:100%;min-height:70px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea><button>Submit for review</button></form><p class="mut" style="margin:6px 0 0">An admin checks it before it goes live.</p></details>`
       : '<p class="mut"><a href="/login?next=/news">Log in</a> to share something.</p>';
@@ -23,7 +27,7 @@ module.exports = function register(app, ctx) {
       if (!waiting.length) return '';
       return `<h3>Waiting for your approval (${waiting.length})</h3>${waiting.map(n => `<div class="card"><b>${esc(n.author)}</b> wrote: <b>${esc(n.title)}</b><p class="mut">${esc(n.body.slice(0, 200))}${n.body.length > 200 ? '…' : ''}</p><div class="row" style="gap:6px"><form method="post" action="/news/${n.id}/approver-approve"><button>Approve</button></form><form method="post" action="/news/${n.id}/approver-reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
     })() : '';
-    const sponsorLink = req.user ? `<p class="mut" style="margin:0 0 16px"><a href="/sponsor">Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>` : '';
+    const sponsorLink = `<p class="mut" style="margin:0 0 16px"><a href="/sponsor">Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>`;
     return `${adScript}<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${approverQueue}${submitForm}${sponsorLink}${sponsorCards}${cards || empty}`;
   }
   app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));

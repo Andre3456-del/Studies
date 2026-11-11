@@ -1,7 +1,7 @@
 // Payments (Flutterwave) and sponsor posts
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
-  const { FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave } = ctx;
+  const { FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver } = ctx;
   app.post('/pay/verify', async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Log in first.' });
     const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.body.slug);
@@ -36,7 +36,7 @@ module.exports = function register(app, ctx) {
     const m = /^(cbt|sponsor)_(\d+)_(\d+)_\d+$/.exec(String(txRef || ''));
     if (!m) return null;
     const uid = Number(m[2]), item = Number(m[3]);
-    if (!db.prepare('SELECT 1 FROM users WHERE id=?').get(uid)) return null;
+    if (uid && !db.prepare('SELECT 1 FROM users WHERE id=?').get(uid)) return null; // uid 0 is a visitor advertising without an account
     let kobo;
     if (m[1] === 'sponsor') { const sp = db.prepare("SELECT amount_kobo FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(item, uid); if (!sp) return null; kobo = sp.amount_kobo; }
     else { const pg = db.prepare('SELECT price_kobo FROM pages WHERE id=? AND paid=1').get(item); if (!pg) return null; kobo = pg.price_kobo || PRICE_KOBO; }
@@ -51,7 +51,9 @@ module.exports = function register(app, ctx) {
     } catch (e) { }
     return null;
   }
-  const flwItemUrl = row => row.kind === 'sponsor' ? '/sponsor/' + row.item_id : '/p/' + ((db.prepare('SELECT slug FROM pages WHERE id=?').get(row.item_id) || {}).slug || '');
+  // A member's advert is at /sponsor/<id>; a visitor's is at its private link.
+  const sponsorUrl = id => { const sp = db.prepare('SELECT id,user_id,guest_key FROM sponsor_posts WHERE id=?').get(id); return sp && !sp.user_id && sp.guest_key ? '/sponsor/g/' + sp.guest_key : '/sponsor/' + id; };
+  const flwItemUrl = row => row.kind === 'sponsor' ? sponsorUrl(row.item_id) : '/p/' + ((db.prepare('SELECT slug FROM pages WHERE id=?').get(row.item_id) || {}).slug || '');
   // Checks one payment with Flutterwave and, if it is real and the right amount, gives the person what they paid for. Safe to run many times.
   async function flwSettle(txRef, transactionId) {
     let row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(String(txRef || '')), data = null;
@@ -73,7 +75,8 @@ module.exports = function register(app, ctx) {
         if (!sp) return { ok: false, row };
         if (sp.status !== 'approved') {
           db.prepare("UPDATE sponsor_posts SET status='approved', reference=?, expires_at=datetime('now','+' || ? || ' days') WHERE id=?").run(tid, sp.duration_days, sp.id);
-          notify([sp.user_id], { title: 'Your sponsor post is live', body: `"${sp.title}" is now showing in News for ${sp.duration_days} days.`, url: '/sponsor/' + sp.id, tag: 'sponsor' });
+          notify([sp.user_id], { title: 'Your sponsor post is live', body: `"${sp.title}" is now showing in News for ${sp.duration_days} days.`, url: sponsorUrl(sp.id), tag: 'sponsor' });
+          if (!sp.user_id && sp.guest_email) Promise.resolve().then(() => deliver(sp.guest_email, 'Your Studies Hub advert is live', `Your advert "${sp.title}" is now live on Studies Hub for ${sp.duration_days} days.`, `<p>Your advert "${esc(sp.title)}" is now live on Studies Hub for ${sp.duration_days} days.</p>`)).catch(() => {});
         }
       } else {
         const pg = db.prepare('SELECT id,title,slug FROM pages WHERE id=?').get(row.item_id);
@@ -85,7 +88,7 @@ module.exports = function register(app, ctx) {
       }
       db.prepare("UPDATE flw_payments SET status='paid', transaction_id=? WHERE tx_ref=?").run(tid, row.tx_ref);
       try {
-        const who = (db.prepare('SELECT name FROM users WHERE id=?').get(row.user_id) || {}).name || 'Someone';
+        const who = (row.user_id ? (db.prepare('SELECT name FROM users WHERE id=?').get(row.user_id) || {}).name : (db.prepare('SELECT guest_name FROM sponsor_posts WHERE id=?').get(row.item_id) || {}).guest_name) || 'Someone';
         notify(fullAdminIds(), { title: 'Payment verified via Flutterwave', body: `${who} paid ₦${(row.amount_kobo / 100).toLocaleString()} for ${row.kind === 'sponsor' ? 'a sponsor post' : 'a locked page'}`, url: '/admin?tab=payments', tag: 'flw' });
       } catch (e) { }
       return { ok: true, row: Object.assign({}, row, { status: 'paid' }) };
@@ -95,18 +98,18 @@ module.exports = function register(app, ctx) {
   async function flwCheckout(req, res, o) {
     const fail = msg => res.status(502).send(layout('Payment', `<div style="max-width:460px;margin:40px auto;padding:0 16px;text-align:center"><h2>${esc(msg)}</h2><p><a href="${esc(o.back)}">&larr; Go back</a></p></div>`, req.user));
     if (!FLW_ON) return fail('Payments are not available right now. Please try again later.');
-    const base = baseUrl(req), txRef = `${o.kind}_${req.user.id}_${o.item}_${Date.now()}`;
+    const payer = o.payer || req.user, base = baseUrl(req), txRef = `${o.kind}_${payer.id}_${o.item}_${Date.now()}`; // payer: the signed-in member, or a visitor advertising without an account (id 0)
     try {
       const r = await fetch('https://api.flutterwave.com/v3/payments', {
         method: 'POST', headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tx_ref: txRef, amount: o.kobo / 100, currency: 'NGN', redirect_url: base + '/pay/return',
-          customer: { email: req.user.email, name: req.user.name },
-          customizations: { title: 'Studies Hub', description: o.desc, logo: base + '/icon-192.png' }, meta: { kind: o.kind, item: o.item, user: req.user.id } })
+          customer: { email: payer.email, name: payer.name },
+          customizations: { title: 'Studies Hub', description: o.desc, logo: base + '/icon-192.png' }, meta: { kind: o.kind, item: o.item, user: payer.id } })
       });
       const j = await r.json();
       if (j && j.status === 'success' && j.data && j.data.link) {
-        db.prepare('INSERT INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, req.user.id, o.kind, o.item, o.kobo, Date.now());
-        notify(fullAdminIds(), { title: 'Payment started via Flutterwave', body: `${req.user.name} is paying ₦${(o.kobo / 100).toLocaleString()} for ${o.desc}`, url: '/admin?tab=payments', tag: 'flw' });
+        db.prepare('INSERT INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, payer.id, o.kind, o.item, o.kobo, Date.now());
+        notify(fullAdminIds(), { title: 'Payment started via Flutterwave', body: `${payer.name} is paying ₦${(o.kobo / 100).toLocaleString()} for ${o.desc}`, url: '/admin?tab=payments', tag: 'flw' });
         return res.redirect(j.data.link);
       }
       console.error('Flutterwave did not give a payment link:', JSON.stringify(j).slice(0, 300));
@@ -119,12 +122,6 @@ module.exports = function register(app, ctx) {
     if (!page || !page.paid || !sortedFor(page, req.user)) return res.redirect('/');
     if (hasPurchased(req.user.id, page.id)) return res.redirect('/p/' + page.slug);
     await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: page.price_kobo || PRICE_KOBO, desc: page.title, back: '/p/' + page.slug });
-  });
-  app.post('/sponsor/:id/pay', async (req, res) => {
-    if (!req.user) return res.redirect('/login');
-    const sp = db.prepare("SELECT * FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(req.params.id, req.user.id);
-    if (!sp) return res.redirect('/sponsor/' + req.params.id);
-    await flwCheckout(req, res, { kind: 'sponsor', item: sp.id, kobo: sp.amount_kobo, desc: sp.title, back: '/sponsor/' + sp.id });
   });
   // Where Flutterwave sends the person back to after paying (or cancelling): a short page that asks Flutterwave, shows a tick or a cross, then goes on.
   const flwPage = (req, inner) => layout('Payment', `<div style="max-width:460px;margin:50px auto;padding:0 16px;text-align:center"><div class="card" style="padding:30px 22px">${inner}</div></div>`, req.user);
@@ -192,108 +189,7 @@ go()})()</script>`));
     res.redirect(ctx.back('Payment claim removed.'));
   });
 
-  // Paid promotional posts: any logged-in member can pay to advertise a business or service in News for a month.
-  app.get('/sponsor', (req, res) => {
-    if (!req.user) return res.redirect('/login?next=/sponsor');
-    res.send(layout('Advertise on Studies Hub', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>Advertise here</h1>
-<p class="mut">₦${SPONSOR_PRICE_NGN.toLocaleString()} per month</p>
-<form class="card" method="post" action="/sponsor" enctype="multipart/form-data">
-<input name="title" placeholder="What are you advertising?" required maxlength="140">
-<textarea name="body" placeholder="Describe it" required maxlength="2000" style="width:100%;min-height:80px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px"></textarea>
-<input name="contact" placeholder="How should people reach you? (phone, @username, etc.)" maxlength="140">
-<input type="file" name="image" accept="image/*" style="padding:9px 0">
-<label class="mut">Start date</label><input type="date" name="start_date" id="sponsorStart" required>
-<label class="mut">End date</label><input type="date" name="end_date" id="sponsorEnd" required>
-<p class="pill" id="sponsorBill" style="margin:8px 0">Pick your dates</p>
-<button>Continue to payment</button>
-</form>
-<script>(function(){
-  var sd=document.getElementById('sponsorStart'),ed=document.getElementById('sponsorEnd'),bp=document.getElementById('sponsorBill'),rate=${SPONSOR_PRICE_NGN};
-  var today=new Date();today.setHours(0,0,0,0);var todayStr=today.toISOString().slice(0,10);
-  sd.min=todayStr;
-  function sync(){
-    if(!sd.value){ed.min=todayStr;return}
-    var startD=new Date(sd.value+'T00:00:00'),minEnd=new Date(startD.getTime()+86400000),minEndStr=minEnd.toISOString().slice(0,10);
-    ed.min=minEndStr;
-    if(ed.value&&ed.value<minEndStr)ed.value=minEndStr;
-    if(sd.value&&ed.value){
-      var days=Math.round((new Date(ed.value+'T00:00:00')-startD)/86400000);
-      var price=Math.ceil((days/30)*rate);
-      bp.textContent='₦'+price.toLocaleString()+' for '+days+' day'+(days===1?'':'s')+' ('+sd.value+' to '+ed.value+')';
-    } else bp.textContent='Pick your dates';
-  }
-  sd.addEventListener('change',sync);ed.addEventListener('change',sync);sync();
-})()</script>`, req.user));
-  });
-  app.post('/sponsor', upload.single('image'), (req, res) => {
-    if (!req.user) return res.redirect('/login?next=/sponsor');
-    const title = String(req.body.title || '').trim().slice(0, 140);
-    const body = String(req.body.body || '').trim().slice(0, 2000);
-    const contact = String(req.body.contact || '').trim().slice(0, 140);
-    if (!title || !body) return res.redirect('/sponsor');
-    if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect('/sponsor');
-    const startDate = new Date(String(req.body.start_date || '') + 'T00:00:00');
-    const endDate = new Date(String(req.body.end_date || '') + 'T00:00:00');
-    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
-    if (isNaN(startDate) || isNaN(endDate) || startDate < todayMid || endDate <= startDate) return res.redirect('/sponsor');
-    const days = Math.round((endDate - startDate) / 86400000);
-    if (days < 1 || days > 366) return res.redirect('/sponsor'); // a year is a generous, sane ceiling
-    const amountKobo = Math.round(Math.ceil((days / 30) * SPONSOR_PRICE_NGN) * 100);
-    const reference = `sponsor_${req.user.id}_${Date.now()}`;
-    const info = db.prepare("INSERT INTO sponsor_posts(user_id,title,body,contact,image_data,image_mime,reference,amount_kobo,duration_days,status) VALUES(?,?,?,?,?,?,?,?,?,'pending_payment')")
-      .run(req.user.id, title, body, contact, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, reference, amountKobo, days);
-    notify(fullAdminIds(), { title: 'Sponsor post payment claim', body: `${req.user.name} wants to advertise "${title}" for ${days} days`, url: '/admin#sponsors', tag: 'sponsor' });
-    res.redirect('/sponsor/' + info.lastInsertRowid);
-  });
-  app.get('/sponsor/:id', async (req, res) => {
-    if (!req.user) return res.redirect('/login');
-    let s = db.prepare('SELECT * FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
-    if (s && s.status === 'pending_payment') { const pend = db.prepare("SELECT tx_ref FROM flw_payments WHERE kind='sponsor' AND item_id=? AND status='pending' AND created_at>?").get(s.id, Date.now() - FLW_WINDOW); if (pend) { await flwSettle(pend.tx_ref); s = db.prepare('SELECT * FROM sponsor_posts WHERE id=?').get(s.id); } }
-    if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
-    const statusLine = s.status === 'approved' ? `<p class="pill">&#10003; Live until ${esc((s.expires_at || '').slice(0, 10))}</p>` : s.status === 'rejected' ? '<p class="err">This submission was not approved.</p>' : '<p class="pill pending">Waiting for payment to be confirmed</p>';
-    res.send(layout('Your sponsor post', `<p class="mut"><a href="/news">&larr; Back to News</a></p><h1>${esc(s.title)}</h1>${statusLine}
-<p class="mut">${s.duration_days} day${s.duration_days === 1 ? '' : 's'} &middot; ₦${(s.amount_kobo / 100).toLocaleString()}</p>
-${s.status === 'approved' ? '' : `<p class="mut"><a href="/sponsor/${s.id}/edit">Edit this post &rarr;</a></p>`}
-${s.status === 'pending_payment' ? (FLW_ON ? `<div class="card" style="text-align:center">${req.query.paid === 'cancelled' ? '<p class="mut" style="margin:0 0 10px">The payment was not completed. You can try again.</p>' : ''}${req.query.paid === '1' ? '<p class="mut" style="margin:0 0 10px">Confirming your payment. This page updates by itself.</p><script>setTimeout(function(){location.reload()},7000)</script>' : ''}<form method="post" action="/sponsor/${s.id}/pay"><button class="btn" style="width:100%">Continue to payment &middot; ₦${(s.amount_kobo / 100).toLocaleString()}</button></form></div>` : '<div class="card"><p class="err" style="margin:0">Payments are not available right now. Please try again a little later.</p></div>') : ''}
-${s.status === 'approved' ? `<a class="btn" href="/sponsor/${s.id}/edit" style="display:block;text-align:center;margin-top:14px">Edit post</a>` : ''}
-<form method="post" action="/sponsor/${s.id}/delete" onsubmit="return confirm('Delete this sponsor post? This cannot be undone.')" style="margin-top:14px"><button class="link">Delete this post</button></form>`, req.user));
-  });
-  app.get('/sponsor/:id/edit', (req, res) => {
-    if (!req.user) return res.redirect('/login');
-    const s = db.prepare('SELECT * FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
-    if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
-    res.send(layout('Edit your sponsor post', `<p class="mut"><a href="/sponsor/${s.id}">&larr; Back</a></p><h1>Edit your sponsor post</h1>
-${s.status === 'approved' ? '<p class="mut">This is already live -- changes show right away, no need to pay again.</p>' : ''}
-<form class="card" method="post" action="/sponsor/${s.id}/edit" enctype="multipart/form-data">
-<input name="title" value="${esc(s.title)}" required maxlength="140">
-<textarea name="body" required maxlength="2000" style="width:100%;min-height:80px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(s.body)}</textarea>
-<input name="contact" value="${esc(s.contact || '')}" placeholder="How should people reach you?" maxlength="140">
-${s.image_data ? `<img src="/sponsor-image/${s.id}" style="max-width:100%;border-radius:10px;margin:6px 0;display:block">` : ''}
-<label class="mut">${s.image_data ? 'Replace photo (optional)' : 'Add a photo (optional)'}</label>
-<input type="file" name="image" accept="image/*" style="padding:9px 0">
-<button>Save changes</button>
-</form>`, req.user));
-  });
-  app.post('/sponsor/:id/edit', upload.single('image'), (req, res) => {
-    if (!req.user) return res.redirect('/login');
-    const s = db.prepare('SELECT id FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
-    if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
-    const title = String(req.body.title || '').trim().slice(0, 140);
-    const body = String(req.body.body || '').trim().slice(0, 2000);
-    const contact = String(req.body.contact || '').trim().slice(0, 140);
-    if (!title || !body) return res.redirect(`/sponsor/${s.id}/edit`);
-    if (req.file && !/^image\//.test(req.file.mimetype)) return res.redirect(`/sponsor/${s.id}/edit`);
-    if (req.file) db.prepare('UPDATE sponsor_posts SET title=?, body=?, contact=?, image_data=?, image_mime=? WHERE id=?').run(title, body, contact, req.file.buffer, req.file.mimetype, s.id);
-    else db.prepare('UPDATE sponsor_posts SET title=?, body=?, contact=? WHERE id=?').run(title, body, contact, s.id);
-    res.redirect('/sponsor/' + s.id);
-  });
-  app.post('/sponsor/:id/delete', (req, res) => {
-    if (!req.user) return res.redirect('/login');
-    const s = db.prepare('SELECT id FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
-    if (!s) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user));
-    db.prepare('DELETE FROM sponsor_posts WHERE id=?').run(s.id);
-    res.redirect('/news');
-  });
+  // The sponsor pages (form, advert page, edit, delete, pay, picture/video/audio) are in routes/sponsor.js.
   app.post('/sponsor/:id/verify', async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Log in first.' });
     const s = db.prepare('SELECT * FROM sponsor_posts WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
@@ -321,10 +217,11 @@ ${s.image_data ? `<img src="/sponsor-image/${s.id}" style="max-width:100%;border
     res.send(Buffer.from(row.image_data));
   });
   app.post('/admin/sponsors/:id/approve', admin, (req, res) => {
-    const s = db.prepare('SELECT user_id, title, duration_days FROM sponsor_posts WHERE id=?').get(req.params.id);
+    const s = db.prepare('SELECT id, user_id, title, duration_days, guest_email FROM sponsor_posts WHERE id=?').get(req.params.id);
     if (!s) return res.redirect(ctx.back('Not found.'));
     db.prepare("UPDATE sponsor_posts SET status='approved', expires_at=datetime('now','+' || ? || ' days') WHERE id=?").run(s.duration_days, req.params.id);
-    notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for ${s.duration_days} days.`, url: '/sponsor/' + req.params.id, tag: 'sponsor' });
+    notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for ${s.duration_days} days.`, url: sponsorUrl(s.id), tag: 'sponsor' });
+    if (!s.user_id && s.guest_email) Promise.resolve().then(() => deliver(s.guest_email, 'Your Studies Hub advert is live', `Your advert "${s.title}" is now live on Studies Hub for ${s.duration_days} days.`, `<p>Your advert "${esc(s.title)}" is now live on Studies Hub for ${s.duration_days} days.</p>`)).catch(() => {});
     res.redirect(ctx.back(`Sponsor post approved -- live for ${s.duration_days} days.`));
   });
   app.post('/admin/sponsors/:id/reject', admin, (req, res) => {
@@ -333,5 +230,5 @@ ${s.image_data ? `<img src="/sponsor-image/${s.id}" style="max-width:100%;border
     if (s) notify([s.user_id], { title: 'Sponsor post not approved', body: `"${s.title}" could not be approved.`, url: '/sponsor/' + req.params.id, tag: 'sponsor' });
     res.redirect(ctx.back('Sponsor post rejected.'));
   });
-  return { FLW_WINDOW, flwSettle };
+  return { FLW_WINDOW, flwCheckout, flwSettle };
 };

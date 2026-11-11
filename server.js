@@ -3640,7 +3640,8 @@ app.get('/p/:slug/raw', (req, res) => {
 });
 
 // ---------- Payments (Flutterwave) and sponsor posts (now in routes/payments.js) ----------
-const { FLW_WINDOW, flwSettle } = require('./routes/payments')(app, { FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, get back() { return back; } });
+const { FLW_WINDOW, flwCheckout, flwSettle } = require('./routes/payments')(app, { FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver, get back() { return back; } });
+require('./routes/sponsor')(app, { FLW_ON, FLW_WINDOW, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, deliver, esc, flwCheckout, flwSettle, fullAdminIds, layout, limited, notify, get back() { return back; } });
 
 app.get('/signup', (req, res) => !isLaptop(req) ? res.send(authForm('signup')) : res.send(linkPage(req, '')));
 app.post('/signup', async (req, res) => {
@@ -3789,7 +3790,7 @@ app.get('/admin', adminish, (req, res) => {
   const roleSelect = u => `<form method="post" action="/admin/users/${u.id}/role" class="row" style="gap:6px;flex-wrap:nowrap"><select name="role">${ROLES.map(r => `<option value="${r}"${u.role === r ? ' selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select><button class="link">Update role</button></form>`;
   // Central admin only: every payment Flutterwave has handled, with its tick or cross. Nothing here needs approving by hand.
   const flwSection = cf ? (() => {
-    const rows = db.prepare("SELECT f.*, u.name un, u.email ue FROM flw_payments f JOIN users u ON u.id=f.user_id WHERE f.status='paid' OR f.created_at>? ORDER BY f.created_at DESC LIMIT 60").all(Date.now() - FLW_WINDOW);
+    const rows = db.prepare("SELECT f.*, COALESCE(u.name, (SELECT guest_name FROM sponsor_posts WHERE id=f.item_id), 'A visitor') un, COALESCE(u.email, (SELECT guest_email FROM sponsor_posts WHERE id=f.item_id), '') ue FROM flw_payments f LEFT JOIN users u ON u.id=f.user_id WHERE f.status='paid' OR f.created_at>? ORDER BY f.created_at DESC LIMIT 60").all(Date.now() - FLW_WINDOW);
     if (!rows.length) return '<h3 id="payments">Flutterwave payments</h3><p class="mut">No payments yet.</p>';
     const mark = r => r.status === 'paid' ? '<span style="color:#22c55e;font-weight:700">&#10003; Verified</span>' : r.status === 'cancelled' || r.created_at < Date.now() - 172800000 ? '<span style="color:#ef4444;font-weight:700">&#10007; Not completed</span>' : `<span style="color:#f59e0b;font-weight:700">Waiting for Flutterwave &middot; <span class="flwLeft" data-end="${r.created_at + FLW_WINDOW}"></span> left</span>`;
     const total = db.prepare("SELECT COALESCE(SUM(amount_kobo),0) n FROM flw_payments WHERE status='paid'").get().n;
@@ -3801,12 +3802,7 @@ app.get('/admin', adminish, (req, res) => {
     return `<h3 id="payments">Payment claims waiting for you (${claims.length})</h3>${claims.map(c => `<div class="card row"><div><b>${esc(c.un)}</b> <span class="mut">${esc(c.ue)}</span><br><span class="mut">₦${((c.price_kobo || PRICE_KOBO) / 100).toFixed(0)} for "${esc(c.pt)}"</span></div>
 <div class="row" style="gap:6px"><form method="post" action="/admin/payments/${c.id}/approve"><button>Approve</button></form><form method="post" action="/admin/payments/${c.id}/reject" onsubmit="return confirm('Reject this payment claim?')"><button class="link">Reject</button></form></div></div>`).join('')}`;
   })() : '';
-  const sponsorsSection = cf ? (() => {
-    const claims = db.prepare("SELECT s.*, u.name un FROM sponsor_posts s JOIN users u ON u.id=s.user_id WHERE s.status='pending_payment' ORDER BY s.id DESC").all();
-    if (!claims.length) return '';
-    return `<h3 id="sponsors">Sponsor post payment claims (${claims.length})</h3>${claims.map(c => `<div class="card"><b>${esc(c.un)}</b> wants to advertise: <b>${esc(c.title)}</b><p class="mut">${esc(c.body.slice(0, 150))}${c.body.length > 150 ? '…' : ''}</p><p class="mut">₦${(c.amount_kobo / 100).toLocaleString()} for ${c.duration_days} day${c.duration_days === 1 ? '' : 's'}</p>
-<div class="row" style="gap:6px"><form method="post" action="/admin/sponsors/${c.id}/approve"><button>Approve -- ${c.duration_days} days live</button></form><form method="post" action="/admin/sponsors/${c.id}/reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
-  })() : '';
+  const sponsorsSection = cf ? require('./lib/sponsor_admin')({ db, esc }) : '';
   const levelSection = canPromote(me) ? `<h3 id="levels">Levels</h3><p class="mut" style="margin-top:0">Move students up to the next level (everyone, or one department or level) and choose who else may do it.</p><p><a class="btn" href="/admin/levels">Open level promotion</a></p>` : '';
   const positionsSection = cf ? (() => {
     const pend = db.prepare("SELECT id,name,username,position,department,level FROM users WHERE position_status='pending' ORDER BY id").all();
