@@ -22,6 +22,7 @@ lib/                 the site's separate parts
   semester.js          first/second semester sorting
   sponsor_cards.js     the "Sponsored" cards on the home page and News
   sponsor_admin.js     the admin list of sponsor posts (waiting and live)
+  chat_js.js           the browser script that runs a chat page
 routes/              parts of the website moved out of server.js, one section per file
   security.js          app lock and change password
   checks.js            admin connection checks
@@ -46,6 +47,9 @@ routes/              parts of the website moved out of server.js, one section pe
   profile_public.js    share target, open links, member profile pages
   legal.js             privacy policy and terms pages
   sponsor.js           adverts for anyone (no account needed): form, private link, payment, edit, picture/video/audio
+  signup.js            sign-up pages (students and lecturers) and the lecturer portal
+  settings.js          settings pages: profile, picture, active status, appearance, notifications
+  welcome.js           profile fields, saving a profile, the Welcome page
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site
