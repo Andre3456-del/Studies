@@ -1806,7 +1806,7 @@ function deviceCss(css) {
   return out + '\n/* phones keep the phone view at any width */\n' + forced
     + '\n';
 }
-const CSS_FINAL = deviceCss(CSS);
+const CSS_FINAL = deviceCss(CSS) + require('./lib/ui_theme').css;
 
 
 const canLecturerAdmin = u => !!u && (isCentral(u) || (!!u.lp_inst && u.uni_role !== 'full'));
