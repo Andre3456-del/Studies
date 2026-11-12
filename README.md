@@ -23,6 +23,7 @@ lib/                 the site's separate parts
   sponsor_cards.js     the "Sponsored" cards on the home page and News
   sponsor_admin.js     the admin list of sponsor posts (waiting and live)
   chat_js.js           the browser script that runs a chat page
+  chat_theme.js        personal chat wallpaper (saved only on the person's own device)
   ui_theme.js          the look of the whole site (black, flat, picture-first); edit colours and shapes here
   page_helpers.js      helpers for uploaded pages: video links, paywall, page cards, previews
   audience.js          reading who an upload is for (departments and levels)

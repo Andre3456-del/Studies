@@ -32,7 +32,7 @@ ${self ? '<style>.self-chat .tickwrap{display:none}</style>' : ''}<div id="threa
 <form id="sendForm" class="chat-bar"><button type="button" id="panelBtn" class="ic" aria-label="Emoji and stickers">😊</button><label class="ic" id="attachBtn" aria-label="Attach a photo or file"><input type="file" id="fileInput" multiple style="display:none">📎</label><textarea id="msgInput" placeholder="Message" maxlength="2000" autocomplete="off" required rows="1"></textarea><button type="button" id="micBtn" class="ic" aria-label="Record a voice note">🎤</button><button class="sendb" aria-label="Send"><svg class="ico" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button></form>
 <div id="recBar" class="chat-bar rec" hidden><span class="rec-dot"></span><b id="recTime">0:00</b><span class="mut" style="flex:1">Recording&hellip;</span><button type="button" id="recCancel" class="ghost">Cancel</button><button type="button" id="recSend">Send</button></div>
 <p id="upStatus" class="mut" style="margin:4px 0 0" hidden></p>
-<script>${script}</script>`, req.user, { noAI: true, hideTop: true }));
+<script>${script}</script>${require('../lib/chat_theme').thread((isGroup ? 'group:' : 'dm:') + convId)}`, req.user, { noAI: true, hideTop: true }));
   }
 
   app.get('/chat/:id', (req, res) => {

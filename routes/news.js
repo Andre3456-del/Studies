@@ -27,7 +27,7 @@ module.exports = function register(app, ctx) {
       if (!waiting.length) return '';
       return `<h3>Waiting for your approval (${waiting.length})</h3>${waiting.map(n => `<div class="card"><b>${esc(n.author)}</b> wrote: <b>${esc(n.title)}</b><p class="mut">${esc(n.body.slice(0, 200))}${n.body.length > 200 ? '…' : ''}</p><div class="row" style="gap:6px"><form method="post" action="/news/${n.id}/approver-approve"><button>Approve</button></form><form method="post" action="/news/${n.id}/approver-reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
     })() : '';
-    const sponsorLink = `<p class="mut" style="margin:0 0 16px"><a href="/sponsor">Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>`;
+    const sponsorLink = `<p class="adbar"><a href="/sponsor">&#128226; Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>`;
     return `${adScript}<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${approverQueue}${submitForm}${sponsorLink}${sponsorCards}${cards || empty}`;
   }
   app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));

@@ -2,11 +2,13 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { UNAME_JS, canLecturerAdmin, canPromote, db, esc, inApp, layout, lockedOf, profileFields, readProfile, saveProfile, upload } = ctx;
+  require('./chat_theme')(app, ctx);
   const wantsApp = req => !inApp(req) && ctx.deviceOf(req) !== 'laptop';
   const SETTINGS_PAGES = [
     ['/settings/profile', '👤', 'Profile', 'Your picture, name, and details'],
     ['/settings/active-status', '🟢', 'Active status', 'Whether others see when you\u2019re online'],
     ['/settings/appearance', '🎨', 'Appearance', 'Light or dark mode'],
+    ['/settings/chat', '🖼️', 'Chat', 'Your chat background'],
     ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
     ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
     ['/settings/security', '🔒', 'Security', 'App lock and change your password'],
