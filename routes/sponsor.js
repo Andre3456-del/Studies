@@ -36,7 +36,7 @@ module.exports = function register(app, ctx) {
   function createForm(req, v = {}, err = '') {
     const guest = !req.user;
     return layout('Advertise on Studies Hub', `<p class="mut"><a href="${guest ? '/' : '/news'}">&larr; Back</a></p><h1>Advertise your product</h1>
-<p class="mut">₦${SPONSOR_PRICE_NGN.toLocaleString()} per month. You do not need an account. Your advert shows on the home page and in News, with a picture, a video or audio.</p>
+<p class="mut">₦${SPONSOR_PRICE_NGN.toLocaleString()} per month.</p>
 ${err ? `<p class="err">${esc(err)}</p>` : ''}
 <form class="card" method="post" action="/sponsor" enctype="multipart/form-data">
 ${guest ? `<input name="guest_name" placeholder="Your name or business name" required maxlength="80" value="${esc(v.guest_name || '')}"><input name="guest_email" type="email" placeholder="Your email (we send your private link here)" required maxlength="120" value="${esc(v.guest_email || '')}">` : ''}
