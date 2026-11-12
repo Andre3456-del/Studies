@@ -22,7 +22,8 @@ module.exports = function register(app, ctx) {
     const me = req.user.id;
     const dms = db.prepare('SELECT id,name FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ') ORDER BY name').all().map(u => ({ kind: 'dm', id: u.id, name: u.name }));
     const groups = db.prepare('SELECT g.id,g.name FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=? ORDER BY g.name').all(me).map(g => ({ kind: 'group', id: g.id, name: g.name }));
-    res.json({ targets: groups.concat(dms) });
+    const self = { kind: 'dm', id: me, name: req.user.name + ' (You)' };
+    res.json({ targets: [self].concat(groups, dms) });
   });
   app.post('/api/messages/forward', (req, res) => {
     if (!req.user) return res.sendStatus(401);
@@ -30,7 +31,7 @@ module.exports = function register(app, ctx) {
     if (limited('fwd:' + me, 10, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
     const targets = (Array.isArray(req.body && req.body.targets) ? req.body.targets : []).slice(0, 5).map(t => t && t.kind === 'group'
       ? (isGroupMember(Number(t.id), me) ? { recipient_id: 0, group_id: Number(t.id) } : null)
-      : (t && Number(t.id) !== me && friendStatus(me, Number(t.id)) === 'friends' ? { recipient_id: Number(t.id), group_id: null } : null)).filter(Boolean);
+      : (t && (Number(t.id) === me || friendStatus(me, Number(t.id)) === 'friends') ? { recipient_id: Number(t.id), group_id: null } : null)).filter(Boolean);
     const msgs = cleanIds(req.body && req.body.ids, 10).map(id => db.prepare('SELECT * FROM messages WHERE id=?').get(id)).filter(m => canSeeMsg(me, m) && !m.deleted_at).sort((a, b) => a.id - b.id);
     if (!targets.length || !msgs.length) return res.status(400).json({ error: 'Choose who to forward to.' });
     let count = 0;

@@ -20,10 +20,10 @@ module.exports = function register(app, ctx) {
 <button type="button" id="toBtm" class="to-btm" style="display:none" aria-label="Scroll to latest message">${ic('<path d="M6 9l6 6 6-6"/>')}<b id="toBtmN" class="nbadge" style="display:none"></b></button>
 <div id="sheet" class="sheet" style="display:none"><div id="sheetBox" class="sheet-box"></div></div>
 <div id="toast" class="toast" style="display:none"></div>`;
-  function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastId }) {
+  function threadPage(req, res, { isGroup, convId, title, headHtml, bubbles, lastId, self }) {
     const script = CHAT_JS.replace('__CTYPE__', isGroup ? 'group' : 'dm').replace('__CID__', String(convId)).replace('__MY__', String(req.user.id));
     res.send(layout(title, `${MSG_SEL_BAR}${headHtml}
-<div id="thread" class="thread" data-last-id="${lastId}">${bubbles || '<p class="mut hello">Say hello 👋</p>'}</div>
+${self ? '<style>.self-chat .tickwrap{display:none}</style>' : ''}<div id="thread" class="thread${self ? ' self-chat' : ''}"${self ? ' data-selfchat="1"' : ''} data-last-id="${lastId}">${bubbles || (self ? '<p class="mut hello">Notes, files and links to yourself. Only you can see this space.</p>' : '<p class="mut hello">Say hello 👋</p>')}</div>
 <div id="panel" class="chat-panel" hidden><div class="ptabs"><button type="button" class="ghost on" data-tab="emoji">😊 Emoji</button><button type="button" class="ghost" data-tab="stickers">Stickers</button></div>
 <div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
 <div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker(s)<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" multiple></label>
@@ -38,17 +38,17 @@ module.exports = function register(app, ctx) {
   app.get('/chat/:id', (req, res) => {
     if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
     const otherId = Number(req.params.id);
-    if (otherId === req.user.id) return res.redirect('/chat');
+    const self = otherId === req.user.id; // your own space
     const other = db.prepare('SELECT id,name,title,avatar_mime,last_seen,hide_active FROM users WHERE id=?').get(otherId);
     if (!other) return res.status(404).send(layout('Not found', '<h2>User not found</h2>', req.user));
-    if (friendStatus(req.user.id, otherId) !== 'friends') return res.status(403).send(layout('Not friends yet', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h2>You are not friends with ${esc(other.name)} yet</h2><p>${friendActionHtml(req.user.id, otherId)}</p>`, req.user));
+    if (!self && friendStatus(req.user.id, otherId) !== 'friends') return res.status(403).send(layout('Not friends yet', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h2>You are not friends with ${esc(other.name)} yet</h2><p>${friendActionHtml(req.user.id, otherId)}</p>`, req.user));
     const rows = db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) ORDER BY id ASC').all(req.user.id, otherId, otherId, req.user.id)
       .filter(m => !isHiddenFor(m.id, req.user.id));
     const bubbles = withUnreadDivider(rows, req.user.id, m => bubbleHtml(m, req.user.id, false));
     markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'dm', otherId);
     const lastId = rows.length ? rows[rows.length - 1].id : 0;
-    const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/u/${other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" id="chatPresence" style="font-size:12px;min-height:14px;display:inline-block">${isOnline(other) ? 'online' : ''}</span></div></a></div>`;
-    threadPage(req, res, { isGroup: false, convId: otherId, title: other.name, headHtml, bubbles, lastId });
+    const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="${self ? '/settings/profile' : '/u/' + other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}${self ? ' (You)' : ''}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" id="chatPresence" style="font-size:12px;min-height:14px;display:inline-block">${self ? 'Message yourself' : isOnline(other) ? 'online' : ''}</span></div></a></div>`;
+    threadPage(req, res, { isGroup: false, convId: otherId, title: other.name, headHtml, bubbles, lastId, self });
   });
 
   app.get('/chat/group/:id', (req, res) => {

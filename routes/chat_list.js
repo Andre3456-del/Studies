@@ -41,7 +41,7 @@ module.exports = function register(app, ctx) {
       return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search students and admins by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
     }
     const prefs = prefsOf(me);
-    const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).join(',') || '0') + ')').all();
+    const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).concat(me).join(',') || '0') + ')').all(); // you are in your own list too: your own space
     const lastVisible = (kind, id) => kind === 'group'
       ? db.prepare('SELECT * FROM messages WHERE group_id=? AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?) ORDER BY id DESC LIMIT 1').get(id, me)
       : db.prepare('SELECT * FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?) ORDER BY id DESC LIMIT 1').get(me, id, id, me, me);
@@ -49,9 +49,9 @@ module.exports = function register(app, ctx) {
     for (const u of friends) {
       const m = lastVisible('dm', u.id), p = prefs['dm:' + u.id] || {};
       const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(u.id, me, me, me).n;
-      const mine = m && m.sender_id === me && !m.deleted_at && m.kind !== 'call' ? tickSpan(tickFor(m, u.id)) + ' ' : '';
-      items.push({ kind: 'dm', id: u.id, name: u.name, av: avatarOr(u), m, p, unread, dot: null,
-        sub: m ? `${mine}${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet' });
+      const mine = m && m.sender_id === me && u.id !== me && !m.deleted_at && m.kind !== 'call' ? tickSpan(tickFor(m, u.id)) + ' ' : '';
+      items.push({ kind: 'dm', id: u.id, name: u.id === me ? u.name + ' (You)' : u.name, av: avatarOr(u), m, p, unread, dot: null,
+        sub: m ? `${mine}${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : (u.id === me ? 'Message yourself' : 'No messages yet') });
     }
     for (const g of db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me)) {
       const m = lastVisible('group', g.id), p = prefs['group:' + g.id] || {};

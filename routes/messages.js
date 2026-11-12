@@ -2,6 +2,8 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { MEDIA_KINDS, callInfo, canSeeMsg, db, decryptBytes, decryptMsg, encryptBytes, encryptMsg, express, friendStatus, fs, groupMembers, isGroupMember, isHiddenFor, isMutedChat, isOnline, isPendingMedia, isStarred, limited, markDelivered, markRead, mediaSizeOf, messageReplyInfo, notify, path, reactionsFor, tickFor, upDir, upload } = ctx;
+  // Your own space: messages you send to yourself are delivered and read the moment they are saved, so they never count as unread.
+  db.exec('CREATE TRIGGER IF NOT EXISTS msg_self_read AFTER INSERT ON messages WHEN NEW.sender_id = NEW.recipient_id AND NEW.group_id IS NULL BEGIN INSERT OR IGNORE INTO message_reads(message_id, user_id) VALUES(NEW.id, NEW.sender_id); UPDATE messages SET delivered_at = CURRENT_TIMESTAMP WHERE id = NEW.id; END');
   function validateReplyTarget(req, target) {
     const replyId = Number(req.body && req.body.reply_to_id) || null;
     if (!replyId) return { id: null };
@@ -40,10 +42,11 @@ module.exports = function register(app, ctx) {
       return { recipient_id: 0, group_id: gid };
     }
     const to = Number(b.to);
-    if (!to || to === req.user.id || friendStatus(req.user.id, to) !== 'friends') return null;
+    if (!to || (to !== req.user.id && friendStatus(req.user.id, to) !== 'friends')) return null; // to === you is your own space ("You")
     return { recipient_id: to, group_id: null };
   }
   function notifyNewMessage(sender, target, preview, messageId) {
+    if (!target.group_id && target.recipient_id === sender.id) return; // a note to yourself needs no notification
     if (target.group_id) {
       const others = db.prepare('SELECT user_id FROM group_members WHERE group_id=? AND user_id != ?').all(target.group_id, sender.id).map(r => r.user_id).filter(id => !isMutedChat(id, 'group', target.group_id));
       const g = db.prepare('SELECT name FROM groups WHERE id=?').get(target.group_id);
