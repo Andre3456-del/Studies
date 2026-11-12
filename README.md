@@ -50,6 +50,10 @@ routes/              parts of the website moved out of server.js, one section pe
   signup.js            sign-up pages (students and lecturers) and the lecturer portal
   settings.js          settings pages: profile, picture, active status, appearance, notifications
   welcome.js           profile fields, saving a profile, the Welcome page
+  structure.js         site structure: faculties, departments, institutions, courses
+  admin_page.js        the Admin page
+  dashboard.js         the member dashboard and changing your display name
+  avatar.js            profile pictures
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site
