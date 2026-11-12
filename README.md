@@ -23,6 +23,9 @@ lib/                 the site's separate parts
   sponsor_cards.js     the "Sponsored" cards on the home page and News
   sponsor_admin.js     the admin list of sponsor posts (waiting and live)
   chat_js.js           the browser script that runs a chat page
+  page_helpers.js      helpers for uploaded pages: video links, paywall, page cards, previews
+  audience.js          reading who an upload is for (departments and levels)
+  claims.js            who may verify a position claim
 routes/              parts of the website moved out of server.js, one section per file
   security.js          app lock and change password
   checks.js            admin connection checks
@@ -54,6 +57,10 @@ routes/              parts of the website moved out of server.js, one section pe
   admin_page.js        the Admin page
   dashboard.js         the member dashboard and changing your display name
   avatar.js            profile pictures
+  messages.js          chat messages: send, voice, stickers, attachments, media, polling, reactions, edit, delete
+  pages_view.js        saved pages, opening a page, the raw page file
+  admin_upload.js      admin: upload a page or file, reorder pages
+  positions.js         position and lecturer approvals, departments, level limits
 android/             the Android app
 .github/workflows/   automatic checks and the Android app build
 archive/             old files kept for reference, not used by the site

@@ -1,7 +1,7 @@
 // Starred, forwarded messages and message info
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
-  const { db, decryptBytes, decryptMsg, encryptMsg, friendIds, friendStatus, groupMembers, isGroupMember, isHiddenFor, limited, notifyNewMessage } = ctx;
+  const { db, decryptBytes, decryptMsg, encryptMsg, friendIds, friendStatus, groupMembers, isGroupMember, isHiddenFor, limited } = ctx;
   const canSeeMsg = (uid, m) => !!m && !isHiddenFor(m.id, uid) && (m.group_id ? isGroupMember(m.group_id, uid) : (m.sender_id === uid || m.recipient_id === uid));
   const cleanIds = (v, max) => [...new Set((Array.isArray(v) ? v : []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))].slice(0, max);
   app.post('/api/messages/star', (req, res) => {
@@ -48,7 +48,7 @@ module.exports = function register(app, ctx) {
         preview = m.kind === 'voice' ? '🎤 Voice note' : m.kind === 'sticker' ? 'Sticker' : m.kind === 'image' ? '📷 Photo' : m.kind === 'video' ? '🎬 Video' : `📄 ${(m.media_name || 'File').slice(0, 60)}`;
       } else continue;
       count++;
-      notifyNewMessage(req.user, t, '↪ ' + preview, newId);
+      ctx.notifyNewMessage(req.user, t, '↪ ' + preview, newId);
     }
     res.json({ ok: true, count });
   });
