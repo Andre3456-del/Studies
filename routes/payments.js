@@ -104,7 +104,7 @@ module.exports = function register(app, ctx) {
         method: 'POST', headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tx_ref: txRef, amount: o.kobo / 100, currency: 'NGN', redirect_url: base + '/pay/return',
           customer: { email: payer.email, name: payer.name },
-          customizations: { title: 'Studies Hub', description: o.desc, logo: base + '/icon-192.png' }, meta: { kind: o.kind, item: o.item, user: payer.id } })
+          customizations: { title: 'Studies Hub', description: o.desc, logo: base + '/icon-192.png?v=2' }, meta: { kind: o.kind, item: o.item, user: payer.id } })
       });
       const j = await r.json();
       if (j && j.status === 'success' && j.data && j.data.link) {

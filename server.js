@@ -474,7 +474,7 @@ const fcm = require('./lib/fcm').register(db);
 function notify(userIds, payload) {
   const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
   if (!ids.length) return Promise.resolve();
-  const p = { icon: '/icon-192.png', ...payload, body: String(payload.body || '').slice(0, 140), title: String(payload.title || 'Studies Hub').slice(0, 80) };
+  const p = { icon: '/icon-192.png?v=2', ...payload, body: String(payload.body || '').slice(0, 140), title: String(payload.title || 'Studies Hub').slice(0, 80) };
   try { emailAlso(ids, p); } catch (e) { console.error('Email alert failed:', e.message); }
   try { fcm.send(ids, p).catch(e => console.error('FCM failed:', e.message)); } catch (e) { /* app notifications are best effort */ }
   const subs = db.prepare(`SELECT * FROM push_subscriptions WHERE user_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
@@ -584,7 +584,7 @@ async function gmailSend(to, subject, text, html) {
 function emailShell(inner, base) {
   base = base || process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
   const F = "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
-  return `<div style="background:#eef1f7;padding:28px 12px;${F}"><div style="max-width:560px;margin:0 auto"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:18px;overflow:hidden;color:#1b2430"><tr><td style="height:6px;background:#6d5efc;font-size:0;line-height:0">&nbsp;</td></tr><tr><td style="padding:30px 32px 6px"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:12px"><img src="${base}/logo.png" width="52" height="52" alt="Studies Hub" style="display:block;border-radius:12px;border:0"></td><td style="${F};font-size:20px;font-weight:700;color:#1b2430">Studies Hub</td></tr></table></td></tr><tr><td style="padding:18px 32px 34px;${F};font-size:16px;line-height:1.75;color:#2a3442">${inner}</td></tr></table><p style="text-align:center;color:#8a94a3;${F};font-size:12px;line-height:1.6;margin:18px 12px 0">You are getting this email because you have a Studies Hub account.<br>Studies Hub &middot; Study smarter, together</p></div></div>`;
+  return `<div style="background:#eef1f7;padding:28px 12px;${F}"><div style="max-width:560px;margin:0 auto"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:18px;overflow:hidden;color:#1b2430"><tr><td style="height:6px;background:#6d5efc;font-size:0;line-height:0">&nbsp;</td></tr><tr><td style="padding:30px 32px 6px"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:12px"><img src="${base}/logo.png?v=2" width="52" height="52" alt="Studies Hub" style="display:block;border-radius:12px;border:0"></td><td style="${F};font-size:20px;font-weight:700;color:#1b2430">Studies Hub</td></tr></table></td></tr><tr><td style="padding:18px 32px 34px;${F};font-size:16px;line-height:1.75;color:#2a3442">${inner}</td></tr></table><p style="text-align:center;color:#8a94a3;${F};font-size:12px;line-height:1.6;margin:18px 12px 0">You are getting this email because you have a Studies Hub account.<br>Studies Hub &middot; Study smarter, together</p></div></div>`;
 }
 async function deliver(to, subject, text, html) {
   const from = process.env.MAIL_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
@@ -970,13 +970,13 @@ app.get('/manifest.webmanifest', (req, res) => {
     note_taking: { new_note_url: '/news' },
     background_color: '#12121c', theme_color: '#12121c',
     related_applications: [{ platform: 'play', id: 'org.studieshub.app' }], prefer_related_applications: false,
-    icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
+    icons: [{ src: '/icon-192.png?v=2', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png?v=2', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
     // Shortcuts: long-press the installed icon to jump straight to a section.
     shortcuts: [
-      { name: 'Dashboard', url: '/dashboard', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
-      { name: 'Chat', url: '/chat', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
-      { name: 'News', url: '/news', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
-      { name: 'Settings', url: '/settings', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
+      { name: 'Dashboard', url: '/dashboard', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
+      { name: 'Chat', url: '/chat', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
+      { name: 'News', url: '/news', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
+      { name: 'Settings', url: '/settings', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
     ],
     // Launch handler: re-opening the installed app (from a notification, a shared link, etc) focuses the
     // existing window instead of spawning a duplicate one.
@@ -999,8 +999,8 @@ app.get('/manifest.webmanifest', (req, res) => {
       name: 'Studies Hub News', short_name: 'News', description: 'The latest approved news from Studies Hub.',
       tag: 'studies-hub-news', template: 'studies-hub-news-template', ms_ac_template: '/widgets/news-template.json',
       data: '/widgets/news-data.json', type: 'application/json', auth: false, update: 21600,
-      screenshots: [{ src: '/icon-512.png', sizes: '512x512', label: 'Studies Hub News widget' }],
-      icons: [{ src: '/icon-192.png', sizes: '192x192' }],
+      screenshots: [{ src: '/icon-512.png?v=2', sizes: '512x512', label: 'Studies Hub News widget' }],
+      icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }],
     }],
   }));
 });
@@ -1031,7 +1031,7 @@ const OFFLINE_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta nam
 .card{max-width:360px}img{width:72px;height:72px;border-radius:16px;margin-bottom:18px}
 h1{font-size:1.25rem;margin:0 0 8px}p{color:#93a0bd;line-height:1.5;margin:0 0 20px}
 button{background:#5bc8ff;color:#04101f;border:none;border-radius:10px;padding:12px 22px;font-size:1rem;font-weight:600;cursor:pointer}</style></head>
-<body><div class="card"><img src="/icon-192.png" alt="Studies Hub"><h1>You're offline</h1>
+<body><div class="card"><img src="/icon-192.png?v=2" alt="Studies Hub"><h1>You're offline</h1>
 <p>This page needs a connection. Reconnect and try again -- anything you already opened recently may still work.</p>
 <button onclick="location.reload()">Try again</button></div></body></html>`;
 app.get('/offline.html', (req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.send(OFFLINE_HTML); });
@@ -1085,7 +1085,7 @@ app.get('/app/version', async (req, res) => {
 app.get('/app', (req, res) => {
   // The download page is for the website only: inside the app it can never open, even by a stale link.
   if (inApp(req)) return res.redirect('/settings');
-  const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a id="dlApp" class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><script>(function(){var a=document.getElementById('dlApp');try{navigator.getInstalledRelatedApps&&navigator.getInstalledRelatedApps().then(function(r){if(r&&r.length&&a){a.textContent='Open the app';a.removeAttribute('download');a.href='intent://studieshub.org/#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/StudiesHub.apk')+';end'}}).catch(function(){})}catch(e){}})()</script><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
+  const body = `<main class="auth" style="max-width:520px;width:100%;margin:24px auto;padding:22px;text-align:center"><img src="/icon-192.png?v=2" alt="" width="96" height="96" style="border-radius:22px"><h1>Studies Hub app</h1><p class="muted">For Android phones and tablets. It opens full screen, like any other app.</p><p><a id="dlApp" class="btn" href="/StudiesHub.apk" download="StudiesHub.apk" style="display:inline-block;padding:14px 28px;font-size:18px">Download the app</a></p><ol style="text-align:left;line-height:1.7"><li>Tap <b>Download the app</b> and wait for it to finish.</li><li>Open the downloaded file (swipe down from the top of your phone and tap it).</li><li>If Android asks, tap <b>Settings</b> and allow installing from this browser, go back, then tap <b>Install</b>.</li><li>Open <b>Studies Hub</b> from your home screen.</li></ol><script>(function(){var a=document.getElementById('dlApp');try{navigator.getInstalledRelatedApps&&navigator.getInstalledRelatedApps().then(function(r){if(r&&r.length&&a){a.textContent='Open the app';a.removeAttribute('download');a.href='intent://studieshub.org/#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/StudiesHub.apk')+';end'}}).catch(function(){})}catch(e){}})()</script><p class="muted">iPhone: open studieshub.org in Safari, tap Share, then Add to Home Screen.</p></main>`;
   res.send(layout('Get the app', body, req.user));
 });
 const UPLOAD_QUEUED_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1193,13 +1193,13 @@ self.addEventListener('push',function(e){
   var d={};
   try{d=e.data.json()}catch(_){d={title:'Studies Hub',body:e.data?e.data.text():''}}
   if(d.ringEnd){
-    e.waitUntil(self.registration.showNotification(d.title||'Call ended',{tag:d.tag,silent:true,icon:'/icon-192.png',badge:'/icon-192.png'}).then(function(){return new Promise(function(r){setTimeout(r,700)})}).then(function(){return self.registration.getNotifications({tag:d.tag})}).then(function(list){list.forEach(function(n){n.close()})}));
+    e.waitUntil(self.registration.showNotification(d.title||'Call ended',{tag:d.tag,silent:true,icon:'/icon-192.png?v=2',badge:'/icon-192.png?v=2'}).then(function(){return new Promise(function(r){setTimeout(r,700)})}).then(function(){return self.registration.getNotifications({tag:d.tag})}).then(function(list){list.forEach(function(n){n.close()})}));
     return;
   }
   if(d.ring){
     e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
       for(var i=0;i<cs.length;i++){if(cs[i].visibilityState==='visible')return}
-      return self.registration.showNotification(d.title||'Incoming call',{body:d.body||'Incoming call',icon:d.icon||'/icon-192.png',badge:'/icon-192.png',tag:d.tag,renotify:true,requireInteraction:true,silent:false,vibrate:[500,250,500,250,500,250,500,250,500,250,500],actions:[{action:'answer',title:'Answer'},{action:'decline',title:'Decline'}],data:{url:'/chat',call:d.ring}});
+      return self.registration.showNotification(d.title||'Incoming call',{body:d.body||'Incoming call',icon:d.icon||'/icon-192.png?v=2',badge:'/icon-192.png?v=2',tag:d.tag,renotify:true,requireInteraction:true,silent:false,vibrate:[500,250,500,250,500,250,500,250,500,250,500],actions:[{action:'answer',title:'Answer'},{action:'decline',title:'Decline'}],data:{url:'/chat',call:d.ring}});
     }));
     return;
   }
@@ -1207,7 +1207,7 @@ self.addEventListener('push',function(e){
     var url=d.url||'/';
     for(var i=0;i<cs.length;i++){var c=cs[i];if(c.visibilityState==='visible'&&c.focused&&new URL(c.url).pathname===url.split('?')[0])return}
     var replyTo=d.quickReply&&d.quickReply.reply_to_id;
-    var options={body:d.body||'',icon:d.icon||'/icon-192.png',badge:'/icon-192.png',tag:d.tag||undefined,renotify:!!d.tag,data:{url:url,replyTo:replyTo||null}};
+    var options={body:d.body||'',icon:d.icon||'/icon-192.png?v=2',badge:'/icon-192.png?v=2',tag:d.tag||undefined,renotify:!!d.tag,data:{url:url,replyTo:replyTo||null}};
     if(d.quickReply)options.actions=[{action:'reply',title:'Reply'}];
     return self.registration.showNotification(d.title||'Studies Hub',options);
   }));
@@ -2019,10 +2019,10 @@ var mob=/Mobi|iPhone|iPod/.test(ua)||(ud&&ud.mobile===true);
 if(os==="iOS")dev="phone";else if(os==="iPadOS")dev="tablet";else if(os==="Android")dev=(mob||sm<600)?"phone":"tablet";else if(tp>0&&sm<600)dev="phone";else if(tp>0&&sm<1100&&os==="Linux")dev="tablet";else dev="laptop";
 d.setAttribute("data-dev",dev);d.setAttribute("data-os",os);if(/^\\/call/.test(location.pathname))d.setAttribute("data-nolock","1");
 try{if(window.top===window.self){var ck=";path=/;max-age=31536000;SameSite=Lax";document.cookie="dev="+dev+ck;document.cookie="os="+os+ck;document.cookie="wide="+(innerWidth>=1024?1:0)+ck}}catch(e){}
-try{if(window.parent!==window&&window.parent.document.getElementById("pane"))d.className+=" embed"}catch(e){}})()</script><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS_FINAL}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
+try{if(window.parent!==window&&window.parent.document.getElementById("pane"))d.className+=" embed"}catch(e){}})()</script><title>${esc(title)}</title>${descriptionMeta}${opts.headExtra || ''}<link rel="icon" href="/icon-192.png?v=2"><link rel="apple-touch-icon" href="/icon-192.png?v=2"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${user && user.theme === 'light' ? '#f4f7fc' : '#12121c'}"><style>${CSS_FINAL}</style></head><body${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).length ? ` class="${[opts.footer ? 'has-footer' : '', tabbar ? 'has-tabbar' : ''].filter(Boolean).join(' ')}"` : ''}>
 <div id="scrim" class="scrim"></div>${tabbar}
 <nav id="drawer" class="drawer">
-<div class="drawer-top"><img class="logo-img" src="/logo.png" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
+<div class="drawer-top"><img class="logo-img" src="/logo.png?v=2" alt=""><b>Studies Hub</b><button id="drawerClose" class="link" aria-label="Close menu" style="margin-left:auto;font-size:20px">&times;</button></div>
 ${user ? `<a class="drawer-user" href="/settings/profile">${avatarBit}<div><b>${esc(user.name)}</b><br><span class="mut" style="font-size:12px">${esc(user.email)}</span></div></a>` : ''}
 <p class="drawer-label">MAIN MENU</p>
 ${drawerNav}
@@ -2198,7 +2198,7 @@ if(ob){var slug=ob.getAttribute('data-slug'),ttl=ob.getAttribute('data-title')||
 function chk(){var p=location.pathname,v=/^\\/(settings\\/(profile|security|devices)|login|signup|forgot|reset|verify|welcome|pay|admin)(\\/|$)/.test(p);if(v!==last){last=v;try{A.privatePage(v)}catch(e){}}}
 chk();setInterval(chk,600)})()</script>`}${user ? `<script>${SEARCHSEL_JS}</script><script>${PREVIEW_JS}</script>` : ''}
 ${user && !opts.hideTop && !opts.noAI && !opts.noFeedback ? `<script>${FEEDBACK_JS}</script>` : ''}
-<script>(function(){try{var ua=navigator.userAgent||'';if(!/Android/i.test(ua)||/StudiesHubApp/.test(ua)||window.top!==window.self)return;if(matchMedia('(display-mode: standalone)').matches)return;if(location.pathname==='/app')return;if(sessionStorage.getItem('appAsk'))return;sessionStorage.setItem('appAsk','1');var t=+localStorage.getItem('appAskAt')||0;if(Date.now()-t<3600000)return;if(Math.random()>.7)return;var go='intent://studieshub.org'+location.pathname+location.search+'#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/app')+';end';function show(inst){var b=document.createElement('div');b.setAttribute('role','dialog');b.setAttribute('aria-label','Studies Hub app');b.style.cssText='position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:18px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;gap:12px;align-items:center;font:15px system-ui,sans-serif';b.innerHTML='<img src="/icon-192.png" alt="" width="44" height="44" style="border-radius:11px"><div style="flex:1"><b>'+(inst?'Continue in the Studies Hub app':'Download the Studies Hub app')+'</b><div style="opacity:.7;font-size:13px">'+(inst?'Open this page in the app.':'Opens full screen, like a real app.')+'</div></div><a href="'+go+'" style="background:#6c63ff;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:600">'+(inst?'Open':'Get')+'</a><button type="button" aria-label="Close" style="background:none;border:0;color:inherit;font-size:24px;line-height:1;padding:4px 6px;cursor:pointer">&times;</button>';b.querySelector('button').onclick=function(){b.remove();try{localStorage.setItem('appAskAt',Date.now())}catch(e){}};document.body.appendChild(b)}var p=navigator.getInstalledRelatedApps?navigator.getInstalledRelatedApps():Promise.resolve([]);p.then(function(a){return a&&a.length}).catch(function(){return 0}).then(function(i){setTimeout(function(){show(!!i)},3500)})}catch(e){}})()</script>
+<script>(function(){try{var ua=navigator.userAgent||'';if(!/Android/i.test(ua)||/StudiesHubApp/.test(ua)||window.top!==window.self)return;if(matchMedia('(display-mode: standalone)').matches)return;if(location.pathname==='/app')return;if(sessionStorage.getItem('appAsk'))return;sessionStorage.setItem('appAsk','1');var t=+localStorage.getItem('appAskAt')||0;if(Date.now()-t<3600000)return;if(Math.random()>.7)return;var go='intent://studieshub.org'+location.pathname+location.search+'#Intent;scheme=https;package=org.studieshub.app;S.browser_fallback_url='+encodeURIComponent('https://studieshub.org/app')+';end';function show(inst){var b=document.createElement('div');b.setAttribute('role','dialog');b.setAttribute('aria-label','Studies Hub app');b.style.cssText='position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;background:var(--card,#1d1d2b);color:var(--text,#fff);border:1px solid var(--line,#333);border-radius:18px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;gap:12px;align-items:center;font:15px system-ui,sans-serif';b.innerHTML='<img src="/icon-192.png?v=2" alt="" width="44" height="44" style="border-radius:11px"><div style="flex:1"><b>'+(inst?'Continue in the Studies Hub app':'Download the Studies Hub app')+'</b><div style="opacity:.7;font-size:13px">'+(inst?'Open this page in the app.':'Opens full screen, like a real app.')+'</div></div><a href="'+go+'" style="background:#6c63ff;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:600">'+(inst?'Open':'Get')+'</a><button type="button" aria-label="Close" style="background:none;border:0;color:inherit;font-size:24px;line-height:1;padding:4px 6px;cursor:pointer">&times;</button>';b.querySelector('button').onclick=function(){b.remove();try{localStorage.setItem('appAskAt',Date.now())}catch(e){}};document.body.appendChild(b)}var p=navigator.getInstalledRelatedApps?navigator.getInstalledRelatedApps():Promise.resolve([]);p.then(function(a){return a&&a.length}).catch(function(){return 0}).then(function(i){setTimeout(function(){show(!!i)},3500)})}catch(e){}})()</script>
 ${require('./lib/ui_theme').js}</body></html>`;
 };
 
