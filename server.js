@@ -956,7 +956,7 @@ app.use((req, res, next) => {
 });
 
 // ---------- logo, app icons, install manifest and the notification service worker ----------
-const sendAsset = (res, buf, type) => { res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'public, max-age=86400'); res.send(buf); };
+const sendAsset = (res, buf, type) => { res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'no-cache'); res.send(buf); }; // no-cache: always check, so a new logo shows straight away
 app.get('/logo.png', (req, res) => sendAsset(res, LOGO_PNG, 'image/png'));
 app.get('/icon-192.png', (req, res) => sendAsset(res, ICON_192, 'image/png'));
 app.get('/favicon.ico', (req, res) => sendAsset(res, ICON_192, 'image/png'));
@@ -1097,7 +1097,7 @@ a.btn{display:inline-block;background:#5bc8ff;color:#04101f;border:none;border-r
 <body><div class="card"><div class="tick">💾</div><h1>Saved on your device</h1>
 <p>No connection right now, so this is waiting on your phone. It'll upload itself as soon as you're back online -- no need to try again.</p>
 <a class="btn" href="/admin">Back to Admin</a></div></body></html>`;
-const SW_JS = `var OFFLINE_CACHE='studies-hub-offline-v2',UPLOAD_PATHS=['/admin/upload'];
+const SW_JS = `var OFFLINE_CACHE='studies-hub-offline-v3',UPLOAD_PATHS=['/admin/upload'];
 self.addEventListener('install',function(e){self.skipWaiting();e.waitUntil(caches.open(OFFLINE_CACHE).then(function(c){return c.add('/offline.html')}))});
 self.addEventListener('fetch',function(e){
   if(e.request.mode!=='navigate')return;
