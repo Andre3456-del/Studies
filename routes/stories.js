@@ -57,10 +57,12 @@ CREATE TABLE IF NOT EXISTS story_views (story_id INTEGER NOT NULL, user_id INTEG
   app.get('/stories/:uid', (req, res) => {
     if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
     const uid = Number(req.params.uid);
-    if (!canSee(req.user.id, uid)) return res.redirect('/chat');
+    const queue = String(req.query.q || '').split(',').map(Number).filter(n => n > 0).slice(0, 40);
+    const onward = () => queue.length ? '/stories/' + queue[0] + (queue.length > 1 ? '?q=' + queue.slice(1).join(',') : '') : '/chat';
+    if (!canSee(req.user.id, uid)) return res.redirect(onward());
     const owner = db.prepare('SELECT id,name FROM users WHERE id=?').get(uid);
     const list = owner ? db.prepare('SELECT id,text,bg,media_mime,created_at FROM stories WHERE user_id=? AND created_at>? ORDER BY id').all(uid, live()) : [];
-    if (!list.length) return res.redirect(uid === req.user.id ? '/stories/new' : '/chat');
+    if (!list.length) return res.redirect(uid === req.user.id && !queue.length ? '/stories/new' : onward());
     const data = list.map(s => ({ id: s.id, text: s.text || '', bg: BG[s.bg % BG.length], img: s.media_mime ? '/stories/media/' + s.id : '', at: s.created_at }));
     const mine = uid === req.user.id;
     res.set('Cache-Control', 'no-store').send(layout('Story', `<div id="stv" style="position:fixed;inset:0;z-index:200;background:#000;color:#fff;display:flex;flex-direction:column">
@@ -68,10 +70,10 @@ CREATE TABLE IF NOT EXISTS story_views (story_id INTEGER NOT NULL, user_id INTEG
 <div style="display:flex;align-items:center;gap:10px;padding:4px 14px"><a href="/chat" style="color:#fff;font-size:22px;text-decoration:none" aria-label="Close">&times;</a><b>${esc(owner.name)}${mine ? ' (You)' : ''}</b><span id="stAgo" style="opacity:.7;font-size:13px"></span><span style="flex:1"></span>${mine ? '<form method="post" id="stDel" style="margin:0"><button aria-label="Delete this story" style="background:transparent;border:0;color:#fff;font-size:20px;padding:6px;box-shadow:none">&#128465;</button></form><a href="/stories/new" style="color:#fff;font-size:24px;text-decoration:none" aria-label="Add another">+</a>' : ''}</div>
 <div id="stBody" style="flex:1;position:relative;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;font-size:26px;font-weight:600;overflow:hidden"><img id="stImg" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none"><div id="stTxt" style="position:relative;z-index:1;text-shadow:0 2px 12px rgba(0,0,0,.6);max-width:90%;overflow-wrap:anywhere"></div>
 <div id="stPrev" style="position:absolute;left:0;top:0;bottom:0;width:35%;z-index:2"></div><div id="stNext" style="position:absolute;right:0;top:0;bottom:0;width:65%;z-index:2"></div></div></div>
-<script>(function(){var L=${JSON.stringify(data).replace(/</g, '\\u003c')},i=0,t=null,bars=document.getElementById('stBars'),mine=${mine ? 'true' : 'false'};
+<script>(function(){var NEXT=${JSON.stringify(onward())},L=${JSON.stringify(data).replace(/</g, '\\u003c')},i=0,t=null,bars=document.getElementById('stBars'),mine=${mine ? 'true' : 'false'};
 L.forEach(function(){var b=document.createElement('div');b.style.cssText='flex:1;height:3px;border-radius:3px;background:rgba(255,255,255,.3);overflow:hidden';b.innerHTML='<i style="display:block;height:100%;width:0;background:#fff"></i>';bars.appendChild(b)});
 function ago(ms){var m=Math.max(1,Math.round((Date.now()-ms)/60000));return m<60?m+'m':Math.round(m/60)+'h'}
-function show(n){clearTimeout(t);if(n<0)n=0;if(n>=L.length){location.href='/chat';return}i=n;var s=L[n],img=document.getElementById('stImg'),body=document.getElementById('stBody');
+function show(n){clearTimeout(t);if(n<0)n=0;if(n>=L.length){location.href=NEXT;return}i=n;var s=L[n],img=document.getElementById('stImg'),body=document.getElementById('stBody');
  body.style.background=s.img?'#000':s.bg;img.style.display=s.img?'block':'none';if(s.img)img.src=s.img;document.getElementById('stTxt').textContent=s.text;document.getElementById('stAgo').textContent=ago(s.at);
  Array.prototype.forEach.call(bars.children,function(b,k){var f=b.firstChild;f.style.transition='none';f.style.width=k<n?'100%':'0';if(k===n){void f.offsetWidth;f.style.transition='width 5s linear';f.style.width='100%'}});
  var d=document.getElementById('stDel');if(d)d.action='/stories/'+s.id+'/delete';

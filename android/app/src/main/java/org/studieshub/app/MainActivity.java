@@ -267,8 +267,9 @@ public class MainActivity extends Activity {
                     return ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).areNotificationsEnabled();
                 } catch (Throwable t) { return false; }
             }
-            @JavascriptInterface public void incomingCall(final String id, final String title, final String body) {
-                try { CallService.showCall(MainActivity.this, id, title, body); } catch (Throwable t) { }
+            @JavascriptInterface public void incomingCall(final String id, final String title, final String body) { incomingCall(id, title, body, null); }
+            @JavascriptInterface public void incomingCall(final String id, final String title, final String body, final String av) {
+                new Thread(new Runnable() { public void run() { try { CallService.showCall(MainActivity.this, id, title, body, av); } catch (Throwable t) { } } }).start();
             }
             @JavascriptInterface public void callOngoing(final String id, final String name, final String text, final double since, final boolean video) {
                 try { ongoingCallId = id; CallService.showOngoing(MainActivity.this, id, name, text, (long) since, video); } catch (Throwable t) { }

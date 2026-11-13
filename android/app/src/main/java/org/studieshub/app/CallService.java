@@ -66,7 +66,7 @@ public class CallService extends FirebaseMessagingService {
         // (and makes a call say "Ringing…" instead of "Calling…"), even while the app is closed.
         if (type.equals("ring") && d.get("id") != null) ack("POST", "/api/calls/" + d.get("id") + "/ringing");
         else if (type.equals("note")) ack("GET", "/api/ping");
-        if (type.equals("ring")) showCall(this, d.get("id"), title, body);
+        if (type.equals("ring")) showCall(this, d.get("id"), title, body, d.get("av"));
         else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"), d.get("chat"), d.get("cid"), d.get("av"), d.get("missed") != null);
     }
 
@@ -114,12 +114,9 @@ public class CallService extends FirebaseMessagingService {
          .setColor(0xFF000000).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(false).setOnlyAlertOnce(true)
          .setVisibility(Notification.VISIBILITY_PUBLIC).setContentIntent(tap);
         if (since > 0) b.setUsesChronometer(true).setWhen(since); else b.setWhen(System.currentTimeMillis());
-        if (Build.VERSION.SDK_INT >= 31) {
-            android.app.Person p = new android.app.Person.Builder().setName(name).setImportant(true).build();
-            b.setStyle(Notification.CallStyle.forOngoingCall(p, hang));
-        } else {
-            b.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Hang up", hang).build());
-        }
+        // A plain notification with a timer and a Hang up button. (The special call style is refused by Android 12+ unless a foreground service owns it,
+        // and the refusal was swallowed below, so no "on a call" notification ever appeared.)
+        b.addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Hang up", hang).build());
         nm.notify(nid, b.build());
     }
 
@@ -128,7 +125,7 @@ public class CallService extends FirebaseMessagingService {
         ((NotificationManager) c.getSystemService(NOTIFICATION_SERVICE)).cancel(("ongoing:" + id).hashCode());
     }
 
-    static void showCall(Context c, String id, String title, String body) {
+    static void showCall(Context c, String id, String title, String body, String av) {
         if (id == null) return;
         channels(c);
         NotificationManager nm = (NotificationManager) c.getSystemService(NOTIFICATION_SERVICE);
@@ -142,15 +139,20 @@ public class CallService extends FirebaseMessagingService {
         android.os.PowerManager pm = (android.os.PowerManager) c.getSystemService(Context.POWER_SERVICE);
         android.app.KeyguardManager km = (android.app.KeyguardManager) c.getSystemService(Context.KEYGUARD_SERVICE);
         boolean inUse = pm != null && pm.isInteractive() && km != null && !km.isKeyguardLocked();
+        // The caller's own picture (or their initial), never the app logo.
+        final android.graphics.Bitmap[] got = new android.graphics.Bitmap[1];
+        if (av != null && !av.isEmpty()) { final String u = "https://studieshub.org" + av; Thread t = new Thread(new Runnable() { public void run() { got[0] = fetchAvatar(u); } }); t.start(); try { t.join(1500); } catch (InterruptedException e) { } } // never hold the ring back for long
+        android.graphics.Bitmap raw = got[0];
+        android.graphics.Bitmap callerPic = round(raw != null ? raw : initials(title));
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, Sounds.channel(c, "calls")) : new Notification.Builder(c);
         b.setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle(title).setContentText(body)
-         .setColor(0xFF000000).setLargeIcon(android.graphics.BitmapFactory.decodeResource(c.getResources(), R.mipmap.ic_launcher)).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(false).setOnlyAlertOnce(false)
+         .setColor(0xFF000000).setLargeIcon(callerPic).setCategory(Notification.CATEGORY_CALL).setOngoing(true).setAutoCancel(false).setOnlyAlertOnce(false)
          .setVisibility(Notification.VISIBILITY_PUBLIC)
          .setContentIntent(tap);
         // The banner stays up, with Answer and Decline, until the call is answered, declined or really over (the site tells us when it ends).
         b.setFullScreenIntent(tap, true); // phone in use: this shows as the banner. Screen off or locked: the call screen opens.
         if (Build.VERSION.SDK_INT >= 31) {
-            android.app.Person caller = new android.app.Person.Builder().setName(title).setImportant(true).build();
+            android.app.Person caller = new android.app.Person.Builder().setName(title).setImportant(true).setIcon(android.graphics.drawable.Icon.createWithBitmap(callerPic)).build();
             b.setStyle(Notification.CallStyle.forIncomingCall(caller, decline, answer));
         } else {
             b.addAction(new Notification.Action.Builder(android.R.drawable.sym_action_call, "Answer", answer).build())
@@ -237,7 +239,7 @@ public class CallService extends FirebaseMessagingService {
         }
     }
 
-    private android.graphics.Bitmap initials(String name) {
+    private static android.graphics.Bitmap initials(String name) {
         int sz = 128;
         android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(sz, sz, android.graphics.Bitmap.Config.ARGB_8888);
         android.graphics.Canvas cv = new android.graphics.Canvas(bm);
@@ -251,7 +253,7 @@ public class CallService extends FirebaseMessagingService {
         return bm;
     }
 
-    private android.graphics.Bitmap fetchAvatar(String u) {
+    private static android.graphics.Bitmap fetchAvatar(String u) {
         try {
             java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
             h.setConnectTimeout(4000); h.setReadTimeout(4000);
