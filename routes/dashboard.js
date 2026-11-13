@@ -22,9 +22,16 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
   }
   // Dashboard: a greeting, then only uploads that are meant for this member (their department and level).
   // "Available" = free to view plus anything they've paid for; "Locked" = pay-to-view CBT they haven't unlocked yet.
-  function dashboardBody(req) {
+  function kindChips(want) {
+    const t = (k, label) => `<a class="chip${want === k ? ' on' : ''}" href="/materials${k ? '?kind=' + k : ''}">${label}</a>`;
+    return `<div class="chip-row" style="margin:4px 0 8px;flex-wrap:nowrap;overflow-x:auto">${t('', 'All')}${t('materials', 'Materials')}${t('cbt', 'CBT tests')}${t('video', 'Videos')}</div>`;
+  }
+  function dashboardBody(req, mode = 'home') {
     const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?'), staff = can.pages(u);
     const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester,university,(SELECT name FROM courses WHERE id=pages.course_id) course,(SELECT name FROM users WHERE id=pages.author_id) author FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
+    const want = String(req.query.kind || '');
+    const KIND = { video: p => p.kind === 'video', cbt: p => p.kind === 'cbt', materials: p => p.kind !== 'video' && p.kind !== 'cbt' };
+    if (mode === 'materials' && KIND[want]) rows.splice(0, rows.length, ...rows.filter(KIND[want]));
     const isLocked = p => !!p.paid && !staff && !hasPurchased(u.id, p.id);
     const locked = rows.filter(isLocked), available = rows.filter(p => !isLocked(p));
     const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
@@ -35,15 +42,14 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
     const savedN = db.prepare('SELECT COUNT(*) c FROM news_saves WHERE user_id=?').get(u.id).c;
     const coursesN = new Set(rows.map(p => p.course).filter(Boolean)).size;
     const grid = list => `<div class="pv-grid">${list.map(p => previewTile(p, isLocked(p))).join('')}</div>`;
-    return `${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="cover"></div><div class="prof">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="prof-av" alt="">` : `<span class="avatar prof-av">${initial}</span>`}<div class="prof-tx"><h1>${esc(u.name)}</h1><p class="mut">${u.username ? `@${esc(u.username)}` : ''}${forYou ? ` &middot; ${esc(forYou)}` : ''}</p></div></div>
-<p class="prof-pills">${pill}${posPill} <span class="pill">${esc(SEM.semesterName(SEM.getCurrent(db)))}</span></p>
-<div class="stats"><a href="/chat"><b>${friendsN}</b><span>Friends</span></a><a href="/news/saved"><b>${savedN}</b><span>Saved</span></a><a href="#lib"><b>${coursesN}</b><span>Courses</span></a></div>
-<div class="tiles"><a class="tile" href="/chat"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></span>Chat</a><a class="tile" href="/news"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M8 9h8M8 13h8"/></svg></span>News</a><a class="tile" href="/news/saved"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></span>Saved</a><a class="tile" href="/settings"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span>Settings</a></div></div>
-<h2 class="sec">${rows.length} upload${rows.length === 1 ? '' : 's'} for you</h2>
-<div class="vtoggle" role="group" aria-label="How to show your courses"><button type="button" data-v="grid" aria-label="Grid">&#9638;</button><button type="button" data-v="list" aria-label="List">&#9776;</button></div>
+    if (mode === 'materials') return `${kindChips(want)}<div class="vtoggle" role="group" aria-label="How to show your courses"><button type="button" data-v="grid" aria-label="Grid">&#9638;</button><button type="button" data-v="list" aria-label="List">&#9776;</button></div>
 <script>(function(){var d=document.documentElement,b=document.querySelectorAll('.vtoggle button');function set(v){d.setAttribute('data-pv',v);try{localStorage.setItem('pvView',v)}catch(e){}b.forEach(function(x){x.classList.toggle('on',x.getAttribute('data-v')===v)})}var v='grid';try{v=localStorage.getItem('pvView')||'grid'}catch(e){}set(v==='list'?'list':'grid');b.forEach(function(x){x.onclick=function(){set(x.getAttribute('data-v'))}})})()</script>
 <span id="lib"></span>${libTools(rows)}<div class="box"><h2>Available to you <span class="count">${available.length}</span></h2><p class="hint">Free to view, plus anything you have paid for.</p>${available.length ? grid(available) : '<p class="mut">Nothing available yet.</p>'}</div>
 ${locked.length ? `<div class="box"><h2>Locked &mdash; pay to view <span class="count">${locked.length}</span></h2><p class="hint">Pay once and it moves up into Available.</p>${grid(locked)}</div>` : ''}`;
+    return `${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="cover"></div><div class="prof">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="prof-av" alt="">` : `<span class="avatar prof-av">${initial}</span>`}<div class="prof-tx"><h1>${esc(u.name)}</h1><p class="mut">${u.username ? `@${esc(u.username)}` : ''}${forYou ? ` &middot; ${esc(forYou)}` : ''}</p></div></div>
+<p class="prof-pills">${pill}${posPill} <span class="pill">${esc(SEM.semesterName(SEM.getCurrent(db)))}</span></p>
+<div class="stats"><a href="/chat"><b>${friendsN}</b><span>Friends</span></a><a href="/news/saved"><b>${savedN}</b><span>Saved</span></a><a href="/materials"><b>${coursesN}</b><span>Courses</span></a></div>
+<div class="tiles"><a class="tile" href="/materials"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M18 19v2H6"/></svg></span>Materials</a><a class="tile" href="/materials?kind=cbt"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m9 9 2 2 4-4M9 16h6"/></svg></span>CBT tests</a><a class="tile" href="/materials?kind=video"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/></svg></span>Videos</a><a class="tile" href="/news/saved"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></span>Saved</a></div></div>`;
   }
 
   app.post('/account/name', (req, res) => {
@@ -57,6 +63,11 @@ ${locked.length ? `<div class="box"><h2>Locked &mdash; pay to view <span class="
   app.get('/dashboard', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/dashboard');
     if (req.user.role === 'uniadmin') return res.redirect('/uni');
-    res.send(layout('Dashboard', dashboardBody(req), req.user));
+    res.send(layout('Home', dashboardBody(req), req.user));
+  });
+  app.get('/materials', (req, res) => {
+    if (!req.user) return res.redirect('/login?next=/materials');
+    if (req.user.role === 'uniadmin') return res.redirect('/uni');
+    res.set('Cache-Control', 'no-store').send(layout('Materials', dashboardBody(req, 'materials'), req.user));
   });
 };

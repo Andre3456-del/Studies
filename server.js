@@ -973,7 +973,7 @@ app.get('/manifest.webmanifest', (req, res) => {
     icons: [{ src: '/icon-192.png?v=2', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png?v=2', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
     // Shortcuts: long-press the installed icon to jump straight to a section.
     shortcuts: [
-      { name: 'Dashboard', url: '/dashboard', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
+      { name: 'Home', url: '/dashboard', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
       { name: 'Chat', url: '/chat', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
       { name: 'News', url: '/news', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
       { name: 'Settings', url: '/settings', icons: [{ src: '/icon-192.png?v=2', sizes: '192x192' }] },
@@ -1830,7 +1830,7 @@ const navItems = (user, badge = 0, mode = '') => user ? (user.role === 'uniadmin
   { href: '/lecturer/course', icon: '📚', label: 'Courses' },
   { href: '/lecturer/uploads', icon: '📄', label: 'Uploaded documents' },
 ] : [
-  { href: '/dashboard', icon: '📊', label: 'Dashboard' },
+  { href: '/dashboard', icon: '📊', label: 'Home' },
   { href: '/news', icon: '📰', label: 'News' },
   { href: '/chat', icon: '💬', label: 'Chat', badge },
   ...(can.anyAdmin(user) || canPromote(user) ? [{ href: '/admin', icon: '🛠️', label: 'Admin' }] : []),
