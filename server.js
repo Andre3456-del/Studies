@@ -2328,7 +2328,8 @@ const { canSeeMsg } = require('./routes/message_extras')(app, { db, decryptBytes
 // ---------- Feedback form and the owner's feedback inbox (now in routes/feedback.js) ----------
 require('./routes/feedback')(app, { db, esc, fullAdminIds, isCentral, layout, limited, notify });
 // ---------- Starred messages page and the chat list (now in routes/chat_list.js) ----------
-require('./routes/chat_list')(app, { atLink, avatarOr, badgeText, canSeeMsg, cleanUsername, db, decryptMsg, esc, friendActionHtml, friendIds, groupAvatarOr, isCentral, layout, pendingReceivedCount, prefsOf, snipFor, snippetOf, tickFor, tickSpan, timeAgo });
+require('./routes/stories')(app, { db, esc, friendIds, layout });
+require('./routes/chat_list')(app, { atLink, avatarOr, badgeText, canSeeMsg, cleanUsername, db, decryptMsg, esc, friendActionHtml, friendIds, groupAvatarOr, isCentral, isOnline, layout, pendingReceivedCount, prefsOf, snipFor, snippetOf, tickFor, tickSpan, timeAgo });
 
 // ---------- The browser script that runs a chat page (now in lib/chat_js.js) ----------
 const { CHAT_JS } = require('./lib/chat_js')(app, { fmtBytes, linkTokens });

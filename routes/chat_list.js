@@ -1,7 +1,7 @@
 // Starred messages page and the chat list
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
-  const { atLink, avatarOr, badgeText, canSeeMsg, cleanUsername, db, decryptMsg, esc, friendActionHtml, friendIds, groupAvatarOr, isCentral, layout, pendingReceivedCount, prefsOf, snipFor, snippetOf, tickFor, tickSpan, timeAgo } = ctx;
+  const { atLink, avatarOr, badgeText, canSeeMsg, cleanUsername, db, decryptMsg, esc, friendActionHtml, friendIds, groupAvatarOr, isCentral, isOnline, layout, pendingReceivedCount, prefsOf, snipFor, snippetOf, tickFor, tickSpan, timeAgo } = ctx;
   app.get('/chat/starred', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/chat/starred');
     const me = req.user.id;
@@ -51,12 +51,12 @@ module.exports = function register(app, ctx) {
       const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(u.id, me, me, me).n;
       const mine = m && m.sender_id === me && u.id !== me && !m.deleted_at && m.kind !== 'call' ? tickSpan(tickFor(m, u.id)) + ' ' : '';
       items.push({ kind: 'dm', id: u.id, name: u.id === me ? u.name + ' (You)' : u.name, av: avatarOr(u), m, p, unread, dot: null,
-        sub: m ? `${mine}${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : (u.id === me ? 'Message yourself' : 'No messages yet') });
+        sub: m ? `${mine}${snipFor(m, me)}` : (u.id === me ? 'Message yourself' : 'No messages yet') });
     }
     for (const g of db.prepare('SELECT g.id,g.name,g.avatar_mime FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE gm.user_id=?').all(me)) {
       const m = lastVisible('group', g.id), p = prefs['group:' + g.id] || {};
       const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id=? AND sender_id != ? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(g.id, me, me, me).n;
-      items.push({ kind: 'group', id: g.id, name: g.name, av: groupAvatarOr(g), m, p, unread, dot: null, sub: m ? `${snipFor(m, me)} &middot; ${timeAgo(m.created_at)}` : 'No messages yet' });
+      items.push({ kind: 'group', id: g.id, name: g.name, av: groupAvatarOr(g), m, p, unread, dot: null, sub: m ? `${snipFor(m, me)}` : 'No messages yet' });
     }
     for (const it of items) it.archived = it.p.archived_upto != null && (!it.m || it.m.id <= it.p.archived_upto); // a new message brings an archived chat back
     items.sort((a, b) => ((b.p.pinned_at ? 1 : 0) - (a.p.pinned_at ? 1 : 0)) || ((b.p.pinned_at || 0) - (a.p.pinned_at || 0)) || ((b.m ? b.m.id : 0) - (a.m ? a.m.id : 0)) || a.name.localeCompare(b.name));
@@ -64,7 +64,7 @@ module.exports = function register(app, ctx) {
       const href = it.kind === 'group' ? `/chat/group/${it.id}` : `/chat/${it.id}`, p = it.p;
       const badge = it.unread ? `<b class="nbadge${p.muted ? ' nb-muted' : ''}">${badgeText(it.unread)}</b>` : (p.unread_mark ? '<b class="nbadge nb-dot"></b>' : '');
       const icons = (p.muted ? '<span class="ci-ic" title="Muted">&#128277;</span>' : '') + (p.pinned_at ? '<span class="ci-ic" title="Pinned">&#128204;</span>' : '');
-      return `<a class="chat-item" href="${href}" data-key="${it.kind}:${it.id}" data-kind="${it.kind}" data-id="${it.id}" data-name="${esc(it.name.toLowerCase())}" data-unread="${it.unread}" data-mark="${p.unread_mark ? 1 : 0}" data-fav="${p.favorite ? 1 : 0}" data-pinned="${p.pinned_at ? 1 : 0}" data-muted="${p.muted ? 1 : 0}" data-archived="${it.archived ? 1 : 0}"><span class="av-wrap" style="position:relative">${it.av}${it.dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${it.dot}"></span>` : ''}</span><span class="meta"><b>${esc(it.name)}</b><span>${it.sub}</span></span><span class="ci-end">${icons}${badge}</span></a>`;
+      return `<a class="chat-item" href="${href}" data-key="${it.kind}:${it.id}" data-kind="${it.kind}" data-id="${it.id}" data-name="${esc(it.name.toLowerCase())}" data-unread="${it.unread}" data-mark="${p.unread_mark ? 1 : 0}" data-fav="${p.favorite ? 1 : 0}" data-pinned="${p.pinned_at ? 1 : 0}" data-muted="${p.muted ? 1 : 0}" data-archived="${it.archived ? 1 : 0}"><span class="av-wrap" style="position:relative">${it.av}${it.dot ? `<span class="dot" style="position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bg);background:${it.dot}"></span>` : ''}</span><span class="meta"><b>${esc(it.name)}</b><span>${it.sub}</span></span><span class="ci-end"><span class="ci-time${it.unread ? ' un' : ''}">${it.m ? timeAgo(it.m.created_at) : ''}</span><span class="ci-row">${icons}${badge}</span></span></a>`;
     };
     const archivedCount = items.filter(i => i.archived).length;
     const listHtml = `<a class="chat-item arch-row" href="#" id="archRow" data-count="${archivedCount}"><span class="arch-ic">&#128229;</span><span class="meta"><b>Archived</b></span><span class="ci-end"><span class="ci-ic" id="archCount">${archivedCount}</span></span></a>`
@@ -148,10 +148,11 @@ applyView();mark();setInterval(refresh,4000);document.addEventListener('visibili
 <button type="button" id="selDel" title="Clear chat">${svg('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>')}</button>
 <button type="button" id="selMore" title="More">${svg('<circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/>')}</button>
 <div id="selMenu" class="sel-menu" style="display:none"><button type="button" data-act="view">View contact</button><button type="button" data-act="unread">Mark as unread</button><button type="button" data-act="all">Select all</button><button type="button" data-act="fav">Add to favorites</button><button type="button" data-act="clear">Clear chat</button></div></div>`;
-    res.send(layout('Chat', `${selBar}<h1>Chat</h1>${tabs}<p style="margin:0 0 10px"><a class="btn ghost" href="/chat/group/new">+ New group</a> <a class="btn ghost" href="/chat/starred">&#9733; Starred</a></p>
+    res.send(layout('Chat', `${selBar}<h1>Chat</h1>${tabs}${require('../lib/chat_circles')({ me, items, users: friends, avatarOr, esc, isOnline, stories: require('./stories').storiesFor ? require('./stories').storiesFor(me, friends.map(u => u.id)) : {} })}
+<div class="chat-tools"><button type="button" id="srchBtn" class="ct" aria-label="Search chats">${svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>')}</button><a class="ct" href="/chat/starred" aria-label="Starred messages">${svg('<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>')}</a></div>
 <input id="chatSearch" class="chat-search" type="search" placeholder="Search chats" autocomplete="off">
 <div id="chipRow" class="chip-row"><button type="button" class="chip on" data-f="all">All</button><button type="button" class="chip" data-f="unread">Unread</button><button type="button" class="chip" data-f="fav">Favorites</button><button type="button" class="chip" data-f="groups">Groups</button></div>
 <div id="archHead" class="arch-head" style="display:none"><button type="button" id="archBack" class="link">&larr; Archived chats</button></div>
-${isCentral(req.user) ? (() => { const n = db.prepare('SELECT COUNT(*) n FROM feedback WHERE read=0').get().n; return `<a class="chat-item" href="/chat/feedback"><span class="avatar" style="width:44px;height:44px;font-size:20px">💬</span><span class="meta"><b>What people say about the site</b><span>${n ? n + ' new' : 'Feedback and suggestions'} &middot; read only</span></span>${n ? `<b class="nbadge">${badgeText(n)}</b>` : ''}</a>`; })() : ''}<div id="chatList">${listHtml}</div><p id="chatEmpty" class="mut" style="display:none"></p><script>${listScript}</script>`, req.user));
+${isCentral(req.user) ? (() => { const n = db.prepare('SELECT COUNT(*) n FROM feedback WHERE read=0').get().n; return `<a class="chat-item" href="/chat/feedback"><span class="avatar" style="width:44px;height:44px;font-size:20px">💬</span><span class="meta"><b>What people say about the site</b><span>${n ? n + ' new' : 'Feedback and suggestions'} &middot; read only</span></span>${n ? `<b class="nbadge">${badgeText(n)}</b>` : ''}</a>`; })() : ''}<div id="chatList">${listHtml}</div><p id="chatEmpty" class="mut" style="display:none"></p><a class="fab" href="/chat/group/new" aria-label="New group">${svg('<path d="M12 5v14M5 12h14"/>')}</a><script>${listScript}</script><script>(function(){var s=document.getElementById('chatSearch'),b=document.getElementById('srchBtn');if(!s||!b)return;s.classList.add('hide');b.onclick=function(){s.classList.toggle('hide');if(!s.classList.contains('hide'))s.focus()}})()</script>`, req.user));
   });
 };

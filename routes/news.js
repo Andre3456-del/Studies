@@ -2,12 +2,15 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { ADSENSE_CLIENT, ADSENSE_FEED_SLOT, SPONSOR_PRICE_NGN, canSeeNewsItem, db, esc, feedAdCard, layout, linkify, newsReachFor, notify, timeAgo, upload } = ctx;
+  require('./news_social')(app, ctx); // likes, comments, saves (registered first so /news/saved is not read as a news id)
+  const NA = require('../lib/news_actions');
   function newsFeedBody(req, home = false) {
     const all = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
     const items = all.filter(n => canSeeNewsItem(n, req.user));
     const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
-    const cardList = items.map(n => `<a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${ctx.byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>`);
-    const cards = cardList.join('');
+    const st = NA.stats(db, items.map(n => n.id), req.user ? req.user.id : 0);
+    const cardList = items.map(n => `<div class="news-post"><a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${ctx.byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>${NA.bar(n.id, st[n.id])}</div>`);
+    const cards = cardList.join('') + NA.script(!!req.user);
     const empty = '<p class="mut">No news yet. Check back soon.</p>';
     if (home) {
       // The public home page: anyone may advertise here, no account needed; live sponsored posts show first.
@@ -27,7 +30,8 @@ module.exports = function register(app, ctx) {
       if (!waiting.length) return '';
       return `<h3>Waiting for your approval (${waiting.length})</h3>${waiting.map(n => `<div class="card"><b>${esc(n.author)}</b> wrote: <b>${esc(n.title)}</b><p class="mut">${esc(n.body.slice(0, 200))}${n.body.length > 200 ? '…' : ''}</p><div class="row" style="gap:6px"><form method="post" action="/news/${n.id}/approver-approve"><button>Approve</button></form><form method="post" action="/news/${n.id}/approver-reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
     })() : '';
-    const sponsorLink = `<p class="adbar"><a href="/sponsor">&#128226; Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>`;
+    const savedLink = req.user ? '<div class="chat-tools"><a class="ct" href="/news/saved" aria-label="Saved posts"><svg class="ic" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></a></div>' : '';
+    const sponsorLink = savedLink + `<p class="adbar"><a href="/sponsor">&#128226; Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>`;
     return `${adScript}<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${approverQueue}${submitForm}${sponsorLink}${sponsorCards}${cards || empty}`;
   }
   app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));

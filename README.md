@@ -23,6 +23,9 @@ lib/                 the site's separate parts
   sponsor_cards.js     the "Sponsored" cards on the home page and News
   sponsor_admin.js     the admin list of sponsor posts (waiting and live)
   chat_js.js           the browser script that runs a chat page
+  (routes) stories.js, news_social.js: 24-hour stories; likes, comments and saves on news
+  chat_circles.js      the friend circles at the top of the chat list
+  news_actions.js      comment / like / share / save icons under news posts
   chat_theme.js        personal chat wallpaper (saved only on the person's own device)
   ui_theme.js          the look of the whole site (black, flat, picture-first); edit colours and shapes here
   page_helpers.js      helpers for uploaded pages: video links, paywall, page cards, previews
