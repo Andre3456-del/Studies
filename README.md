@@ -24,6 +24,7 @@ lib/                 the site's separate parts
   sponsor_admin.js     the admin list of sponsor posts (waiting and live)
   chat_js.js           the browser script that runs a chat page
   (routes) stories.js, news_social.js: 24-hour stories; likes, comments and saves on news
+  (lib) visitor_home.js: the page a logged-out visitor sees first. Home is the profile page; uploads live on /materials. There are no friend requests: tapping Message on a search result makes you contacts straight away.
   chat_circles.js      the friend circles at the top of the chat list
   news_actions.js      comment / like / share / save icons under news posts
   chat_theme.js        personal chat wallpaper (saved only on the person's own device)
