@@ -34,6 +34,10 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
     if (mode === 'materials' && KIND[want]) rows.splice(0, rows.length, ...rows.filter(KIND[want]));
     const isLocked = p => !!p.paid && !staff && !hasPurchased(u.id, p.id);
     const locked = rows.filter(isLocked), available = rows.filter(p => !isLocked(p));
+    // For the central admin and other staff, who can see every upload: only what matches their own university, department and level is listed;
+    // everything else goes into one folder so it does not crowd the list.
+    const fitsMe = p => (!p.university || p.university === u.university) && (p.dept == null || String(p.dept).split(',').map(x => x.trim()).includes(u.department)) && (p.level == null || Number(p.level) === Number(u.level));
+    const others = staff && mode === 'materials' ? available.filter(p => !fitsMe(p)) : [], mine = others.length ? available.filter(fitsMe) : available;
     const pill = u.verified ? '<span class="pill">&#10003; Verified</span>' : '<span class="pill pending">Verification pending</span>';
     const posPill = u.position_status === 'pending' ? ` <span class="pill pending">Position waiting for verification: ${esc(u.position)}</span>` : u.title ? ` <span class="pill">${esc(u.title)}</span>` : '';
     const forYou = [u.department, u.dept_option, u.level ? u.level + ' level' : '', u.graduated ? '🎓 Graduate' : ''].filter(Boolean).join(' · ');
@@ -44,7 +48,8 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
     const grid = list => `<div class="pv-grid">${list.map(p => previewTile(p, isLocked(p))).join('')}</div>`;
     if (mode === 'materials') return `${kindChips(want)}<div class="vtoggle" role="group" aria-label="How to show your courses"><button type="button" data-v="grid" aria-label="Grid">&#9638;</button><button type="button" data-v="list" aria-label="List">&#9776;</button></div>
 <script>(function(){var d=document.documentElement,b=document.querySelectorAll('.vtoggle button');function set(v){d.setAttribute('data-pv',v);try{localStorage.setItem('pvView',v)}catch(e){}b.forEach(function(x){x.classList.toggle('on',x.getAttribute('data-v')===v)})}var v='grid';try{v=localStorage.getItem('pvView')||'grid'}catch(e){}set(v==='list'?'list':'grid');b.forEach(function(x){x.onclick=function(){set(x.getAttribute('data-v'))}})})()</script>
-<span id="lib"></span>${libTools(rows)}<div class="box"><h2>Available to you <span class="count">${available.length}</span></h2><p class="hint">Free to view, plus anything you have paid for.</p>${available.length ? grid(available) : '<p class="mut">Nothing available yet.</p>'}</div>
+<span id="lib"></span>${libTools(rows)}<div class="box"><h2>Available to you <span class="count">${mine.length}</span></h2><p class="hint">Free to view, plus anything you have paid for.</p>${mine.length ? grid(mine) : '<p class="mut">Nothing available yet.</p>'}</div>
+${others.length ? `<details class="folder"><summary><span class="fic">&#128193;</span><b>Not for me</b><span class="count">${others.length}</span></summary><p class="hint">Uploads for other departments or levels. You can see them because you are an admin.</p>${grid(others)}</details>` : ''}
 ${locked.length ? `<div class="box"><h2>Locked &mdash; pay to view <span class="count">${locked.length}</span></h2><p class="hint">Pay once and it moves up into Available.</p>${grid(locked)}</div>` : ''}`;
     return `${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="cover"></div><div class="prof">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="prof-av" alt="">` : `<span class="avatar prof-av">${initial}</span>`}<div class="prof-tx"><h1>${esc(u.name)}</h1><p class="mut">${u.username ? `@${esc(u.username)}` : ''}${forYou ? ` &middot; ${esc(forYou)}` : ''}</p></div></div>
 <p class="prof-pills">${pill}${posPill} <span class="pill">${esc(SEM.semesterName(SEM.getCurrent(db)))}</span></p>

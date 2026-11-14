@@ -47,7 +47,7 @@ ${self ? '<style>.self-chat .tickwrap{display:none}</style>' : ''}<div id="threa
     const bubbles = withUnreadDivider(rows, req.user.id, m => bubbleHtml(m, req.user.id, false));
     markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'dm', otherId);
     const lastId = rows.length ? rows[rows.length - 1].id : 0;
-    const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="${self ? '/settings/profile' : '/u/' + other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}${self ? ' (You)' : ''}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" id="chatPresence" style="font-size:12px;min-height:14px;display:inline-block">${self ? 'Message yourself' : isOnline(other) ? 'online' : ''}</span></div></a></div>`;
+    const headHtml = `<div class="chat-head"><a href="/chat" class="topback" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M19 12H5M12 5l-7 7 7 7"/></svg></a><a href="${self ? '/settings/profile' : '/u/' + other.id}" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${avatarOr(other)}<div><b>${esc(other.name)}${self ? ' (You)' : ''}</b>${other.title ? `<span class="role-tag">${esc(other.title)}</span>` : ''}<br><span class="mut" id="chatPresence" style="font-size:12px;min-height:14px;display:inline-block">${self ? 'Message yourself' : isOnline(other) ? 'online' : ''}</span></div></a></div>`;
     threadPage(req, res, { isGroup: false, convId: otherId, title: other.name, headHtml, bubbles, lastId, self });
   });
 
@@ -63,7 +63,7 @@ ${self ? '<style>.self-chat .tickwrap{display:none}</style>' : ''}<div id="threa
     const bubbles = withUnreadDivider(rows, req.user.id, m => bubbleHtml(m, req.user.id, true));
     markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'group', gid);
     const lastId = rows.length ? rows[rows.length - 1].id : 0;
-    const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/chat/group/${gid}/info" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${groupAvatarOr(g)}<div><b>${esc(g.name)}</b><br><span class="mut" id="chatPresence" style="font-size:12px">${members.length} members &middot; tap for group info</span></div></a></div>`;
+    const headHtml = `<div class="chat-head"><a href="/chat" class="topback" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M19 12H5M12 5l-7 7 7 7"/></svg></a><a href="/chat/group/${gid}/info" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${groupAvatarOr(g)}<div><b>${esc(g.name)}</b><br><span class="mut" id="chatPresence" style="font-size:12px">${members.length} members &middot; tap for group info</span></div></a></div>`;
     threadPage(req, res, { isGroup: true, convId: gid, title: g.name, headHtml, bubbles, lastId });
   });
 

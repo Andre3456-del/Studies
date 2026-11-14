@@ -159,10 +159,10 @@ ${helpers.length ? helpers.map(h => `<div class="card row" style="align-items:ce
     if (!n) return res.redirect(back('News item not found.'));
     if (!mayManageNews(req.user, n)) return res.redirect(back(NOT_YOURS));
     res.send(layout('Edit news', `<p class="mut"><a href="/admin?tab=news">&larr; Admin</a></p><h1 style="font-size:26px">Edit news</h1>
-${n.image_data ? `<img src="/news-image/${n.id}" style="max-width:220px;border-radius:10px;display:block;margin-bottom:10px">` : ''}
+<img id="nwPrev" ${n.image_data ? `src="/news-image/${n.id}"` : 'hidden'} alt="" style="max-width:220px;border-radius:10px;display:block;margin-bottom:10px">
 <form class="card" method="post" action="/admin/news/${n.id}/edit" enctype="multipart/form-data">
 <input name="title" value="${esc(n.title)}" required maxlength="140">
-<input type="file" name="image" accept="image/*" style="padding:9px 0">
+<input type="file" name="image" accept="image/*" data-prev="nwPrev" style="padding:9px 0">
 <p class="hint">Choose a picture only if you want to replace the current one.</p>
 <textarea name="body" required maxlength="2000000" style="width:100%;min-height:120px;font:inherit;padding:11px 13px;margin:6px 0;color:var(--fg);background:rgba(8,10,22,.65);border:1px solid var(--line);border-radius:10px">${esc(n.body)}</textarea>
 <button>Save changes</button></form>`, req.user));
