@@ -974,7 +974,10 @@ public class MainActivity extends Activity {
 
     /** Hide the screen from screenshots, recordings and the recent-apps picture, but only while the lock screen is up or the app is out of sight. Once you are in, everything shows normally. */
     private volatile boolean priv = false;
+    /** Switched off while the owner is testing, so screenshots and recordings work everywhere. Set to true to hide private screens again. */
+    private static final boolean BLOCK_CAPTURE = false;
     private void secure(boolean on) {
+        if (!BLOCK_CAPTURE) { getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE); return; }
         on = on || priv;
         if (on) getWindow().setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE);
         else getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
