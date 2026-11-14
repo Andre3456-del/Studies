@@ -253,7 +253,8 @@ module.exports = function register(app, ctx) {
     if (Date.now() - lastPendingSweep > 60e3) { lastPendingSweep = Date.now(); db.prepare("DELETE FROM messages WHERE media_enc IS NULL AND kind IN ('image','video','file') AND created_at < datetime('now','-60 minutes')").run(); }
     let online = false;
     if (!req.query.group) { const o = db.prepare('SELECT last_seen,hide_active FROM users WHERE id=?').get(Number(req.query.with || req.query.to)); online = !!o && isOnline(o); }
-    res.json({ messages, receipts, ready, online });
+    const typing = require('../lib/typing_state').get(req.user.id, req.query.group ? 'group' : 'dm', Number(req.query.group || req.query.with || req.query.to));
+    res.json({ messages, receipts, ready, online, typing });
   });
 
   app.post('/api/messages/:id/react', (req, res) => {

@@ -2382,7 +2382,7 @@ app.get('/api/username/check', (req, res) => {
 require('./routes/settings')(app, { UNAME_JS, canLecturerAdmin, canPromote, db, esc, inApp, layout, lockedOf, profileFields, readProfile, saveProfile, upload, get canLinkOthers() { return canLinkOthers; }, get deviceOf() { return deviceOf; } });
 
 // ---------- Security: app lock (phone app) and change password (now in routes/security.js) ----------
-require('./routes/security')(app, { bcrypt, db, layout, limited, sidKey, weakPw }); require('./routes/account')(app, { bcrypt, db, esc, layout, purgeUser }); require('./routes/notifications')(app, { db, esc, chatBadge, friendIds, canSeeNewsItem, layout });
+require('./routes/security')(app, { bcrypt, db, layout, limited, sidKey, weakPw }); require('./routes/account')(app, { bcrypt, db, esc, layout, purgeUser }); require('./routes/notifications')(app, { db, esc, chatBadge, friendIds, canSeeNewsItem, layout }); require('./routes/typing')(app, { db, isGroupMember });
 
 // ---------- Admin: are the connections working? (now in routes/checks.js) ----------
 require('./routes/checks')(app, { esc, fcm, layout, notice, get APP_GOOGLE_IDS() { return APP_GOOGLE_IDS; } });

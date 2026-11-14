@@ -63,7 +63,7 @@ ${self ? '<style>.self-chat .tickwrap{display:none}</style>' : ''}<div id="threa
     const bubbles = withUnreadDivider(rows, req.user.id, m => bubbleHtml(m, req.user.id, true));
     markRead(rows, req.user.id); clearUnreadMark(req.user.id, 'group', gid);
     const lastId = rows.length ? rows[rows.length - 1].id : 0;
-    const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/chat/group/${gid}/info" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${groupAvatarOr(g)}<div><b>${esc(g.name)}</b><br><span class="mut" style="font-size:12px">${members.length} members &middot; tap for group info</span></div></a></div>`;
+    const headHtml = `<div class="chat-head"><a href="/chat" class="link" style="font-size:20px">&larr;</a><a href="/chat/group/${gid}/info" style="display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none">${groupAvatarOr(g)}<div><b>${esc(g.name)}</b><br><span class="mut" id="chatPresence" style="font-size:12px">${members.length} members &middot; tap for group info</span></div></a></div>`;
     threadPage(req, res, { isGroup: true, convId: gid, title: g.name, headHtml, bubbles, lastId });
   });
 
