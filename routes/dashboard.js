@@ -68,6 +68,6 @@ ${locked.length ? `<div class="box"><h2>Locked &mdash; pay to view <span class="
   app.get('/materials', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/materials');
     if (req.user.role === 'uniadmin') return res.redirect('/uni');
-    res.set('Cache-Control', 'no-store').send(layout('Materials', dashboardBody(req, 'materials'), req.user));
+    res.set('Cache-Control', 'private, no-cache').send(layout('Materials', dashboardBody(req, 'materials'), req.user));
   });
 };

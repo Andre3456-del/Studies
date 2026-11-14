@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS news_comments_n ON news_comments(news_id, id)`);
     const form = req.user ? `<form method="post" action="/news/${n.id}/comments" class="cm-form"><input name="body" maxlength="1000" placeholder="Add a comment" autocomplete="off" required><button aria-label="Send"><svg class="ic" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button></form>` : `<p><a href="/login?next=/news/${n.id}/comments">Log in</a> to comment.</p>`;
     return layout('Comments', `<p class="mut"><a href="/news/${n.id}">&larr; ${esc(n.title)}</a></p><h1>Comments</h1>${err ? `<p class="err">${esc(err)}</p>` : ''}${list || '<p class="mut">No comments yet.</p>'}${form}`, req.user);
   };
-  app.get('/news/:id/comments', (req, res) => { const n = postOf(req, req.params.id); if (!n) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user)); res.set('Cache-Control', 'no-store').send(commentsPage(req, n)); });
+  app.get('/news/:id/comments', (req, res) => { const n = postOf(req, req.params.id); if (!n) return res.status(404).send(layout('Not found', '<p><a href="/news">Back to News</a></p>', req.user)); res.set('Cache-Control', 'private, no-cache').send(commentsPage(req, n)); });
   app.post('/news/:id/comments', (req, res) => {
     if (!req.user) return res.redirect('/login');
     const n = postOf(req, req.params.id); if (!n) return res.sendStatus(404);
