@@ -9,7 +9,7 @@ module.exports = function register(app, ctx) {
   app.get('/chat/group/new', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/chat/group/new');
     const friends = db.prepare('SELECT id,name,avatar_mime FROM users WHERE id IN (' + (friendIds(req.user.id).join(',') || '0') + ') ORDER BY name').all();
-    if (!friends.length) return res.send(layout('New group', '<p class="mut"><a href="/chat">&larr; Chat</a></p><h1>New group</h1><p class="mut">Add some friends first -- a group is made from your friends list.</p>', req.user));
+    if (!friends.length) return res.send(layout('New group', '<p class="mut"><a href="/chat">&larr; Chat</a></p><h1>New group</h1><p class="mut">Message some Studikins first -- a group is made from the people you know here.</p>', req.user));
     res.send(layout('New group', `<p class="mut"><a href="/chat">&larr; Chat</a></p><h1>New group</h1>
 <form method="post" action="/chat/group/new" class="card"><input name="name" placeholder="Group name" required maxlength="60">
 ${friends.map(f => `<label class="row" style="justify-content:flex-start;gap:10px"><input type="checkbox" name="member" value="${f.id}" style="width:auto">${avatarOr(f, 32)}${esc(f.name)}</label>`).join('')}
@@ -33,7 +33,7 @@ ${friends.map(f => `<label class="row" style="justify-content:flex-start;gap:10p
     const gid = Number(req.params.id);
     if (!isGroupAdmin(gid, req.user.id)) return res.sendStatus(403);
     const uid = Number(req.body.user_id);
-    if (!friendIds(req.user.id).includes(uid)) return res.redirect(`/chat/group/${gid}?msg=` + encodeURIComponent('Only your friends can be added.'));
+    if (!friendIds(req.user.id).includes(uid)) return res.redirect(`/chat/group/${gid}?msg=` + encodeURIComponent('Only your Studikins can be added.'));
     db.prepare("INSERT OR IGNORE INTO group_members(group_id,user_id,role) VALUES(?,?,'member')").run(gid, uid);
     const g = db.prepare('SELECT name FROM groups WHERE id=?').get(gid);
     notify([uid], { title: 'Added to a group', body: `You were added to "${g.name}"`, url: '/chat/group/' + gid, tag: 'group' });

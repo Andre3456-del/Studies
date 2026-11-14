@@ -24,6 +24,7 @@ lib/                 the site's separate parts
   sponsor_admin.js     the admin list of sponsor posts (waiting and live)
   chat_js.js           the browser script that runs a chat page
   (routes) stories.js, news_social.js: 24-hour stories; likes, comments and saves on news
+  (lib) suggest.js: the "Suggested Studikins" ranking in Chat > Find people. The chat list only shows people you have messaged. "Studikins" is the product name for friends.
   (routes) account.js: Settings > Account with the self-service "delete my account" button; notifications.js: the bell at the top of every page and the /notifications list.
   (lib) visitor_home.js: the page a logged-out visitor sees first. Home is the profile page; uploads live on /materials. There are no friend requests: tapping Message on a search result makes you contacts straight away.
   chat_circles.js      the friend circles at the top of the chat list

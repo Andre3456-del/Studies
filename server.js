@@ -2002,7 +2002,7 @@ const layoutRaw = (title, body, user, opts = {}) => {
   const badge = user ? chatBadge(user.id) : 0;
   const drawerNav = navItems(user, badge, opts.mode).map(i => `<a class="drawer-item" href="${i.href}"><span>${ico(iconKey(i))}</span>${esc(i.label)}${i.badge > 0 ? `<b class="nbadge">${badgeText(i.badge)}</b>` : ''}</a>`).join('');
   const drawerBottom = user
-    ? `<a class="drawer-item" href="/settings"><span>${ico('gear')}</span>Settings</a><form method="post" action="/logout" style="margin:0"><button class="drawer-item drawer-out" style="width:100%;text-align:left;font:inherit;border:0;cursor:pointer"><span>${ico('logout')}</span>Log out</button></form>`
+    ? `<a class="drawer-item" href="/settings"><span>${ico('gear')}</span>Settings</a>`
     : `<a class="drawer-item ds-li" href="/login"><span>${ico('login')}</span>Log in</a><a class="drawer-item ds-su" href="/signup"><span>${ico('signup')}</span>Sign up</a><a class="drawer-item lap-only" href="/login" aria-label="Log in with your phone"><span>${ico('profile')}</span>Log in</a>`;
   // Phones get a bottom tab bar for the main places (laptops use the always-open menu on the left instead).
   const tabItems = user && !opts.hideTop ? navItems(user, badge, opts.mode).filter(i => !i.href.includes('?')).slice(0, 3) : [];

@@ -34,11 +34,10 @@ module.exports = function register(app, ctx) {
         results = rows.length ? rows.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? atLink(u.username) : ''}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')
           : '<p class="mut">No one found. Check the @username and try again.</p>';
       }
-      const pending = db.prepare("SELECT u.id,u.name,u.username,u.avatar_mime FROM friendships f JOIN users u ON u.id=f.requester_id WHERE f.addressee_id=? AND f.status='pending' ORDER BY f.id DESC").all(me);
-      const pendingHtml = pending.length ? `<p class="chat-label">Friend requests</p>${pending.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b>${esc(u.name)}</b><span>${u.username ? atLink(u.username) : ''}</span></span>
-<form method="post" action="/api/friends/${u.id}/accept" style="display:inline"><button>Accept</button></form>
-<form method="post" action="/api/friends/${u.id}/decline" style="display:inline"><button class="link">Decline</button></form></div>`).join('')}` : '';
-      return res.send(layout('Find people', `<h1>Chat</h1>${tabs}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Type a @username or name to message anyone" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
+      const chatted = db.prepare('SELECT DISTINCT CASE WHEN sender_id=? THEN recipient_id ELSE sender_id END o FROM messages WHERE group_id IS NULL AND (sender_id=? OR recipient_id=?)').all(me, me, me).map(r => r.o);
+      const sug = q ? [] : require('../lib/suggest')(db, me, friendIds(me), chatted);
+      const sugHtml = sug.length ? `<p class="chat-label">Suggested Studikins</p>${sug.map(({ u, why }) => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? atLink(u.username) + ' &middot; ' : ''}${esc(why)}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')}` : '';
+      return res.send(layout('Find people', `<h1>Chat</h1>${tabs}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Type a @username or name to message anyone" autocomplete="off"><button class="ghost">Search</button></form>${results}${q ? '' : sugHtml}`, req.user));
     }
     const prefs = prefsOf(me);
     const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).concat(me).join(',') || '0') + ')').all(); // you are in your own list too: your own space
@@ -48,6 +47,7 @@ module.exports = function register(app, ctx) {
     const items = [];
     for (const u of friends) {
       const m = lastVisible('dm', u.id), p = prefs['dm:' + u.id] || {};
+      if (!m && u.id !== me && !db.prepare('SELECT 1 FROM messages WHERE group_id IS NULL AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) LIMIT 1').get(me, u.id, u.id, me)) continue; // people you never messaged stay out of your chat list
       const unread = db.prepare("SELECT COUNT(*) n FROM messages WHERE group_id IS NULL AND sender_id=? AND recipient_id=? AND deleted_at IS NULL AND id NOT IN (SELECT message_id FROM message_reads WHERE user_id=?) AND id NOT IN (SELECT message_id FROM message_hidden WHERE user_id=?)").get(u.id, me, me, me).n;
       const mine = m && m.sender_id === me && u.id !== me && !m.deleted_at && m.kind !== 'call' ? tickSpan(tickFor(m, u.id)) + ' ' : '';
       items.push({ kind: 'dm', id: u.id, name: u.id === me ? u.name + ' (You)' : u.name, av: avatarOr(u), m, p, unread, dot: null,
