@@ -71,7 +71,7 @@ ${process.env.GOOGLE_REFRESH_TOKEN ? `<p>When Studies Hub uses the Gmail API wit
 <p>We review and maintain safeguards appropriate to the information we handle. No online service can guarantee absolute security. Protection of stored data also depends on the security of the hosting environment, database access, and any configured encryption-key management.</p>
 
 <h2>How long we keep it</h2>
-<p>We keep your account and its data for as long as your account exists. We don't currently have an automatic "delete my account" button -- if you'd like your data reviewed, corrected, or removed, contact us (below) and we'll handle it by hand.</p>
+<p>We keep your account and its data for as long as your account exists. You can delete your account yourself at any time in Settings > Account. That removes your profile, chats, saved items and stories. If you'd like your data reviewed or corrected instead, contact us (below).</p>
 
 <h2>Children</h2>
 <p>Studies Hub is intended for students old enough to independently create an account and is not directed at young children.</p>

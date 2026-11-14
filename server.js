@@ -2011,7 +2011,7 @@ var lp=false,t=null,tip=null;function hide(){if(tip){tip.remove();tip=null}}
 function show(el){hide();tip=document.createElement('div');tip.className='tabtip';tip.textContent=el.getAttribute('data-tip');document.body.appendChild(tip);var r=el.getBoundingClientRect();tip.style.left=Math.min(Math.max(8,r.left+r.width/2-tip.offsetWidth/2),innerWidth-tip.offsetWidth-8)+'px';tip.style.bottom=(innerHeight-r.top+8)+'px';setTimeout(hide,1400)}
 [].forEach.call(bar.children,function(el){el.addEventListener('pointerdown',function(){lp=false;clearTimeout(t);t=setTimeout(function(){lp=true;show(el)},420)});['pointerup','pointercancel','pointerleave'].forEach(function(n){el.addEventListener(n,function(){clearTimeout(t)})});el.addEventListener('contextmenu',function(e){e.preventDefault()});el.addEventListener('click',function(e){if(lp){e.preventDefault();e.stopPropagation();lp=false}},true)});
 document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
-  const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : '';
+  const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : user && user.theme === 'auto' ? ' data-auto="1"' : '';
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
   return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>if(/StudiesHubApp/.test(navigator.userAgent))document.documentElement.setAttribute("data-inapp","1")</script><style>[data-inapp] a[href="/app"]{display:none!important}html:not([data-inapp]) a[href="/saved"]{display:none!important}</style><script>(function(){var d=document.documentElement,ua=navigator.userAgent||"",ud=navigator.userAgentData,tp=navigator.maxTouchPoints||0,sm=Math.min(screen.width,screen.height),os="Unknown",dev;
 if(/iPhone|iPod/.test(ua))os="iOS";else if(/iPad/.test(ua)||(/Macintosh/.test(ua)&&tp>1))os="iPadOS";else if(/Android/.test(ua)||(ud&&ud.platform==="Android"))os="Android";else if(/CrOS/.test(ua))os="ChromeOS";else if(/Windows/.test(ua))os="Windows";else if(/Mac OS X|Macintosh/.test(ua))os="macOS";else if(/Linux|X11/.test(ua))os="Linux";
@@ -2382,7 +2382,7 @@ app.get('/api/username/check', (req, res) => {
 require('./routes/settings')(app, { UNAME_JS, canLecturerAdmin, canPromote, db, esc, inApp, layout, lockedOf, profileFields, readProfile, saveProfile, upload, get canLinkOthers() { return canLinkOthers; }, get deviceOf() { return deviceOf; } });
 
 // ---------- Security: app lock (phone app) and change password (now in routes/security.js) ----------
-require('./routes/security')(app, { bcrypt, db, layout, limited, sidKey, weakPw });
+require('./routes/security')(app, { bcrypt, db, layout, limited, sidKey, weakPw }); require('./routes/account')(app, { bcrypt, db, esc, layout, purgeUser }); require('./routes/notifications')(app, { db, esc, chatBadge, friendIds, canSeeNewsItem, layout });
 
 // ---------- Admin: are the connections working? (now in routes/checks.js) ----------
 require('./routes/checks')(app, { esc, fcm, layout, notice, get APP_GOOGLE_IDS() { return APP_GOOGLE_IDS; } });

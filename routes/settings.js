@@ -7,11 +7,11 @@ module.exports = function register(app, ctx) {
   const SETTINGS_PAGES = [
     ['/settings/profile', '👤', 'Profile', 'Your picture, name, and details'],
     ['/settings/active-status', '🟢', 'Active status', 'Whether others see when you\u2019re online'],
-    ['/settings/appearance', '🎨', 'Appearance', 'Light or dark mode'],
     ['/settings/chat', '🖼️', 'Chat', 'Your chat background'],
     ['/settings/notifications', '🔔', 'Notifications', 'Get alerted on this device'],
     ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
     ['/settings/security', '🔒', 'Security', 'App lock and change your password'],
+    ['/settings/account', '👤', 'Account', 'Email and deleting your account'],
     ['/saved', '📥', 'Saved offline', 'Materials kept on this phone, open without internet'],
     ['/settings/backup', '☁️', 'Backup', 'Keep your saved materials and app settings safe in your account'],
     ['/app', '📲', 'Download the app', 'Get Studies Hub as an Android app'],
@@ -27,8 +27,11 @@ module.exports = function register(app, ctx) {
   app.get('/settings', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/settings');
     res.set({ 'Cache-Control': 'no-store', Vary: 'User-Agent' });
-    const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || ctx.canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req)) && ((x[0] !== '/saved' && x[0] !== '/settings/backup') || inApp(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="card row" href="${href}" style="align-items:center;gap:14px;text-decoration:none;color:inherit"><span class="sico">${icon}</span><div style="flex:1"><b>${esc(label)}</b><span class="sub">${esc(sub)}</span></div><span class="mut">&rsaquo;</span></a>`).join('');
-    res.send(layout('Settings', `<h1>Settings</h1>${links}`, req.user));
+    const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || ctx.canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req)) && ((x[0] !== '/saved' && x[0] !== '/settings/backup') || inApp(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="srow" href="${href}"><div><b>${esc(label)}</b><span>${esc(sub)}</span></div><i>&rsaquo;</i></a>`).join('');
+    const t0 = (db.prepare('SELECT theme FROM users WHERE id=?').get(req.user.id) || {}).theme, cur = t0 === 'light' ? 'light' : t0 === 'auto' ? 'auto' : 'dark';
+    const ap = `<h2 class="sset">Appearance</h2><div class="apc" id="apc">${[['light', 'Light', 'Bright background'], ['dark', 'Dark', 'Easier on the eyes at night'], ['auto', 'Device default', 'Match your phone or computer']].map(([v, t, d]) => `<label class="${cur === v ? 'on' : ''}"><input type="radio" name="theme" value="${v}"${cur === v ? ' checked' : ''}><i></i><span><b>${t}</b><span>${d}</span></span></label>`).join('')}</div>
+<script>(function(){var h=document.documentElement,m=matchMedia('(prefers-color-scheme: light)');document.getElementById('apc').onchange=function(e){var v=e.target.value;[].forEach.call(this.children,function(l){l.className=l.firstChild.checked?'on':''});if(v==='auto'){h.setAttribute('data-auto','1');h.setAttribute('data-theme',m.matches?'light':'dark')}else{h.removeAttribute('data-auto');h.setAttribute('data-theme',v)}fetch('/settings/appearance',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'theme='+v})}})()</script>`;
+    res.send(layout('Settings', `<h1>Settings</h1>${ap}<div class="srows">${links}</div><form method="post" action="/logout"><button class="signout">Sign out</button></form>`, req.user));
   });
   app.get('/settings/profile', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/settings/profile');
@@ -92,7 +95,7 @@ module.exports = function register(app, ctx) {
   });
   app.post('/settings/appearance', (req, res) => {
     if (!req.user) return res.sendStatus(401);
-    db.prepare('UPDATE users SET theme=? WHERE id=?').run(req.body.theme === 'light' ? 'light' : 'dark', req.user.id);
+    db.prepare('UPDATE users SET theme=? WHERE id=?').run(['light', 'auto'].includes(req.body.theme) ? req.body.theme : 'dark', req.user.id);
     res.redirect('/settings/appearance');
   });
   app.get('/settings/notifications', (req, res) => {
