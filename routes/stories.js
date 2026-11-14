@@ -52,7 +52,7 @@ document.getElementById('stForm').onsubmit=function(e){if(!f.files[0]&&!t.value.
     if (!req.user) return res.sendStatus(401);
     const s = db.prepare('SELECT user_id,media_data,media_mime,created_at FROM stories WHERE id=?').get(Number(req.params.id));
     if (!s || !s.media_data || s.created_at < live() || !canSee(req.user.id, s.user_id)) return res.sendStatus(404);
-    const buf = s.media_data, total = buf.length, m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    const buf = Buffer.from(s.media_data), total = buf.length, m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
     const h = { 'Content-Type': s.media_mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=3600' };
     if (!m) return res.set({ ...h, 'Content-Length': total }).send(buf);
     let a = m[1] === '' ? Math.max(0, total - Number(m[2])) : Number(m[1]), b = m[1] !== '' && m[2] !== '' ? Math.min(Number(m[2]), total - 1) : total - 1;

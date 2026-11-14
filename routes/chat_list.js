@@ -23,7 +23,7 @@ module.exports = function register(app, ctx) {
     const reqCount = pendingReceivedCount(me);
     const tabs = `<div class="row" style="gap:0;border-bottom:1px solid var(--line);margin-bottom:14px">
 <a class="tab-link${tab === 'friends' ? ' active' : ''}" href="/chat">Chats</a>
-<a class="tab-link${tab === 'find' ? ' active' : ''}" href="/chat?tab=find">Find people${reqCount ? ` <b class="nbadge">${badgeText(reqCount)}</b>` : ''}</a>
+<a class="tab-link${tab === 'find' ? ' active' : ''}" href="/chat?tab=find">Find people</a>
 </div>`;
     if (tab === 'find') {
       const q = String(req.query.q || '').trim();
@@ -32,13 +32,13 @@ module.exports = function register(app, ctx) {
         const rows = db.prepare("SELECT id,name,username,avatar_mime FROM users WHERE id != ? AND is_lecturer=0 AND role!='uniadmin' AND (lower(username) LIKE ? OR lower(name) LIKE ?) LIMIT 20")
           .all(me, '%' + cleanUsername(q) + '%', '%' + q.toLowerCase() + '%');
         results = rows.length ? rows.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b><a href="/u/${u.id}" style="color:inherit">${esc(u.name)}</a></b><span>${u.username ? atLink(u.username) : ''}</span></span>${friendActionHtml(me, u.id)}</div>`).join('')
-          : '<p class="mut">No one found. Try their exact @username.</p>';
+          : '<p class="mut">No one found. Check the @username and try again.</p>';
       }
       const pending = db.prepare("SELECT u.id,u.name,u.username,u.avatar_mime FROM friendships f JOIN users u ON u.id=f.requester_id WHERE f.addressee_id=? AND f.status='pending' ORDER BY f.id DESC").all(me);
       const pendingHtml = pending.length ? `<p class="chat-label">Friend requests</p>${pending.map(u => `<div class="chat-item row">${avatarOr(u)}<span class="meta" style="flex:1"><b>${esc(u.name)}</b><span>${u.username ? atLink(u.username) : ''}</span></span>
 <form method="post" action="/api/friends/${u.id}/accept" style="display:inline"><button>Accept</button></form>
 <form method="post" action="/api/friends/${u.id}/decline" style="display:inline"><button class="link">Decline</button></form></div>`).join('')}` : '';
-      return res.send(layout('Find people', `<h1>Chat</h1>${tabs}${pendingHtml}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Search students and admins by @username or name" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
+      return res.send(layout('Find people', `<h1>Chat</h1>${tabs}<form method="get" action="/chat"><input type="hidden" name="tab" value="find"><input name="q" value="${esc(q)}" placeholder="Type a @username or name to message anyone" autocomplete="off"><button class="ghost">Search</button></form>${results}`, req.user));
     }
     const prefs = prefsOf(me);
     const friends = db.prepare('SELECT id,name,avatar_mime,last_seen,hide_active FROM users WHERE id IN (' + (friendIds(me).concat(me).join(',') || '0') + ')').all(); // you are in your own list too: your own space
