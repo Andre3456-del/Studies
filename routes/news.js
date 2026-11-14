@@ -5,11 +5,12 @@ module.exports = function register(app, ctx) {
   require('./news_social')(app, ctx); // likes, comments, saves (registered first so /news/saved is not read as a news id)
   const NA = require('../lib/news_actions');
   function newsFeedBody(req, home = false) {
-    const all = db.prepare("SELECT n.*, u.name AS author, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
+    const all = db.prepare("SELECT n.*, u.name AS author, u.username AS author_un, u.avatar_mime AS author_av, u.title AS author_title, u.position_auto_role AS author_auto_role FROM news n LEFT JOIN users u ON u.id = n.author_id WHERE n.status='approved' ORDER BY n.id DESC").all();
     const items = all.filter(n => canSeeNewsItem(n, req.user));
     const newsImg = n => n.image_data ? `<img class="news-img" src="/news-image/${n.id}" alt="">` : n.image_url ? `<img class="news-img" src="${esc(n.image_url)}" alt="">` : '<div class="news-img"></div>';
     const st = NA.stats(db, items.map(n => n.id), req.user ? req.user.id : 0);
-    const cardList = items.map(n => `<div class="news-post"><a class="news-card" href="/news/${n.id}">${newsImg(n)}<div class="news-body"><h3>${esc(n.title)}</h3><p class="mut news-snip">${esc(n.body)}</p><div class="news-meta"><span>${ctx.byline(n)}</span><span>&middot;</span><span>${timeAgo(n.created_at)}</span></div></div></a>${NA.bar(n.id, st[n.id])}</div>`);
+    const xav = n => n.author_id && n.author ? ctx.avatarOr({ id: n.author_id, avatar_mime: n.author_av, name: n.author }, 46) : '<img class="av" src="/icon-192.png?v=2" alt="" style="width:46px;height:46px;border-radius:50%">';
+    const cardList = items.map(n => `<div class="news-post xp"><div class="xa">${xav(n)}</div><div class="xb"><a class="news-card" href="/news/${n.id}"><div class="xh"><b>${ctx.byline(n)}</b>${n.author_un ? `<span class="mut">@${esc(n.author_un)}</span>` : ''}<span class="mut">&middot; ${timeAgo(n.created_at)}</span></div><h3>${esc(n.title)}</h3><p class="news-snip">${esc(n.body)}</p>${newsImg(n)}</a>${NA.bar(n.id, st[n.id])}</div></div>`);
     const cards = cardList.join('') + NA.script(!!req.user);
     const empty = '<p class="mut">No news yet. Check back soon.</p>';
     if (home) {
