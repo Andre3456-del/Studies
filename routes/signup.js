@@ -1,5 +1,6 @@
 // Sign-up pages (students and lecturers) and the lecturer portal
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
+const AGREE_BOX = require('../lib/agree_box');
 module.exports = function register(app, ctx) {
   const { GOOGLE_ON, authForm, bcrypt, checkEmailPage, db, esc, insertUser, layout, limited, sendSafely, weakPw } = ctx;
   app.get('/signup', (req, res) => !ctx.isLaptop(req) ? res.send(authForm('signup')) : res.send(ctx.linkPage(req, '')));
@@ -9,6 +10,7 @@ module.exports = function register(app, ctx) {
     const email = String(req.body.email || '').trim().toLowerCase();
     const pw = String(req.body.password || '');
     const bad = m => res.status(400).send(authForm('signup', m));
+    if (!req.body.agree) return bad('Please tick the box to accept the Terms & Conditions and Privacy Policy.');
     if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
     if (pw.length < 8) return bad('Password must be at least 8 characters.');
     if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');
@@ -50,16 +52,18 @@ module.exports = function register(app, ctx) {
 <input name="name" placeholder="Your name" required maxlength="80">
 <input name="email" type="email" placeholder="Email address" required>
 <input name="password" type="password" placeholder="Password (8+ characters)" required>
-<button>Create lecturer account</button></form>
+${AGREE_BOX}
+<button disabled>Create lecturer account</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
-<p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`, null, { footer: true })));
+<p class="mut">Already registered? <a href="/lecturer/login">Lecturer log in</a></p></div>`)));
   app.post('/lecturer/signup', async (req, res) => {
     if (limited('signup-ip:' + req.ip, 12, 3600e3)) return res.status(429).send('Too many sign-ups from this connection. Please try again later.');
     const name = String(req.body.name || '').trim().slice(0, 80);
     const email = String(req.body.email || '').trim().toLowerCase();
     const pw = String(req.body.password || '');
     const bad = m => res.status(400).send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1><p class="err">${esc(m)}</p>
-<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required><button>Create lecturer account</button></form></div>`, null, { footer: true }));
+<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required>${AGREE_BOX}<button disabled>Create lecturer account</button></form></div>`));
+    if (!req.body.agree) return bad('Please tick the box to accept the Terms & Conditions and Privacy Policy.');
     if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
     if (pw.length < 8) return bad('Password must be at least 8 characters.');
     if (weakPw(pw, email)) return bad('That password is too easy to guess. Please pick something less common.');

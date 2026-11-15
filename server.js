@@ -2210,10 +2210,11 @@ const authForm = (kind, err = '', next = '') => {
 ${login ? '' : '<input name="name" placeholder="Your name" required maxlength="80">'}
 <input name="email" type="email" placeholder="Email address" required>
 <input name="password" type="password" placeholder="Password${login ? '' : ' (8+ characters)'}" required>
-<button>${login ? 'Log in' : 'Create account'}</button></form>
+${login ? '' : require('./lib/agree_box')}
+<button${login ? '' : ' disabled'}>${login ? 'Log in' : 'Create account'}</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google">Continue with Google</a>' : ''}
 ${login ? `<a class="btn ghost" style="display:block;text-align:center;margin:8px 0" href="/login?qr=1${next ? '&next=' + encodeURIComponent(next) : ''}">Log in with a QR code</a><p class="mut"><a href="/forgot">Forgot password?</a></p>` : ''}
-<p class="mut">${login ? 'New here? <a href="/signup">Create an account</a>' : 'Already registered? <a href="/login">Log in</a>'}</p></div>`, null, { footer: true });
+<p class="mut">${login ? 'New here? <a href="/signup">Create an account</a>' : 'Already registered? <a href="/login">Log in</a>'}</p></div>`);
 };
 
 const forgotForm = (err = '') => layout('Forgot password', `<div class="auth"><h1>Reset your password</h1><p class="mut">Enter your email and we will send a 6-digit code.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
@@ -2253,8 +2254,7 @@ try{var es=new EventSource('/api/live'),was=false;es.onmessage=onEv;es.onerror=f
 document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh()});
 window.addEventListener('shnet',refresh);
 setInterval(function(){if(pend&&ok())refresh()},4000)})();`;
-const HOME_INTRO = require('./lib/visitor_home');
-app.get('/', (req, res) => req.user ? res.redirect('/dashboard') : res.send(layout('Studies Hub', HOME_INTRO + newsFeedBody(req, true), req.user, { footer: true, headExtra: ADSENSE_HEAD, description: 'Studies Hub is a free study platform for Nigerian university students: course materials, past questions, timetables, campus news and student chats.' })));
+app.get('/', (req, res, next) => req.user ? res.redirect('/dashboard') : !inApp(req) ? next() : res.send(layout('Studies Hub', newsFeedBody(req, true), req.user, { headExtra: ADSENSE_HEAD, description: 'Studies Hub is a free study platform for Nigerian university students: course materials, past questions, timetables, campus news and student chats.' })));
 
 app.get('/browse', (req, res) => {
   const pages = db.prepare('SELECT slug,title,members_only,kind,paid,price_kobo,dept,level,author_id,course_id,semester,university FROM pages ORDER BY id DESC').all().filter(p => sortedFor(p, req.user));
