@@ -134,6 +134,32 @@ public class MainActivity extends Activity {
                 if (v != View.VISIBLE && (inCall || ScreenShareService.running)) super.onWindowVisibilityChanged(View.VISIBLE);
                 else super.onWindowVisibilityChanged(v);
             }
+            // Tell the keyboard this box accepts pictures, so tapping a screenshot or a sticker in its clipboard sends it into the chat
+            @Override public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo info) {
+                android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(info);
+                if (ic == null) return null;
+                androidx.core.view.inputmethod.EditorInfoCompat.setContentMimeTypes(info, new String[]{"image/png", "image/jpeg", "image/gif", "image/webp"});
+                return androidx.core.view.inputmethod.InputConnectionCompat.createWrapper(ic, info, (contentInfo, flags, opts) -> {
+                    if ((flags & androidx.core.view.inputmethod.InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION) != 0) {
+                        try { contentInfo.requestPermission(); } catch (Exception e) { return false; }
+                    }
+                    final Uri uri = contentInfo.getContentUri();
+                    final String mt = contentInfo.getDescription().getMimeTypeCount() > 0 ? contentInfo.getDescription().getMimeType(0) : "image/png";
+                    new Thread(() -> {
+                        try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                            byte[] buf = new byte[65536]; int n;
+                            while ((n = in.read(buf)) > 0) { bo.write(buf, 0, n); if (bo.size() > 8 * 1024 * 1024) return; }
+                            final String b64 = android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
+                            runOnUiThread(() -> web.evaluateJavascript("window.shPasteImg&&shPasteImg('" + mt + "','" + b64 + "')", null));
+                        } catch (Exception e) {
+                        } finally {
+                            try { contentInfo.releasePermission(); } catch (Exception e) { }
+                        }
+                    }).start();
+                    return true;
+                });
+            }
         };
         web.setBackgroundColor(0xFF12121C);
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
