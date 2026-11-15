@@ -53,6 +53,35 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private View splash;
+    // The thin ring that turns while a page is opening (shown only if it takes more than a moment)
+    private View ring;
+    private final Runnable ringShow = () -> { if (ring != null) ring.setVisibility(View.VISIBLE); };
+    private final Runnable ringHide = () -> { if (ring != null) ring.setVisibility(View.GONE); };
+    private class LoadRing extends View {
+        private final android.graphics.Paint pt = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.RectF rc = new android.graphics.RectF();
+        LoadRing(android.content.Context c) {
+            super(c);
+            pt.setStyle(android.graphics.Paint.Style.STROKE);
+            pt.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+            pt.setColor(0xFFE8EAF2);
+            pt.setStrokeWidth(3f * getResources().getDisplayMetrics().density);
+            setBackgroundColor(0x5512121C);
+            setVisibility(View.GONE);
+        }
+        @Override protected void onDraw(android.graphics.Canvas c) {
+            float d = getResources().getDisplayMetrics().density;
+            float t = (android.os.SystemClock.uptimeMillis() % 1400L) / 1400f;
+            float cx = getWidth() / 2f, cy = getHeight() / 2f, rad = 20f * d;
+            rc.set(cx - rad, cy - rad, cx + rad, cy + rad);
+            c.drawArc(rc, t * 720f - 90f, 15f + 200f * (float) Math.sin(Math.PI * t), false, pt);
+            if (getVisibility() == View.VISIBLE) postInvalidateOnAnimation();
+        }
+        @Override protected void onVisibilityChanged(View v, int vis) {
+            super.onVisibilityChanged(v, vis);
+            if (vis == View.VISIBLE) postInvalidateOnAnimation();
+        }
+    }
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingWebPerm;
     private String answerCall;
@@ -114,6 +143,8 @@ public class MainActivity extends Activity {
         lockMin = lp.getInt("lock_min", 0);
         OfflineStore.userId = getSharedPreferences("studieshub", MODE_PRIVATE).getString("off_uid", "0");
         startNetWatch();
+        ring = new LoadRing(this);
+        root.addView(ring, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         overlay = buildOverlay();
         root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         if (lockOn) { locked = true; secure(true); }
@@ -347,7 +378,12 @@ public class MainActivity extends Activity {
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 return OfflineStore.serve(MainActivity.this, r.getUrl(), r.getMethod(), r.getRequestHeaders(), r.isForMainFrame());
             }
+            @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
+                super.onPageStarted(v, url, icon);
+                if (ring != null) { ring.removeCallbacks(ringShow); ring.removeCallbacks(ringHide); ring.postDelayed(ringShow, 250); ring.postDelayed(ringHide, 25000); }
+            }
             @Override public void onPageFinished(WebView v, String url) {
+                if (ring != null) { ring.removeCallbacks(ringShow); ring.removeCallbacks(ringHide); ring.setVisibility(View.GONE); }
                 if (url != null && url.startsWith("https://")) retryN = 0;
                 CookieManager.getInstance().flush();
                 if (!"online".equals(net)) v.evaluateJavascript("window.__net&&__net('" + net + "',1)", null);
@@ -376,6 +412,7 @@ public class MainActivity extends Activity {
             }
             @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
                 if (r.isForMainFrame()) {
+                    if (ring != null) { ring.removeCallbacks(ringShow); ring.setVisibility(View.GONE); }
                     if (!"GET".equalsIgnoreCase(r.getMethod())) {
                         // a form that needed the internet: stay where you were and say so
                         android.widget.Toast.makeText(MainActivity.this, OfflineStore.NOINET, android.widget.Toast.LENGTH_LONG).show();
