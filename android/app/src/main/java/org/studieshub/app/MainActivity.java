@@ -198,15 +198,17 @@ public class MainActivity extends Activity {
                     String headStem = title == null ? "" : title.replaceAll("[\\\\/:*?\"<>|]", "_").replaceAll("\\s+", " ").trim();
                     if (headStem.length() > 100) headStem = headStem.substring(0, 100);
                     String name = !headStem.isEmpty() ? headStem + tailExt : (file == null || file.trim().isEmpty() ? slug : file).replaceAll("[\\\\/:*?\"<>|]", "_");
-                    java.io.File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                    if (new java.io.File(dl, name).exists()) { int dot = name.lastIndexOf('.'); String stem = dot > 0 ? name.substring(0, dot) : name, ext = dot > 0 ? name.substring(dot) : ""; name = stem + " (" + (System.currentTimeMillis() % 10000) + ")" + ext; }
+                    String mime0 = tailExt.length() > 1 ? android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(tailExt.substring(1).toLowerCase(java.util.Locale.ROOT)) : null;
+                    String[] tg = saveTarget(mime0, name);
                     DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
                     DownloadManager.Request r = new DownloadManager.Request(Uri.parse("https://studieshub.org/p/" + slug + "/raw?dl=1"));
                     r.setTitle(title == null || title.isEmpty() ? name : title).setDescription("Studies Hub");
                     if (cookie != null) r.addRequestHeader("Cookie", cookie);
                     r.addRequestHeader("User-Agent", uaCache);
                     r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                    r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
+                    if (mime0 != null) r.setMimeType(mime0);
+                    r.allowScanningByMediaScanner();
+                    r.setDestinationInExternalPublicDir(tg[0], tg[1]);
                     long id = dm.enqueue(r);
                     getSharedPreferences("studieshub", MODE_PRIVATE).edit().putLong("dl_" + OfflineStore.userId + "_" + slug, id).apply();
                     return true;
@@ -437,7 +439,9 @@ public class MainActivity extends Activity {
                 r.setMimeType(mime);
                 r.addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url));
                 r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, cd, mime));
+                String[] tg = saveTarget(mime, URLUtil.guessFileName(url, cd, mime));
+                r.allowScanningByMediaScanner();
+                r.setDestinationInExternalPublicDir(tg[0], tg[1]);
                 ((DownloadManager) getSystemService(DOWNLOAD_SERVICE)).enqueue(r);
             } catch (Exception e) {
                 try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception x) { }
@@ -732,6 +736,32 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private static final java.security.SecureRandom RND = new java.security.SecureRandom();
+    private static String randName(String ext) {
+        String a = "abcdefghijklmnopqrstuvwxyz0123456789"; StringBuilder b = new StringBuilder("StudiesHub_");
+        for (int i = 0; i < 8; i++) b.append(a.charAt(RND.nextInt(a.length())));
+        return b + ext;
+    }
+    /** Where a download goes: pictures, videos and audio land in their own "Studies Hub" album with a random name (so the gallery shows them as Studies Hub,
+     *  like WhatsApp or Telegram); documents go to Documents/Studies Hub and keep the name they were given. Returns { public folder, "Studies Hub/<name>" }. */
+    private String[] saveTarget(String mime, String wantedName) {
+        String m = mime == null ? "" : mime.toLowerCase(java.util.Locale.ROOT);
+        int d = wantedName.lastIndexOf('.');
+        String ext = d > 0 && wantedName.length() - d <= 7 ? wantedName.substring(d) : "";
+        if ((m.isEmpty() || m.equals("application/octet-stream")) && ext.length() > 1) { String g = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.substring(1).toLowerCase(java.util.Locale.ROOT)); if (g != null) m = g; }
+        if (ext.isEmpty() && m.contains("/")) { String e = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(m); if (e != null) ext = "." + e; }
+        String dir, name = wantedName;
+        if (m.startsWith("image/")) { dir = Environment.DIRECTORY_PICTURES; name = randName(ext); }
+        else if (m.startsWith("video/")) { dir = Environment.DIRECTORY_MOVIES; name = randName(ext); }
+        else if (m.startsWith("audio/")) { dir = Environment.DIRECTORY_MUSIC; name = randName(ext); }
+        else dir = Environment.DIRECTORY_DOCUMENTS;
+        String rel = "Studies Hub/" + name;
+        if (new java.io.File(Environment.getExternalStoragePublicDirectory(dir), rel).exists()) {
+            int dot = rel.lastIndexOf('.');
+            rel = (dot > 0 ? rel.substring(0, dot) : rel) + " (" + (System.currentTimeMillis() % 100000) + ")" + (dot > 0 ? rel.substring(dot) : "");
+        }
+        return new String[] { dir, rel };
+    }
     private java.io.File updateFile() { return new java.io.File(getExternalFilesDir("updates"), "StudiesHub.apk"); }
 
     /** True when a finished, newer update file is waiting on the phone (and the "Install now" bar is showing). */

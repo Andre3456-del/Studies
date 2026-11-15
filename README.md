@@ -24,6 +24,7 @@ lib/                 the site's separate parts
   sponsor_admin.js     the admin list of sponsor posts (waiting and live)
   chat_js.js           the browser script that runs a chat page
   (routes) stories.js, news_social.js: 24-hour stories; likes, comments and saves on news
+  Android downloads (MainActivity.saveTarget): pictures, videos and audio go to their own "Studies Hub" album (Pictures, Movies, Music) with a random name; documents go to Documents/Studies Hub and keep their title.
   (lib) chat_search.js: chat search opens as its own full-screen page. ui_theme.js also freezes the page height (--fullh) so the keyboard never squeezes wallpaper or waves, and hides the bottom bar while typing.
   (lib/routes) typing_state.js + typing.js: the "typing…" and "recording audio…" signal in chats, kept in memory for a few seconds only.
   (lib) suggest.js: the "Suggested Studikins" ranking in Chat > Find people. The chat list only shows people you have messaged. "Studikins" is the product name for friends.
