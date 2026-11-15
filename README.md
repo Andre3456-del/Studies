@@ -29,6 +29,7 @@ lib/                 the site's separate parts
   (lib/routes) typing_state.js + typing.js: the "typing…" and "recording audio…" signal in chats, kept in memory for a few seconds only.
   (lib) suggest.js: the "Suggested Studikins" ranking in Chat > Find people. The chat list only shows people you have messaged. "Studikins" is the product name for friends.
   (routes) account.js: Settings > Account with the self-service "delete my account" button; notifications.js: the bell at the top of every page and the /notifications list.
+  (routes) bot_batch.js + (lib) zip.js, bot_quiz.js: the Study bot page in Admin. Download a zip of waiting uploads, give it to Claude in a chat, upload the results zip Claude makes, check and approve it. No keys; the bot never connects to the site. The bot's own tools live in the separate Studies-hub1 repo.
   (lib) visitor_home.js: the top buttons and feature cards of the website's first page (the About page, served at / by public_pages.js; the app starts on the news page instead). agree_box.js: the Terms/Privacy tick that keeps Create account dimmed until ticked. ui_theme.js also holds the turning ring shown while a page opens (the app has the same ring in MainActivity). Home is the profile page; uploads live on /materials. There are no friend requests: tapping Message on a search result makes you contacts straight away.
   chat_circles.js      the friend circles at the top of the chat list
   news_actions.js      comment / like / share / save icons under news posts
