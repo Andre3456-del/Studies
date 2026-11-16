@@ -5,7 +5,7 @@ module.exports = function register(app, ctx) {
   const { db, esc, layout, admin, upload, slugify, uniqueSlug } = ctx;
   db.exec(`CREATE TABLE IF NOT EXISTS bot_handled(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP)`);
-  const MAX_ITEMS = 40, MAX_FILE = 25 * 1024 * 1024, MAX_TOTAL = 50 * 1024 * 1024, previews = new Map();
+  const PART_BYTES = 20 * 1024 * 1024, PART_ITEMS = 30, previews = new Map(); // a batch is split into parts of about 20 MB so each zip stays easy to hand over; one big file simply gets a part of its own
   const pending = () => db.prepare(`SELECT p.id,p.title,p.kind,p.dept,p.level,p.file_name,p.file_mime,p.created_at,COALESCE(length(p.file_data),length(p.html),0) AS size,c.name AS course
     FROM pages p LEFT JOIN courses c ON c.id=p.course_id
     WHERE p.kind IN ('pdf','doc','image','html') AND p.id NOT IN (SELECT page_id FROM bot_handled) AND p.id NOT IN (SELECT page_id FROM bot_made)
@@ -18,32 +18,40 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
     const rows = pending(), groups = {};
     rows.forEach(r => (groups[r.course || 'No course set'] = groups[r.course || 'No course set'] || []).push(r));
     const done = db.prepare('SELECT COUNT(*) n FROM bot_handled').get().n, made = db.prepare('SELECT COUNT(*) n FROM bot_made').get().n;
-    const list = Object.entries(groups).map(([c, rs]) => `<div class="card"><h3 style="margin:0 0 8px">${esc(c)}</h3>${rs.map(r => `<label class="botrow"><input type="checkbox" name="ids" value="${r.id}"${r.size <= MAX_FILE ? '' : ' disabled'}><span><b>${esc(r.title)}</b><br><span class="mut">${esc(r.kind.toUpperCase())} · ${r.level ? esc(r.level) + ' level · ' : ''}${kb(r.size)}${r.size <= MAX_FILE ? '' : ' · over 25 MB, too big for a batch'}</span></span></label>`).join('')}</div>`).join('');
+    const list = Object.entries(groups).map(([c, rs]) => `<div class="card"><h3 style="margin:0 0 8px">${esc(c)}</h3>${rs.map(r => `<label class="botrow"><input type="checkbox" name="ids" value="${r.id}"><span><b>${esc(r.title)}</b><br><span class="mut">${esc(r.kind.toUpperCase())} · ${r.level ? esc(r.level) + ' level · ' : ''}${kb(r.size)}</span></span></label>`).join('')}</div>`).join('');
     res.send(layout('Study bot', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Study bot</h1>${msg(req)}
 <style>.botrow{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line);cursor:pointer}.botrow:first-of-type{border-top:0}.botrow input{width:22px;height:22px;margin:2px 0 0;flex:none}.botsteps{counter-reset:s;list-style:none;padding:0;margin:0}.botsteps li{counter-increment:s;display:flex;gap:12px;margin:0 0 12px}.botsteps li:before{content:counter(s);flex:none;width:28px;height:28px;border-radius:50%;background:var(--blue);color:#04122b;font-weight:800;display:flex;align-items:center;justify-content:center}</style>
 <div class="card"><ol class="botsteps"><li><span><b>Download a batch</b><br><span class="mut">Pick the uploads below. You get one zip.</span></span></li><li><span><b>Give the zip to Claude</b><br><span class="mut">Attach it in the chat and say "process the batch".</span></span></li><li><span><b>Bring back what Claude makes</b><br><span class="mut">Upload Claude's zip in the box at the bottom. You check everything before it goes live.</span></span></li></ol></div>
-<form method="get" action="/admin/bot/batch" data-noload><div class="card row" style="gap:10px;flex-wrap:wrap"><b>${rows.length} waiting</b><span class="mut">${done} handled · ${made} pages made by the bot</span><span style="flex:1"></span><button type="button" class="ghost" onclick="var n=0;document.querySelectorAll('.botrow input:not(:disabled)').forEach(function(c){c.checked=n<${MAX_ITEMS};n++})">Select first ${MAX_ITEMS}</button><button>Download batch</button></div>${list || '<div class="card mut">Nothing is waiting. New uploads appear here.</div>'}</form>
+<form method="get" action="/admin/bot/batch" data-noload><div class="card row" style="gap:10px;flex-wrap:wrap"><b>${rows.length} waiting</b><span class="mut">${done} handled · ${made} pages made by the bot</span><span style="flex:1"></span><button type="button" class="ghost" onclick="document.querySelectorAll('.botrow input').forEach(function(c){c.checked=true})">Select all</button><button>Download batch</button></div>${list || '<div class="card mut">Nothing is waiting. New uploads appear here.</div>'}</form>
 <h2>Bring Claude's work back</h2><form class="card" method="post" action="/admin/bot/import" enctype="multipart/form-data"><p class="mut" style="margin-top:0">Choose the zip Claude gave you. Nothing is published yet: you see everything first and approve it.</p><input type="file" name="zip" accept=".zip,application/zip" required><button style="margin-top:12px">Check the zip</button></form>`, req.user));
   });
 
-  // GET as well as POST: the Android app's downloader can only fetch a file with GET
+  // GET as well as POST: the Android app's downloader can only fetch a file with GET.
+  // Every selected upload is included whatever its size; a big selection is cut into parts (about 20 MB each) and the admin downloads them one by one.
   const batch = (req, res) => {
-    const want = new Set(ids(req.method === 'GET' ? req.query.ids : req.body && req.body.ids)), skipped = [], items = [], files = []; let total = 0;
+    const raw = req.method === 'GET' ? req.query.ids : req.body && req.body.ids, want = new Set(ids(raw));
     if (!want.size) return res.redirect('/admin/bot?msg=' + encodeURIComponent('Tick at least one upload first.'));
-    for (const r of pending().filter(r => want.has(r.id))) {
-      if (items.length >= MAX_ITEMS) { skipped.push({ id: r.id, why: 'batch is full' }); continue; }
+    const rows = pending().filter(r => want.has(r.id)).sort((a, b) => a.id - b.id), parts = [[]]; let bytes = 0;
+    for (const r of rows) {
+      const cur = parts[parts.length - 1];
+      if (cur.length && (bytes + r.size > PART_BYTES || cur.length >= PART_ITEMS)) { parts.push([]); bytes = 0; }
+      parts[parts.length - 1].push(r); bytes += r.size;
+    }
+    if (!rows.length) return res.redirect('/admin/bot?msg=' + encodeURIComponent('Those uploads are already handled.'));
+    const q = 'ids=' + rows.map(r => r.id).join(','), part = parseInt(req.query && req.query.part, 10) || (parts.length === 1 ? 1 : 0);
+    if (!part) return res.send(layout('Download batch', `<p class="mut"><a href="/admin/bot">&larr; Study bot</a></p><h1>Download batch</h1><p class="mut">That is ${rows.length} upload(s), ${kb(rows.reduce((t, r) => t + r.size, 0))} in all. It is cut into ${parts.length} zips so each stays easy to hand over. Download each one and give them to Claude one after the other (one per chat message is fine).</p>${parts.map((p, i) => `<div class="card row" style="gap:12px;flex-wrap:wrap"><span><b>Part ${i + 1} of ${parts.length}</b><br><span class="mut">${p.length} upload(s) · ${kb(p.reduce((t, r) => t + r.size, 0))}</span></span><span style="flex:1"></span><a class="btn" href="/admin/bot/batch?${q}&part=${i + 1}" download data-noload>Download</a></div>`).join('')}`, req.user));
+    if (part < 1 || part > parts.length) return res.redirect('/admin/bot?msg=' + encodeURIComponent('That part does not exist.'));
+    const items = [], files = [];
+    for (const r of parts[part - 1]) {
       const p = db.prepare('SELECT file_data,html FROM pages WHERE id=?').get(r.id);
       const data = p.file_data ? Buffer.from(p.file_data) : Buffer.from(String(p.html || ''), 'utf8');
-      if (data.length > MAX_FILE || total + data.length > MAX_TOTAL) { skipped.push({ id: r.id, why: 'too big' }); continue; }
-      total += data.length;
       const ext = (p.file_data ? (String(r.file_name || '').match(/\.([a-z0-9]{1,5})$/i) || [])[1] || (r.file_mime || '').split('/')[1] : 'html') || 'bin', f = 'files/' + r.id + '.' + String(ext).toLowerCase().replace(/[^a-z0-9]/g, '');
       files.push({ name: f, data });
       items.push({ id: r.id, title: r.title, kind: r.kind, course: r.course || null, dept: r.dept || null, level: r.level || null, mime: r.file_mime || 'text/html', file: f, size: data.length, uploaded: r.created_at });
     }
-    if (!items.length) return res.redirect('/admin/bot?msg=' + encodeURIComponent('Nothing could be put in the batch (too big?).'));
-    const out = zip.write([{ name: 'batch.json', data: Buffer.from(JSON.stringify({ version: 1, created: new Date().toISOString(), items, skipped }, null, 2)) }, ...files]);
+    const out = zip.write([{ name: 'batch.json', data: Buffer.from(JSON.stringify({ version: 1, created: new Date().toISOString(), part, parts: parts.length, items }, null, 2)) }, ...files]);
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="studies-hub-batch-${new Date().toISOString().slice(0, 10)}.zip"`);
+    res.setHeader('Content-Disposition', `attachment; filename="studies-hub-batch-${new Date().toISOString().slice(0, 10)}${parts.length > 1 ? `-part${part}of${parts.length}` : ''}.zip"`);
     res.send(out);
   };
   app.get('/admin/bot/batch', admin, batch); app.post('/admin/bot/batch', admin, batch);
