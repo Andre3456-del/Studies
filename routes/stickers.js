@@ -3,6 +3,12 @@
 module.exports = function register(app, ctx) {
   const { MAX_STICKERS, STICKER_MIMES, db, decryptBytes, isGroupMember, sendBytes, upload, zlib } = ctx;
   // ---------- sticker board (each member's own saved stickers) ----------
+  // The full emoji list (every standard emoji, Unicode 16) for the picker; loaded once when the panel first opens and cached by the phone.
+  const EMOJI_JSON = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'emoji_data.json'), 'utf8');
+  app.get('/api/emoji-data', (req, res) => {
+    if (!req.user) return res.sendStatus(401);
+    res.set('Cache-Control', 'private, max-age=604800').type('json').send(EMOJI_JSON);
+  });
   app.get('/api/stickers', (req, res) => {
     if (!req.user) return res.sendStatus(401);
     res.json({ stickers: db.prepare('SELECT id FROM stickers WHERE user_id=? ORDER BY id DESC').all(req.user.id).map(r => ({ id: r.id })) });
