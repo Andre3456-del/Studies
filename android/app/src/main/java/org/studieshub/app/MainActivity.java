@@ -807,7 +807,7 @@ public class MainActivity extends Activity {
         return b + ext;
     }
     /** Where a download goes: pictures, videos and audio land in their own "Studies Hub" album with a random name (so the gallery shows them as Studies Hub,
-     *  like WhatsApp or Telegram); documents go to Documents/Studies Hub and keep the name they were given. Returns { public folder, "Studies Hub/<name>" }. */
+     *  like WhatsApp or Telegram); documents and other files go to the normal Downloads folder and keep the name they were given. Returns { public folder, "Studies Hub/<name>" }. */
     private String[] saveTarget(String mime, String wantedName) {
         String m = mime == null ? "" : mime.toLowerCase(java.util.Locale.ROOT);
         int d = wantedName.lastIndexOf('.');
@@ -818,8 +818,8 @@ public class MainActivity extends Activity {
         if (m.startsWith("image/")) { dir = Environment.DIRECTORY_PICTURES; name = randName(ext); }
         else if (m.startsWith("video/")) { dir = Environment.DIRECTORY_MOVIES; name = randName(ext); }
         else if (m.startsWith("audio/")) { dir = Environment.DIRECTORY_MUSIC; name = randName(ext); }
-        else dir = Environment.DIRECTORY_DOCUMENTS;
-        String rel = "Studies Hub/" + name;
+        else dir = Environment.DIRECTORY_DOWNLOADS; // zips, PDFs and other files go to the normal Downloads folder, where the phone's Downloads list shows them
+        String rel = (dir.equals(Environment.DIRECTORY_DOWNLOADS) ? "" : "Studies Hub/") + name;
         if (new java.io.File(Environment.getExternalStoragePublicDirectory(dir), rel).exists()) {
             int dot = rel.lastIndexOf('.');
             rel = (dot > 0 ? rel.substring(0, dot) : rel) + " (" + (System.currentTimeMillis() % 100000) + ")" + (dot > 0 ? rel.substring(dot) : "");
