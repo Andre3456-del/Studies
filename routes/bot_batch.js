@@ -5,7 +5,7 @@ module.exports = function register(app, ctx) {
   const { db, esc, layout, admin, upload, slugify, uniqueSlug } = ctx;
   db.exec(`CREATE TABLE IF NOT EXISTS bot_handled(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP)`);
-  const MAX_ITEMS = 40, MAX_FILE = 8 * 1024 * 1024, MAX_TOTAL = 40 * 1024 * 1024, previews = new Map();
+  const MAX_ITEMS = 40, MAX_FILE = 25 * 1024 * 1024, MAX_TOTAL = 50 * 1024 * 1024, previews = new Map();
   const pending = () => db.prepare(`SELECT p.id,p.title,p.kind,p.dept,p.level,p.file_name,p.file_mime,p.created_at,COALESCE(length(p.file_data),length(p.html),0) AS size,c.name AS course
     FROM pages p LEFT JOIN courses c ON c.id=p.course_id
     WHERE p.kind IN ('pdf','doc','image','html') AND p.id NOT IN (SELECT page_id FROM bot_handled) AND p.id NOT IN (SELECT page_id FROM bot_made)
@@ -18,16 +18,17 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
     const rows = pending(), groups = {};
     rows.forEach(r => (groups[r.course || 'No course set'] = groups[r.course || 'No course set'] || []).push(r));
     const done = db.prepare('SELECT COUNT(*) n FROM bot_handled').get().n, made = db.prepare('SELECT COUNT(*) n FROM bot_made').get().n;
-    const list = Object.entries(groups).map(([c, rs]) => `<div class="card"><h3 style="margin:0 0 8px">${esc(c)}</h3>${rs.map(r => `<label class="botrow"><input type="checkbox" name="ids" value="${r.id}"${r.size <= MAX_FILE ? '' : ' disabled'}><span><b>${esc(r.title)}</b><br><span class="mut">${esc(r.kind.toUpperCase())} · ${r.level ? esc(r.level) + ' level · ' : ''}${kb(r.size)}${r.size <= MAX_FILE ? '' : ' · too big for a batch'}</span></span></label>`).join('')}</div>`).join('');
+    const list = Object.entries(groups).map(([c, rs]) => `<div class="card"><h3 style="margin:0 0 8px">${esc(c)}</h3>${rs.map(r => `<label class="botrow"><input type="checkbox" name="ids" value="${r.id}"${r.size <= MAX_FILE ? '' : ' disabled'}><span><b>${esc(r.title)}</b><br><span class="mut">${esc(r.kind.toUpperCase())} · ${r.level ? esc(r.level) + ' level · ' : ''}${kb(r.size)}${r.size <= MAX_FILE ? '' : ' · over 25 MB, too big for a batch'}</span></span></label>`).join('')}</div>`).join('');
     res.send(layout('Study bot', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Study bot</h1>${msg(req)}
 <style>.botrow{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line);cursor:pointer}.botrow:first-of-type{border-top:0}.botrow input{width:22px;height:22px;margin:2px 0 0;flex:none}.botsteps{counter-reset:s;list-style:none;padding:0;margin:0}.botsteps li{counter-increment:s;display:flex;gap:12px;margin:0 0 12px}.botsteps li:before{content:counter(s);flex:none;width:28px;height:28px;border-radius:50%;background:var(--blue);color:#04122b;font-weight:800;display:flex;align-items:center;justify-content:center}</style>
 <div class="card"><ol class="botsteps"><li><span><b>Download a batch</b><br><span class="mut">Pick the uploads below. You get one zip.</span></span></li><li><span><b>Give the zip to Claude</b><br><span class="mut">Attach it in the chat and say "process the batch".</span></span></li><li><span><b>Bring back what Claude makes</b><br><span class="mut">Upload Claude's zip in the box at the bottom. You check everything before it goes live.</span></span></li></ol></div>
-<form method="post" action="/admin/bot/batch"><div class="card row" style="gap:10px;flex-wrap:wrap"><b>${rows.length} waiting</b><span class="mut">${done} handled · ${made} pages made by the bot</span><span style="flex:1"></span><button type="button" class="ghost" onclick="var n=0;document.querySelectorAll('.botrow input:not(:disabled)').forEach(function(c){c.checked=n<${MAX_ITEMS};n++})">Select first ${MAX_ITEMS}</button><button>Download batch</button></div>${list || '<div class="card mut">Nothing is waiting. New uploads appear here.</div>'}</form>
+<form method="get" action="/admin/bot/batch" data-noload><div class="card row" style="gap:10px;flex-wrap:wrap"><b>${rows.length} waiting</b><span class="mut">${done} handled · ${made} pages made by the bot</span><span style="flex:1"></span><button type="button" class="ghost" onclick="var n=0;document.querySelectorAll('.botrow input:not(:disabled)').forEach(function(c){c.checked=n<${MAX_ITEMS};n++})">Select first ${MAX_ITEMS}</button><button>Download batch</button></div>${list || '<div class="card mut">Nothing is waiting. New uploads appear here.</div>'}</form>
 <h2>Bring Claude's work back</h2><form class="card" method="post" action="/admin/bot/import" enctype="multipart/form-data"><p class="mut" style="margin-top:0">Choose the zip Claude gave you. Nothing is published yet: you see everything first and approve it.</p><input type="file" name="zip" accept=".zip,application/zip" required><button style="margin-top:12px">Check the zip</button></form>`, req.user));
   });
 
-  app.post('/admin/bot/batch', admin, (req, res) => {
-    const want = new Set(ids(req.body && req.body.ids)), skipped = [], items = [], files = []; let total = 0;
+  // GET as well as POST: the Android app's downloader can only fetch a file with GET
+  const batch = (req, res) => {
+    const want = new Set(ids(req.method === 'GET' ? req.query.ids : req.body && req.body.ids)), skipped = [], items = [], files = []; let total = 0;
     if (!want.size) return res.redirect('/admin/bot?msg=' + encodeURIComponent('Tick at least one upload first.'));
     for (const r of pending().filter(r => want.has(r.id))) {
       if (items.length >= MAX_ITEMS) { skipped.push({ id: r.id, why: 'batch is full' }); continue; }
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="studies-hub-batch-${new Date().toISOString().slice(0, 10)}.zip"`);
     res.send(out);
-  });
+  };
+  app.get('/admin/bot/batch', admin, batch); app.post('/admin/bot/batch', admin, batch);
 
   app.post('/admin/bot/import', admin, upload.single('zip'), (req, res) => {
     const fail = m => res.redirect('/admin/bot?msg=' + encodeURIComponent(m));

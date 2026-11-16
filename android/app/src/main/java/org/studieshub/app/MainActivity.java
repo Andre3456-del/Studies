@@ -497,6 +497,7 @@ public class MainActivity extends Activity {
         });
 
         web.setDownloadListener((url, ua, cd, mime, len) -> {
+            if (ring != null) { ring.removeCallbacks(ringShow); ring.removeCallbacks(ringHide); ring.setVisibility(View.GONE); }
             try {
                 DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
                 r.setMimeType(mime);
