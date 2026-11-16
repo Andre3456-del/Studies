@@ -24,7 +24,7 @@ module.exports = function register(app, ctx) {
     const script = CHAT_JS.replace('__CTYPE__', isGroup ? 'group' : 'dm').replace('__CID__', String(convId)).replace('__MY__', String(req.user.id));
     res.send(layout(title, `${MSG_SEL_BAR}${headHtml}
 ${self ? '<style>.self-chat .tickwrap{display:none}</style>' : ''}<div id="thread" class="thread${self ? ' self-chat' : ''}"${self ? ' data-selfchat="1"' : ''} data-last-id="${lastId}">${bubbles || (self ? '<p class="mut hello">Notes, files and links to yourself. Only you can see this space.</p>' : '<p class="mut hello">Say hello 👋</p>')}</div>
-<div id="panel" class="chat-panel" hidden><div class="ptabs"><button type="button" class="ghost on" data-tab="emoji">😊 Emoji</button><button type="button" class="ghost" data-tab="stickers">Stickers</button></div>
+<div id="panel" class="chat-panel" hidden><div id="pGrip" class="p-grip" aria-label="Drag up to make this taller"><i></i></div><div class="ptabs"><button type="button" class="ghost on" data-tab="emoji">😊 Emoji</button><button type="button" class="ghost" data-tab="stickers">Stickers</button></div>
 <div id="pEmoji" class="pbody"><div id="ecats" class="ecats"></div><div id="egrid" class="egrid"></div></div>
 <div id="pStickers" class="pbody" hidden><label class="btn ghost st-add">+ Add sticker(s)<input type="file" id="stFile" accept="image/png,image/webp,image/gif,image/jpeg" multiple></label>
 <button type="button" id="stMake" class="btn ghost st-add">&#10024; Create sticker</button><input type="file" id="stZip" style="display:none"><div id="sgrid" class="sgrid"></div></div></div>
