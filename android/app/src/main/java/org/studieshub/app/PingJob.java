@@ -41,6 +41,7 @@ public class PingJob extends JobService {
                     h.disconnect();
                 }
             } catch (Throwable t) { }
+            try { OfflineStore.refreshMain(PingJob.this); } catch (Throwable t) { }
             try { if (Backup.due(PingJob.this)) { Backup.run(PingJob.this); if (Gdrive.on(PingJob.this)) Gdrive.backupNow(PingJob.this); } } catch (Throwable t) { }
             jobFinished(p, false);
         }).start();

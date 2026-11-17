@@ -223,6 +223,17 @@ final class OfflineStore {
         try (FileOutputStream o = new FileOutputStream(new File(f.getPath() + ".mime"))) { o.write(mime.getBytes(StandardCharsets.UTF_8)); }
     }
 
+    static final String[] MAIN_PAGES = new String[]{"/", "/dashboard", "/chat", "/news", "/settings", "/settings/profile", "/settings/active-status", "/settings/appearance", "/settings/notifications", "/settings/security", "/saved", "/chat/starred", "/chat/group/new", "/chat/feedback", "/settings/devices", "/settings/backup", "/uni", "/uni/news", "/uni/uploads", "/uni/support"};
+
+    /** Keeps the main pages up to date on the phone, so they are already fresh when the app is opened. Safe to call from anywhere, even with the app closed. */
+    static void refreshMain(Context c) {
+        try {
+            if ("0".equals(userId)) userId = c.getApplicationContext().getSharedPreferences("studieshub", Context.MODE_PRIVATE).getString("off_uid", "0");
+            synchronized (recent) { recent.clear(); }
+            for (String p : MAIN_PAGES) remember(c, "https://studieshub.org" + p);
+        } catch (Throwable t) { }
+    }
+
     /** Quietly keeps a copy of a page the person just opened (only while online). */
     static void remember(Context c0, String url) {
         try {

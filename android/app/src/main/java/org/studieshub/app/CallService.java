@@ -65,7 +65,7 @@ public class CallService extends FirebaseMessagingService {
         // The push reached this phone, so its data is on: tell the server right away. That turns the sender's one tick into two ticks
         // (and makes a call say "Ringing…" instead of "Calling…"), even while the app is closed.
         if (type.equals("ring") && d.get("id") != null) ack("POST", "/api/calls/" + d.get("id") + "/ringing");
-        else if (type.equals("note")) ack("GET", "/api/ping");
+        else if (type.equals("note")) { ack("GET", "/api/ping"); OfflineStore.refreshMain(this); }
         if (type.equals("ring")) showCall(this, d.get("id"), title, body, d.get("av"));
         else if (type.equals("note")) note(nm, title, body, d.get("url"), d.get("tag"), d.get("cat"), d.get("chat"), d.get("cid"), d.get("av"), d.get("missed") != null);
     }
