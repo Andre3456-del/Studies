@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
     private View splash;
     // The thin ring that turns while a page is opening (shown only if it takes more than a moment)
     private View ring;
-    private final Runnable ringShow = () -> { if (ring != null) ring.setVisibility(View.VISIBLE); };
+    private final Runnable ringShow = () -> { /* no loading circle: pages open straight away */ };
     private final Runnable ringHide = () -> { if (ring != null) ring.setVisibility(View.GONE); };
     private class LoadRing extends View {
         private final android.graphics.Paint pt = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
@@ -517,12 +517,9 @@ public class MainActivity extends Activity {
         if (!sp.getBoolean("asked", false)) {
             sp.edit().putBoolean("asked", true).apply();
             List<String> want = new ArrayList<>();
-            want.add(Manifest.permission.CAMERA);
-            want.add(Manifest.permission.RECORD_AUDIO);
-            want.add(Manifest.permission.ACCESS_FINE_LOCATION);
-            want.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+            // Only notifications are asked at the start (Android needs that one). Camera, microphone, location and the rest are asked the moment they are used.
             if (Build.VERSION.SDK_INT >= 33) want.add(Manifest.permission.POST_NOTIFICATIONS);
-            requestPermissions(want.toArray(new String[0]), REQ_FIRST);
+            if (!want.isEmpty()) requestPermissions(want.toArray(new String[0]), REQ_FIRST);
         }
 
         CallService.channels(this);
@@ -696,7 +693,6 @@ public class MainActivity extends Activity {
         if (code == REQ_NOTE) { noteResult(res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED); return; }
         if (code == REQ_FIRST) {
             // So the phone doesn't put the app to sleep and miss calls.
-            try { startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName()))); } catch (Exception e) { }
             return;
         }
         if (code == REQ_GEO && geoCb != null) {
