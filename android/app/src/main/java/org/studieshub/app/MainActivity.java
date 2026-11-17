@@ -537,7 +537,9 @@ public class MainActivity extends Activity {
         Intent in = getIntent();
         if (in != null && in.getData() != null && ours(in.getData())) start = in.getData().toString();
         start = fromIntent(in, start);
-        if (b != null && answerCall == null) web.restoreState(b); else web.loadUrl(start);
+        String last = getSharedPreferences("studieshub", MODE_PRIVATE).getString("last_url", null);
+        boolean plain = in == null || (in.getData() == null && in.getStringExtra("callId") == null && in.getStringExtra("url") == null);
+        if (b != null && answerCall == null) web.restoreState(b); else web.loadUrl(plain && last != null && ours(Uri.parse(last)) ? last : start);
     }
 
     /** Opened from a ringing call or a notification: work out where to go. */
@@ -559,7 +561,9 @@ public class MainActivity extends Activity {
         super.onNewIntent(in);
         setIntent(in);
         if (in.getBooleanExtra("ongoing", false)) return; // back to the call: nothing to reload
-        web.loadUrl(fromIntent(in, HOME));
+        // A plain launch from the icon keeps the page you were on; only a call, a notification or a link goes somewhere else.
+        if (in.getStringExtra("callId") == null && in.getStringExtra("url") == null && !(in.getData() != null && ours(in.getData()))) return;
+        web.loadUrl(fromIntent(in, in.getData() != null && ours(in.getData()) ? in.getData().toString() : HOME));
     }
 
     void shareState(final String st) { web.post(() -> web.evaluateJavascript("window.__scrState&&__scrState('" + st + "')", null)); }
@@ -760,7 +764,7 @@ public class MainActivity extends Activity {
     private String ongoingCallId;
 
     @Override protected void onSaveInstanceState(Bundle b) { super.onSaveInstanceState(b); web.saveState(b); }
-    @Override protected void onPause() { super.onPause(); fg = false; if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
+    @Override protected void onPause() { super.onPause(); fg = false; try { String lu = web.getUrl(); if (lu != null && lu.startsWith("https://studieshub.org") && !lu.contains("/login") && !lu.contains("/logout") && !lu.contains("/signup")) getSharedPreferences("studieshub", MODE_PRIVATE).edit().putString("last_url", lu).apply(); } catch (Throwable t) { } if (lockOn) secure(true); CookieManager.getInstance().flush(); if (!(inCall || ScreenShareService.running)) web.onPause(); }
     @Override protected void onResume() {
         super.onResume(); fg = true; if (getSharedPreferences("studieshub", MODE_PRIVATE).getBoolean("off_auto", false) && System.currentTimeMillis() - lastTopUp > 1800000L) topUp(); if (OfflineStore.queued(this) > 0) OfflineService.start(this); web.onResume(); skipLock = false; if (!locked) secure(false);
         showUpdateBar();
