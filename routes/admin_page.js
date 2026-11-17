@@ -2,6 +2,7 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { FLW_WINDOW, KIND_META, LEVELS, PRICE_KOBO, PRICE_NGN, ROLES, ROLE_LABEL, SCOPE_RANK, adminish, atLink, can, canPromote, db, departmentCheckboxes, deptListOf, esc, facultyOf, isCentral, layout, mayManageNews, optionsMap, presenceDot, semesterField } = ctx;
+  const P = require('../lib/prices')(db);
   app.get('/admin', adminish, (req, res) => {
     const me = req.user, central_ = isCentral(me);
     const cp = can.pages(me), ck = can.allKinds(me), cn = can.news(me), cs = can.support(me), cf = can.full(me);
@@ -18,7 +19,7 @@ module.exports = function register(app, ctx) {
     const paymentsSection = cf ? (() => {
       const claims = db.prepare("SELECT p.*, u.name un, u.email ue, pg.title pt, pg.slug ps, pg.price_kobo FROM purchases p JOIN users u ON u.id=p.user_id JOIN pages pg ON pg.id=p.page_id WHERE p.status='pending' ORDER BY p.id DESC").all();
       if (!claims.length) return '';
-      return `<h3 id="payments">Payment claims waiting for you (${claims.length})</h3>${claims.map(c => `<div class="card row"><div><b>${esc(c.un)}</b> <span class="mut">${esc(c.ue)}</span><br><span class="mut">₦${((c.price_kobo || PRICE_KOBO) / 100).toFixed(0)} for "${esc(c.pt)}"</span></div>
+      return `<h3 id="payments">Payment claims waiting for you (${claims.length})</h3>${claims.map(c => `<div class="card row"><div><b>${esc(c.un)}</b> <span class="mut">${esc(c.ue)}</span><br><span class="mut">₦${((c.price_kobo || P.defKobo(c.kind)) / 100).toFixed(0)} for "${esc(c.pt)}"</span></div>
 <div class="row" style="gap:6px"><form method="post" action="/admin/payments/${c.id}/approve"><button>Approve</button></form><form method="post" action="/admin/payments/${c.id}/reject" onsubmit="return confirm('Reject this payment claim?')"><button class="link">Reject</button></form></div></div>`).join('')}`;
     })() : '';
     const sponsorsSection = cf ? require('../lib/sponsor_admin')({ db, esc }) : '';
@@ -124,7 +125,7 @@ ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeh
 <label class="hint" style="display:block;margin-top:8px">Who is this for?</label>
 <details><summary>Which departments? (leave all unchecked for every department)</summary>${departmentCheckboxes([])}</details>
 <select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
-${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${PRICE_NGN})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
+${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${P.cbt()})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
 ${semesterField('')}
 <button>Upload</button></form>
 ${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video',isImg=k.value==='image';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';fi.required=!isVideo;fi.accept=isVideo?'video/*':isImg?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
@@ -134,7 +135,7 @@ ${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEven
       if (!pages.length) return '<p class="mut">No pages yet.</p>';
       const pageCard = p => {
         const [pIcon, pLabel] = KIND_META[p.kind] || KIND_META.html;
-        const status = p.paid ? `₦${((p.price_kobo || PRICE_KOBO) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
+        const status = p.paid ? `₦${((p.price_kobo || P.defKobo(p.kind)) / 100).toFixed(0)} to view` : (p.members_only ? 'Members only' : 'Open');
         const replaceCtrl = p.kind === 'video'
           ? (ck ? `<form method="post" action="/admin/pages/${p.id}/video" class="row"><input name="video_url" placeholder="New YouTube URL" style="width:auto"><button>Update link</button></form><form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" accept="video/*" required style="width:auto"><button>Upload another video</button></form>` : '')
           : (p.kind === 'html' || ck ? `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="row"><input type="file" name="file" required style="width:auto"><button>Replace file</button></form>` : '');
@@ -143,6 +144,7 @@ ${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEven
         return `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${pIcon} ${esc(p.title)}</a><span class="mut">/p/${p.slug} &middot; ${pLabel} &middot; ${status}</span></div>
 <p class="mut" style="margin:6px 0 0">For: ${forWho} &middot; <a href="/admin/pages/${p.id}/sort">Change</a></p>
 <div class="row" style="margin-top:10px">
+<a href="/admin/pages/${p.id}/edit" class="link" style="align-self:center">Edit</a>
 <form method="post" action="/admin/pages/${p.id}/toggle"><button class="link">${p.members_only ? '🔒 Members only — make open' : 'Open — make members only'}</button></form>
 ${replaceCtrl}
 <form method="post" action="/admin/pages/${p.id}/delete" onsubmit="return confirm('Delete this page?')"><button class="link">Delete</button></form></div></div>`;
@@ -167,7 +169,7 @@ ${replaceCtrl}
     if (T && T[0]) return res.send(layout('Admin', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>${esc(T[2])}</h1>${msgHtml}${T[4] || '<p class="mut">Nothing is waiting here right now.</p>'}`, req.user));
     const tiles = Object.entries(TABS).filter(([, t]) => t[0]).map(([k, t]) => tile('/admin?tab=' + k, t[1], t[2], t[3], t[5]))
       .concat(canPromote(me) ? [tile('/admin/levels', '🪜', 'Levels', 'Move students up a level', 0)] : [])
-      .concat(central_ ? [tile('/admin/bot', '🤖', 'Study bot', 'Download uploads for Claude and bring its work back', 0), tile('/admin/checks', '🔌', 'Connection checks', 'Notifications and the Firebase key: is everything working?', 0), tile('/admin/team', '🧑‍💼', 'Admin team', 'Appoint admins by @username', 0), tile('/admin/structure', '🏛️', 'Site structure', 'Faculties, departments, institutions, courses', 0), tile('/admin/maintenance', '📣', 'Site notices', 'Tell everyone about an upgrade', 0), tile('/lecturer/admin?tab=admins', '🏫', 'University admins', 'Invite admins for one university by email', 0)] : []);
+      .concat(central_ ? [tile('/admin/prices', '💰', 'Prices', 'Change what adverts, CBT and materials cost', 0), tile('/admin/bot', '🤖', 'Study bot', 'Download uploads for Claude and bring its work back', 0), tile('/admin/checks', '🔌', 'Connection checks', 'Notifications and the Firebase key: is everything working?', 0), tile('/admin/team', '🧑‍💼', 'Admin team', 'Appoint admins by @username', 0), tile('/admin/structure', '🏛️', 'Site structure', 'Faculties, departments, institutions, courses', 0), tile('/admin/maintenance', '📣', 'Site notices', 'Tell everyone about an upgrade', 0), tile('/lecturer/admin?tab=admins', '🏫', 'University admins', 'Invite admins for one university by email', 0)] : []);
     res.send(layout('Admin', `<h1>Admin</h1><p class="mut" style="margin-top:0">${central_ ? 'Central admin' : esc(ROLE_LABEL[me.role] || 'Admin')}</p>${msgHtml}<div class="grid">${tiles.join('')}</div>
 <script>(function(){var h=location.hash.slice(1),m={upload:'pages',pages:'pages',news:'news','pending-news':'news',positions:'positions','verify-queue':'positions',lecturers:'lecturers',payments:'payments',sponsors:'payments',users:'users'};if(h&&m[h]&&location.search.indexOf('tab=')<0)location.replace('/admin?tab='+m[h]+'#'+h);else if(h==='levels')location.replace('/admin/levels')})()</script>`, req.user));
   });

@@ -407,7 +407,7 @@ async function pushTo(sub, payload) {
 // News, uploads, verifications, payments and the like also go to the person's email (chat messages and calls do not).
 // Sent one at a time, with a daily ceiling (MAIL_ALERTS_PER_DAY, default 80) so the email provider's free limit is never
 // burned through; sign-up links and reset codes are sent separately and are never held back by this.
-const MAIL_ALERT_TAGS = new Set(['news', 'upload', 'news-review', 'friend-request', 'friend-accept', 'position', 'lecturer', 'payment', 'sponsor', 'level']);
+const MAIL_ALERT_TAGS = new Set(['news', 'upload', 'news-review', 'friend-request', 'friend-accept', 'position', 'lecturer', 'payment', 'sponsor', 'flw', 'level']);
 // Every alert email carries a link that opens a small page (no sign-in) where the person can switch these emails off, and on again.
 // Verification codes, password resets and site notices are never affected. The link is signed, so nobody can change another person's choice.
 function mailKey() { let k = getSecret('mail_pref_key'); if (!k) { k = crypto.randomBytes(24).toString('hex'); setSecret('mail_pref_key', k); } return k; }
@@ -2404,8 +2404,8 @@ require('./routes/backup')(app, { db, esc, inApp, layout });
 require('./routes/pages_view')(app, { canViewPage, db, esc, inApp, layout, offBarHtml, paywallBody, pdfViewerHtml, preparePage, sortedFor, videoMimeOf, get FLW_WINDOW() { return FLW_WINDOW; }, get flwSettle() { return flwSettle; }, get isWideScreen() { return isWideScreen; } });
 
 // ---------- Payments (Flutterwave) and sponsor posts (now in routes/payments.js) ----------
-const { FLW_WINDOW, flwCheckout, flwSettle } = require('./routes/payments')(app, { FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver, get back() { return back; } });
-require('./routes/sponsor')(app, { FLW_ON, FLW_WINDOW, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, deliver, esc, flwCheckout, flwSettle, fullAdminIds, layout, limited, notify, get back() { return back; } });
+const { FLW_WINDOW, flwCheckout, flwSettle } = require('./routes/payments')(app, { ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver, get back() { return back; } });
+require('./routes/sponsor')(app, { ADMIN_EMAIL, FLW_ON, FLW_WINDOW, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, deliver, esc, flwCheckout, flwSettle, fullAdminIds, layout, limited, notify, get back() { return back; } });
 
 // ---------- Sign-up pages (students and lecturers) and the lecturer portal (now in routes/signup.js) ----------
 require('./routes/signup')(app, { GOOGLE_ON, authForm, bcrypt, checkEmailPage, db, esc, insertUser, layout, limited, sendSafely, weakPw, get isLaptop() { return isLaptop; }, get linkPage() { return linkPage; } });
@@ -2436,14 +2436,14 @@ const back = msg => '/admin?' + (adminTab ? 'tab=' + adminTab + '&' : '') + 'msg
 // Kept plain: just the title, what it is, the level and which semester's course it is. A paid item shows a single "Pay" sign
 // until the student has paid; after that it looks exactly like the others.
 // ---------- The member dashboard and changing your display name (now in routes/dashboard.js) ----------
-require('./routes/dashboard')(app, { KIND_META, ROLE_LABEL, SEM, can, db, esc, hasPurchased, isCentral, layout, sortedFor });
+require('./routes/dashboard')(app, { KIND_META, ROLE_LABEL, SEM, can, db, esc, hasPurchased, inApp, isCentral, layout, sortedFor });
 
 // ---------- The Admin page (now in routes/admin_page.js) ----------
 require('./routes/admin_page')(app, { FLW_WINDOW, KIND_META, LEVELS, PRICE_KOBO, PRICE_NGN, ROLES, ROLE_LABEL, SCOPE_RANK, adminish, atLink, can, canPromote, db, departmentCheckboxes, deptListOf, esc, facultyOf, isCentral, layout, mayManageNews, optionsMap, presenceDot, semesterField, get ADMIN_EMAIL() { return ADMIN_EMAIL; } });
 
 // Reads the "who is this for?" choices: a department (or all) and a level (or all, or detected from the course code).
 // ---------- Admin: upload a page or file, and reorder pages (now in routes/admin_upload.js) ----------
-require('./routes/admin_upload')(app, { LEVELS, NOT_YOURS, PRICE_KOBO, announceUpload, applySemester, back, can, db, departmentCheckboxes, deptListOf, esc, isImageUpload, layout, ownsAdminPage, pagesAdmin, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId });
+require('./routes/admin_upload')(app, { isCentral, LEVELS, NOT_YOURS, PRICE_KOBO, announceUpload, applySemester, back, can, db, departmentCheckboxes, deptListOf, esc, isImageUpload, layout, ownsAdminPage, pagesAdmin, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId });
 // Positions and departments (full admin).
 // Whether `verifier` (already verified, with delegated verification power) may act on `claimant`'s pending claim.
 // A president (or class rep) verifying someone within their own scope -- open to anyone with that delegated

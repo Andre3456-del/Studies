@@ -2,6 +2,7 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { ADSENSE_CLIENT, ADSENSE_FEED_SLOT, SPONSOR_PRICE_NGN, canSeeNewsItem, db, esc, feedAdCard, layout, linkify, newsReachFor, notify, timeAgo, upload } = ctx;
+  const P = require('../lib/prices')(db);
   require('./news_social')(app, ctx); // likes, comments, saves (registered first so /news/saved is not read as a news id)
   const NA = require('../lib/news_actions');
   function newsFeedBody(req, home = false) {
@@ -15,7 +16,7 @@ module.exports = function register(app, ctx) {
     const empty = '<p class="mut">No news yet. Check back soon.</p>';
     if (home) {
       // The public home page: anyone may advertise here, no account needed; live sponsored posts show first.
-      const advertise = `<p style="margin:0 0 14px"><a class="btn" href="/sponsor" style="display:block;text-align:center">Advertise your product &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month</a></p>`;
+      const advertise = `<p style="margin:0 0 14px"><a class="btn" href="/sponsor" style="display:block;text-align:center">Advertise your product &middot; ₦${P.sponsor().toLocaleString()}/month</a></p>`;
       const feed = ADSENSE_FEED_SLOT && cardList.length ? cardList.flatMap((c, i) => i === 0 || i % 4 === 3 ? [c, feedAdCard()] : [c]).join('') : (cards || empty);
       return advertise + require('../lib/sponsor_cards')({ db, esc, linkify, user: req.user }) + feed;
     }
@@ -32,7 +33,7 @@ module.exports = function register(app, ctx) {
       return `<h3>Waiting for your approval (${waiting.length})</h3>${waiting.map(n => `<div class="card"><b>${esc(n.author)}</b> wrote: <b>${esc(n.title)}</b><p class="mut">${esc(n.body.slice(0, 200))}${n.body.length > 200 ? '…' : ''}</p><div class="row" style="gap:6px"><form method="post" action="/news/${n.id}/approver-approve"><button>Approve</button></form><form method="post" action="/news/${n.id}/approver-reject"><button class="link">Reject</button></form></div></div>`).join('')}`;
     })() : '';
     const savedLink = req.user ? '<div class="chat-tools"><a class="ct" href="/news/saved" aria-label="Saved posts"><svg class="ic" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></a></div>' : '';
-    const sponsorLink = savedLink + `<p class="adbar"><a href="/sponsor">&#128226; Advertise here &middot; ₦${SPONSOR_PRICE_NGN.toLocaleString()}/month &rarr;</a></p>`;
+    const sponsorLink = savedLink + `<p class="adbar"><a href="/sponsor">&#128226; Advertise here &middot; ₦${P.sponsor().toLocaleString()}/month &rarr;</a></p>`;
     return `${adScript}<h1>News</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}${approverQueue}${submitForm}${sponsorLink}${sponsorCards}${cards || empty}`;
   }
   app.get('/news', (req, res) => res.send(layout('News', newsFeedBody(req), req.user)));

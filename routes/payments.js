@@ -1,7 +1,10 @@
 // Payments (Flutterwave) and sponsor posts
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
-  const { FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver } = ctx;
+  const { ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver } = ctx;
+  const P = require('../lib/prices')(db);
+  // Money alerts go to the owner only, never to other admins.
+  const ownerIds = () => db.prepare('SELECT id FROM users WHERE lower(email)=lower(?)').all(String(ADMIN_EMAIL || '')).map(r => r.id);
   app.post('/pay/verify', async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Log in first.' });
     const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.body.slug);
@@ -16,7 +19,7 @@ module.exports = function register(app, ctx) {
     const data = await verifyFlutterwave(transactionId);
     if (!data) return res.status(400).json({ error: 'Payment could not be verified.' });
     if (data.tx_ref && !String(data.tx_ref).startsWith(`cbt_${req.user.id}_${page.id}_`)) return res.status(400).json({ error: 'That payment was made for something else.' }); // a real payment for another item/user can't be reused here
-    const expectedNgn = (page.price_kobo || PRICE_KOBO) / 100;
+    const expectedNgn = (page.price_kobo || P.defKobo(page.kind)) / 100;
     if (data.currency !== 'NGN' || Number(data.amount) < expectedNgn) return res.status(400).json({ error: 'The amount paid does not match the price.' });
     const existing = db.prepare('SELECT id FROM purchases WHERE user_id=? AND page_id=?').get(req.user.id, page.id);
     if (existing) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(String(transactionId), Math.round(data.amount * 100), existing.id);
@@ -39,7 +42,7 @@ module.exports = function register(app, ctx) {
     if (uid && !db.prepare('SELECT 1 FROM users WHERE id=?').get(uid)) return null; // uid 0 is a visitor advertising without an account
     let kobo;
     if (m[1] === 'sponsor') { const sp = db.prepare("SELECT amount_kobo FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(item, uid); if (!sp) return null; kobo = sp.amount_kobo; }
-    else { const pg = db.prepare('SELECT price_kobo FROM pages WHERE id=? AND paid=1').get(item); if (!pg) return null; kobo = pg.price_kobo || PRICE_KOBO; }
+    else { const pg = db.prepare('SELECT price_kobo FROM pages WHERE id=? AND paid=1').get(item); if (!pg) return null; kobo = pg.price_kobo || P.defKobo(); }
     db.prepare('INSERT OR IGNORE INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, uid, m[1], item, kobo, Date.now());
     return db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(txRef);
   }
@@ -89,7 +92,7 @@ module.exports = function register(app, ctx) {
       db.prepare("UPDATE flw_payments SET status='paid', transaction_id=? WHERE tx_ref=?").run(tid, row.tx_ref);
       try {
         const who = (row.user_id ? (db.prepare('SELECT name FROM users WHERE id=?').get(row.user_id) || {}).name : (db.prepare('SELECT guest_name FROM sponsor_posts WHERE id=?').get(row.item_id) || {}).guest_name) || 'Someone';
-        notify(fullAdminIds(), { title: 'Payment verified via Flutterwave', body: `${who} paid ₦${(row.amount_kobo / 100).toLocaleString()} for ${row.kind === 'sponsor' ? 'a sponsor post' : 'a locked page'}`, url: '/admin?tab=payments', tag: 'flw' });
+        notify(ownerIds(), { title: 'Payment verified via Flutterwave', body: `${who} paid ₦${(row.amount_kobo / 100).toLocaleString()} for ${row.kind === 'sponsor' ? 'a sponsor post' : 'a locked page'}`, url: '/admin?tab=payments', tag: 'flw' });
       } catch (e) { }
       return { ok: true, row: Object.assign({}, row, { status: 'paid' }) };
     } catch (e) { console.error('Flutterwave settle failed:', e.message); return { ok: false, row }; }
@@ -109,7 +112,7 @@ module.exports = function register(app, ctx) {
       const j = await r.json();
       if (j && j.status === 'success' && j.data && j.data.link) {
         db.prepare('INSERT INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, payer.id, o.kind, o.item, o.kobo, Date.now());
-        notify(fullAdminIds(), { title: 'Payment started via Flutterwave', body: `${payer.name} is paying ₦${(o.kobo / 100).toLocaleString()} for ${o.desc}`, url: '/admin?tab=payments', tag: 'flw' });
+        notify(ownerIds(), { title: 'Payment started via Flutterwave', body: `${payer.name} is paying ₦${(o.kobo / 100).toLocaleString()} for ${o.desc}`, url: '/admin?tab=payments', tag: 'flw' });
         return res.redirect(j.data.link);
       }
       console.error('Flutterwave did not give a payment link:', JSON.stringify(j).slice(0, 300));
@@ -121,7 +124,7 @@ module.exports = function register(app, ctx) {
     const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(String(req.body.slug || ''));
     if (!page || !page.paid || !sortedFor(page, req.user)) return res.redirect('/');
     if (hasPurchased(req.user.id, page.id)) return res.redirect('/p/' + page.slug);
-    await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: page.price_kobo || PRICE_KOBO, desc: page.title, back: '/p/' + page.slug });
+    await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: page.price_kobo || P.defKobo(page.kind), desc: page.title, back: '/p/' + page.slug });
   });
   // Where Flutterwave sends the person back to after paying (or cancelling): a short page that asks Flutterwave, shows a tick or a cross, then goes on.
   const flwPage = (req, inner) => layout('Payment', `<div style="max-width:460px;margin:50px auto;padding:0 16px;text-align:center"><div class="card" style="padding:30px 22px">${inner}</div></div>`, req.user);

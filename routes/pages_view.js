@@ -11,13 +11,14 @@ module.exports = function register(app, ctx) {
     if (!req.user) return res.redirect('/login?next=/saved');
     // Saved offline belongs to the app only; the website never shows it.
     if (!inApp(req)) return res.redirect('/settings');
-    res.send(layout('Saved offline', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Saved offline</h1>
+    res.send(layout('Saved', `<p class="mut"><a href="/dashboard">&larr; Home</a></p><h1>Saved</h1>
 <p class="mut">Saved materials live inside the Studies Hub app only, like downloads in a video app. You can open them with no internet, but you cannot take them out of the app. Saving runs in the background, so you can leave this page or the app.</p>
+<h3>Saved materials</h3>
+<div id="savedList"><p class="mut">Loading&hellip;</p></div>
 <div class="card"><label class="swrow"><span><b>Save all materials</b><br><span class="mut" id="autoInfo" style="font-size:13px"></span></span><input type="checkbox" role="switch" class="shsw" id="autoSw" aria-label="Save all materials"></label></div>
 <div class="card"><label class="swrow"><span><b>Download on Wi-Fi only</b><br><span class="mut" id="wifiInfo" style="font-size:13px"></span></span><input type="checkbox" role="switch" class="shsw" id="wifiSw" aria-label="Wi-Fi only"></label><p class="mut" id="useInfo" style="margin:10px 0 0;font-size:13px"></p></div>
 <div id="pick"><h3>Or choose what to save</h3><p class="mut" id="bulkInfo">Looking for materials&hellip;</p><div id="bulkList"></div></div>
-<h3>On this phone</h3>
-<div id="savedList"><p class="mut">Loading&hellip;</p></div>
+
 <script>(function(){var A=window.StudiesApp,box=document.getElementById('savedList'),info=document.getElementById('bulkInfo'),bl=document.getElementById('bulkList'),sw=document.getElementById('autoSw'),ai=document.getElementById('autoInfo');
 if(!A||!A.offList){box.innerHTML='<p class="mut">This is only available in the Studies Hub app.</p>';document.getElementById('pick').hidden=true;sw.disabled=true;return}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}

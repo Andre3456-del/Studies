@@ -5,6 +5,7 @@ module.exports = function register(app, ctx) {
   require('./chat_theme')(app, ctx);
   const wantsApp = req => !inApp(req) && ctx.deviceOf(req) !== 'laptop';
   const SETTINGS_PAGES = [
+    ['/settings/appearance', '🎨', 'Appearance', 'Light, dark or your device default'],
     ['/settings/profile', '👤', 'Profile', 'Your picture, name, and details'],
     ['/settings/active-status', '🟢', 'Active status', 'Whether others see when you\u2019re online'],
     ['/settings/chat', '🖼️', 'Chat', 'Your chat background'],
@@ -29,9 +30,7 @@ module.exports = function register(app, ctx) {
     res.set({ 'Cache-Control': 'no-store', Vary: 'User-Agent' });
     const links = SETTINGS_PAGES.filter(x => (x[0] !== '/settings/devices' || ctx.canLinkOthers(req)) && (x[0] !== '/app' || wantsApp(req)) && ((x[0] !== '/saved' && x[0] !== '/settings/backup') || inApp(req))).concat(canPromote(req.user) ? [['/admin/levels', '🎓', 'Level promotion', 'Move students up to the next level']] : [], canLecturerAdmin(req.user) && req.user.role !== 'uniadmin' ? [['/lecturer/admin', '🔁', 'Switch to lecturer portal', 'Manage lecturers, courses and uploads, then switch back']] : [], req.user.lp_inst && req.user.role !== 'uniadmin' ? [['/uni', '🏫', 'University admin', 'Students and levels for ' + req.user.lp_inst]] : [], uniToolRows(req.user)).map(([href, icon, label, sub]) => `<a class="srow" href="${href}"><div><b>${esc(label)}</b><span>${esc(sub)}</span></div><i>&rsaquo;</i></a>`).join('');
     const t0 = (db.prepare('SELECT theme FROM users WHERE id=?').get(req.user.id) || {}).theme, cur = t0 === 'light' ? 'light' : t0 === 'auto' ? 'auto' : 'dark';
-    const ap = `<h2 class="sset">Appearance</h2><div class="apc" id="apc">${[['light', 'Light', 'Bright background'], ['dark', 'Dark', 'Easier on the eyes at night'], ['auto', 'Device default', 'Match your phone or computer']].map(([v, t, d]) => `<label class="${cur === v ? 'on' : ''}"><input type="radio" name="theme" value="${v}"${cur === v ? ' checked' : ''}><i></i><span><b>${t}</b><span>${d}</span></span></label>`).join('')}</div>
-<script>(function(){var h=document.documentElement,m=matchMedia('(prefers-color-scheme: light)');document.getElementById('apc').onchange=function(e){var v=e.target.value;[].forEach.call(this.children,function(l){l.className=l.firstChild.checked?'on':''});if(v==='auto'){h.setAttribute('data-auto','1');h.setAttribute('data-theme',m.matches?'light':'dark')}else{h.removeAttribute('data-auto');h.setAttribute('data-theme',v)}fetch('/settings/appearance',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'theme='+v})}})()</script>`;
-    res.send(layout('Settings', `<h1>Settings</h1>${ap}<div class="srows">${links}</div><form method="post" action="/logout" id="soForm"><button type="button" class="signout" id="soBtn">Sign out</button></form>
+    res.send(layout('Settings', `<h1>Settings</h1><div class="srows">${links}</div><form method="post" action="/logout" id="soForm"><button type="button" class="signout" id="soBtn">Sign out</button></form>
 <div id="soAsk" hidden style="position:fixed;inset:0;z-index:99;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:24px"><div class="card" style="max-width:340px;width:100%;margin:0;text-align:center"><h2 style="margin:0 0 6px">Sign out?</h2><p class="mut" style="margin:0 0 16px">You will need to log in again to use Studies Hub.</p><div style="display:flex;gap:10px"><button type="button" id="soNo" class="ghost" style="flex:1">No, stay</button><button type="button" id="soYes" style="flex:1;background:#e5393b;color:#fff">Yes, sign out</button></div></div></div>
 <script>(function(){var a=document.getElementById('soAsk');function show(v){a.style.display=v?'flex':'none'}document.getElementById('soBtn').onclick=function(){show(1)};document.getElementById('soNo').onclick=function(){show(0)};a.onclick=function(e){if(e.target===a)show(0)};document.getElementById('soYes').onclick=function(){document.getElementById('soForm').submit()}})()</script>`, req.user));
   });
@@ -90,10 +89,10 @@ module.exports = function register(app, ctx) {
   });
   app.get('/settings/appearance', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/settings/appearance');
-    const theme = db.prepare('SELECT theme FROM users WHERE id=?').get(req.user.id).theme || 'dark';
-    res.send(layout('Appearance', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Appearance</h1>
-<form method="post" action="/settings/appearance" class="card" id="apForm"><input type="hidden" name="theme" id="apTheme" value="${theme}"><label class="swrow"><span><b>Dark mode</b><br><span class="mut" style="font-size:13px">${theme === 'dark' ? 'On. Switch it off for light mode.' : 'Off. The site is in light mode.'}</span></span><input type="checkbox" role="switch" class="shsw" id="apSw" aria-label="Dark mode"${theme === 'dark' ? ' checked' : ''}></label></form>
-<script>document.getElementById('apSw').onchange=function(){document.getElementById('apTheme').value=this.checked?'dark':'light';document.getElementById('apForm').submit()}</script>`, req.user));
+    const t0 = (db.prepare('SELECT theme FROM users WHERE id=?').get(req.user.id) || {}).theme, cur = t0 === 'light' ? 'light' : t0 === 'auto' ? 'auto' : 'dark';
+    const ap = `<div class="apc" id="apc">${[['light', 'Light', 'Bright background'], ['dark', 'Dark', 'Easier on the eyes at night'], ['auto', 'Device default', 'Match your phone or computer']].map(([v, t, d]) => `<label class="${cur === v ? 'on' : ''}"><input type="radio" name="theme" value="${v}"${cur === v ? ' checked' : ''}><i></i><span><b>${t}</b><span>${d}</span></span></label>`).join('')}</div>
+<script>(function(){var h=document.documentElement,m=matchMedia('(prefers-color-scheme: light)');document.getElementById('apc').onchange=function(e){var v=e.target.value;[].forEach.call(this.children,function(l){l.className=l.firstChild.checked?'on':''});if(v==='auto'){h.setAttribute('data-auto','1');h.setAttribute('data-theme',m.matches?'light':'dark')}else{h.removeAttribute('data-auto');h.setAttribute('data-theme',v)}fetch('/settings/appearance',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'theme='+v})}})()</script>`;
+    res.send(layout('Appearance', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Appearance</h1>${ap}`, req.user));
   });
   app.post('/settings/appearance', (req, res) => {
     if (!req.user) return res.sendStatus(401);

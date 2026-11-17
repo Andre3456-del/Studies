@@ -3,7 +3,10 @@
 // submit it and emailed to them. Payment goes through the same Flutterwave checkout as everything else (routes/payments.js).
 const multer = require('multer');
 module.exports = function register(app, ctx) {
-  const { FLW_ON, FLW_WINDOW, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, deliver, esc, flwCheckout, flwSettle, fullAdminIds, layout, limited, notify } = ctx;
+  const { ADMIN_EMAIL, FLW_ON, FLW_WINDOW, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, deliver, esc, flwCheckout, flwSettle, fullAdminIds, layout, limited, notify } = ctx;
+  const P = require('../lib/prices')(db);
+  // Money alerts go to the owner only, never to other admins.
+  const ownerIds = () => db.prepare('SELECT id FROM users WHERE lower(email)=lower(?)').all(String(ADMIN_EMAIL || '')).map(r => r.id);
   for (const [col, def] of [['guest_name', 'TEXT'], ['guest_email', 'TEXT'], ['guest_key', 'TEXT'], ['media_data', 'BLOB'], ['media_mime', 'TEXT'], ['media_kind', 'TEXT']]) {
     if (!db.prepare('PRAGMA table_info(sponsor_posts)').all().some(c => c.name === col)) db.exec(`ALTER TABLE sponsor_posts ADD COLUMN ${col} ${def}`);
   }
@@ -36,7 +39,7 @@ module.exports = function register(app, ctx) {
   function createForm(req, v = {}, err = '') {
     const guest = !req.user;
     return layout('Advertise on Studies Hub', `<p class="mut"><a href="${guest ? '/' : '/news'}">&larr; Back</a></p><h1>Advertise your product</h1>
-<p class="mut">₦${SPONSOR_PRICE_NGN.toLocaleString()} per month.</p>
+<p class="mut">₦${P.sponsor().toLocaleString()} per month.</p>
 ${err ? `<p class="err">${esc(err)}</p>` : ''}
 <form class="card" method="post" action="/sponsor" enctype="multipart/form-data">
 ${guest ? `<input name="guest_name" placeholder="Your name or business name" required maxlength="80" value="${esc(v.guest_name || '')}"><input name="guest_email" type="email" placeholder="Your email (we send your private link here)" required maxlength="120" value="${esc(v.guest_email || '')}">` : ''}
@@ -50,7 +53,7 @@ ${area('body', v.body, 'Describe it')}
 <button id="sponsorGo">Continue to payment</button><p class="mut" id="sponsorWait" style="display:none;margin:8px 0 0">Uploading… please wait, big videos take a little while.</p>
 </form>
 <script>(function(){
-  var sd=document.getElementById('sponsorStart'),ed=document.getElementById('sponsorEnd'),bp=document.getElementById('sponsorBill'),rate=${SPONSOR_PRICE_NGN};
+  var sd=document.getElementById('sponsorStart'),ed=document.getElementById('sponsorEnd'),bp=document.getElementById('sponsorBill'),rate=${P.sponsor()};
   var today=new Date();today.setHours(0,0,0,0);var todayStr=today.toISOString().slice(0,10);
   sd.min=todayStr;
   function sync(){
@@ -81,12 +84,12 @@ ${area('body', v.body, 'Describe it')}
     if (isNaN(startDate) || isNaN(endDate) || startDate < todayMid || endDate <= startDate) return bad('Please pick a start date from today and an end date after it.');
     const days = Math.round((endDate - startDate) / 86400000);
     if (days < 1 || days > 366) return bad('An advert can run for up to a year.');
-    const amountKobo = Math.round(Math.ceil((days / 30) * SPONSOR_PRICE_NGN) * 100);
+    const amountKobo = Math.round(Math.ceil((days / 30) * P.sponsor()) * 100);
     const key = req.user ? null : crypto.randomBytes(16).toString('hex');
     const info = db.prepare("INSERT INTO sponsor_posts(user_id,title,body,contact,media_data,media_mime,media_kind,reference,amount_kobo,duration_days,status,guest_name,guest_email,guest_key) VALUES(?,?,?,?,?,?,?,?,?,?,'pending_payment',?,?,?)")
       .run(req.user ? req.user.id : 0, v.title, v.body, v.contact, req.file ? req.file.buffer : null, req.file ? req.file.mimetype : null, f.kind || null, `sponsor_${req.user ? req.user.id : 0}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`, amountKobo, days, req.user ? null : v.guest_name, req.user ? null : v.guest_email, key);
     const s = db.prepare('SELECT * FROM sponsor_posts WHERE id=?').get(info.lastInsertRowid);
-    notify(fullAdminIds(), { title: 'Sponsor post payment claim', body: `${req.user ? req.user.name : v.guest_name + ' (visitor)'} wants to advertise "${v.title}" for ${days} days`, url: '/admin#sponsors', tag: 'sponsor' });
+    notify(ownerIds(), { title: 'Sponsor post payment claim', body: `${req.user ? req.user.name : v.guest_name + ' (visitor)'} wants to advertise "${v.title}" for ${days} days`, url: '/admin#sponsors', tag: 'sponsor' });
     tellGuest(s, 'Your Studies Hub advert', `Your advert "${s.title}" is saved. Pay to put it live, or come back to edit it, at:\n${baseUrl(req)}${baseOf(s)}\nKeep this link private: it is how you manage your advert.`);
     res.redirect(baseOf(s));
   });

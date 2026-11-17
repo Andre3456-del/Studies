@@ -1,7 +1,7 @@
 // The member dashboard and changing your display name
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
-  const { KIND_META, ROLE_LABEL, SEM, can, db, esc, hasPurchased, isCentral, layout, sortedFor } = ctx;
+  const { KIND_META, ROLE_LABEL, SEM, can, db, esc, hasPurchased, inApp, isCentral, layout, sortedFor } = ctx;
   const semLabel = p => p.semester ? SEM.semesterName(p.semester) : '';
   function previewTile(p, needsPay) {
     const [icon, label] = KIND_META[p.kind] || KIND_META.html;
@@ -53,8 +53,8 @@ ${others.length ? `<details class="folder"><summary><span class="fic">&#128193;<
 ${locked.length ? `<div class="box"><h2>Locked &mdash; pay to view <span class="count">${locked.length}</span></h2><p class="hint">Pay once and it moves up into Available.</p>${grid(locked)}</div>` : ''}`;
     return `${req.query.welcome ? '<p class="pill" style="margin:10px 0 0">You are all set. Here is everything meant for you.</p>' : ''}<div class="dash-hero"><div class="cover"></div><div class="prof">${u.avatar_mime ? `<img src="/avatar/${u.id}" class="prof-av" alt="">` : `<span class="avatar prof-av">${initial}</span>`}<div class="prof-tx"><h1>${esc(u.name)}</h1><p class="mut">${u.username ? `@${esc(u.username)}` : ''}${forYou ? ` &middot; ${esc(forYou)}` : ''}</p></div></div>
 <p class="prof-pills">${pill}${posPill} <span class="pill">${esc(SEM.semesterName(SEM.getCurrent(db)))}</span></p>
-<div class="stats"><a href="/chat"><b>${friendsN}</b><span>Studikins</span></a><a href="/news/saved"><b>${savedN}</b><span>Saved</span></a><a href="/materials"><b>${coursesN}</b><span>Courses</span></a></div>
-<div class="tiles"><a class="tile" href="/materials"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M18 19v2H6"/></svg></span>Materials</a><a class="tile" href="/materials?kind=cbt"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m9 9 2 2 4-4M9 16h6"/></svg></span>CBT tests</a><a class="tile" href="/materials?kind=video"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/></svg></span>Videos</a><a class="tile" href="/news/saved"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></span>Saved</a></div></div>`;
+<div class="stats"><a href="/chat"><b>${friendsN}</b><span>Studikins</span></a><a href="${inApp(req) ? '/saved' : '/news/saved'}"><b id="savedN">${inApp(req) ? 0 : savedN}</b><span>Saved</span></a><a href="/materials"><b>${coursesN}</b><span>Courses</span></a></div>
+<div class="tiles"><a class="tile" href="/materials"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z"/><path d="M18 19v2H6"/></svg></span>Materials</a><a class="tile" href="/materials?kind=cbt"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m9 9 2 2 4-4M9 16h6"/></svg></span>CBT tests</a><a class="tile" href="/materials?kind=video"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/></svg></span>Videos</a><a class="tile" href="${inApp(req) ? '/saved' : '/news/saved'}"><span class="ci"><svg class="ic" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg></span>Saved</a></div></div>${inApp(req) ? `<script>(function(){try{var A=window.StudiesApp,n=document.getElementById('savedN');if(A&&A.offList&&n)n.textContent=JSON.parse(A.offList()).length}catch(e){}})()</script>` : ''}`;
   }
 
   app.post('/account/name', (req, res) => {

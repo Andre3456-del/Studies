@@ -2,6 +2,7 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { LEVELS, NOT_YOURS, PRICE_KOBO, announceUpload, applySemester, back, can, db, departmentCheckboxes, deptListOf, esc, isImageUpload, layout, ownsAdminPage, pagesAdmin, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId } = ctx;
+  const P = require('../lib/prices')(db);
   app.post('/admin/upload', pagesAdmin, upload.single('file'), (req, res) => {
     const kind = ['html', 'cbt', 'pdf', 'doc', 'video', 'image'].includes(req.body.kind) ? req.body.kind : 'html';
     if (kind !== 'html' && !can.allKinds(req.user)) return res.sendStatus(403);
@@ -16,9 +17,9 @@ module.exports = function register(app, ctx) {
       if (!vid && !vmime) return res.redirect(back('That file is not a video.'));
       const slug = uniqueSlug(slugify(title || (req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'video'))), aud = readAudience(req.body, title);
       if (vid) db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-        .run(slug, title || 'Video', '', membersOnly, 'video', paid, PRICE_KOBO, vid, aud.dept, aud.level, req.user.id);
+        .run(slug, title || 'Video', '', membersOnly, 'video', paid, P.defKobo('video'), vid, aud.dept, aud.level, req.user.id);
       else db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(slug, title || req.file.originalname.replace(/\.[a-z0-9]+$/i, ''), '', membersOnly, 'video', paid, PRICE_KOBO, req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id);
+        .run(slug, title || req.file.originalname.replace(/\.[a-z0-9]+$/i, ''), '', membersOnly, 'video', paid, P.defKobo('video'), req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id);
       applySemester({ slug }, req.body.semester);
       announceUpload({ title: title || 'Video', slug, paid, ...aud });
       return res.redirect(back(`Published at /p/${slug}`));
@@ -29,10 +30,10 @@ module.exports = function register(app, ctx) {
     if (kind === 'image' && !isImageUpload(req.file)) return res.redirect(back('Choose a JPG or PNG picture.'));
     if (kind === 'pdf' || kind === 'doc' || kind === 'image') {
       db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(slug, title || base, '', membersOnly, kind, paid, PRICE_KOBO, req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, req.user.id);
+        .run(slug, title || base, '', membersOnly, kind, paid, P.defKobo(kind), req.file.buffer, req.file.mimetype, req.file.originalname, aud.dept, aud.level, req.user.id);
     } else {
       db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
-        .run(slug, title || base, req.file.buffer.toString('utf8'), membersOnly, kind, paid, PRICE_KOBO, aud.dept, aud.level, req.user.id);
+        .run(slug, title || base, req.file.buffer.toString('utf8'), membersOnly, kind, paid, P.defKobo(kind), aud.dept, aud.level, req.user.id);
     }
     applySemester({ slug }, req.body.semester);
     announceUpload({ title: title || base, slug, paid, ...aud });
@@ -57,4 +58,5 @@ module.exports = function register(app, ctx) {
     if (req.body.semester) applySemester({ id: p.id }, req.body.semester);
     res.redirect(back('Saved who this upload is for.'));
   });
+  require('./admin_edit')(app, ctx);
 };
