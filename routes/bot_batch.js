@@ -106,6 +106,11 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
       if (g.secs.length) upsertCourse('html', g.dest, g.course, g.secs);
       g.ids.forEach(id => { db.prepare('DELETE FROM pages WHERE id=?').run(id); db.prepare('DELETE FROM bot_made WHERE page_id=?').run(id); gone++; });
     }
+    // refresh the course CBT pages made earlier so they get the newest quiz page layout
+    for (const r of db.prepare("SELECT id,title,html,level,course_id FROM pages WHERE kind='cbt' AND title LIKE '%: CBT practice (all lectures)'").all()) {
+      const bank = quiz.readBank(r.html); if (!bank) continue;
+      db.prepare('UPDATE pages SET html=? WHERE id=?').run(quiz.combinedQuiz({ code: r.title.replace(': CBT practice (all lectures)', ''), title: (db.prepare('SELECT name FROM courses WHERE id=?').get(r.course_id) || {}).name || '', level: r.level }, bank), r.id);
+    }
     res.redirect('/admin/bot?msg=' + encodeURIComponent(gone ? `Done: ${gone} small page(s) folded into ${groups.size} course group(s).` : 'Nothing to combine.'));
   });
 
