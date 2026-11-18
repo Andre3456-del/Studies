@@ -12,6 +12,18 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
     ORDER BY COALESCE(c.name,'~'),p.level,p.id`).all();
   const msg = req => req.query.msg ? `<div class="card" style="border-color:var(--blue)">${esc(req.query.msg)}</div>` : '';
   const kb = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  // One CBT page and one summary page per course: every lecture goes into them, and questions are mixed at random when opened.
+  const upsertCourse = (kind, dest, course, add) => {
+    const title = course.code + (kind === 'cbt' ? ': CBT practice (all lectures)' : ': summaries (all lectures)');
+    const ex = db.prepare('SELECT id,html FROM pages WHERE title=? AND kind=? AND course_id IS ? AND dept IS ? AND level IS ?').get(title, kind, dest.course_id, dest.dept, dest.level);
+    let bank = (ex && quiz.readBank(ex.html)) || [];
+    if (kind === 'cbt') { const seen = new Set(bank.map(x => x.q)); add.forEach(x => { if (!seen.has(x.q)) { seen.add(x.q); bank.push(x); } }); }
+    else { bank = bank.filter(s => !add.some(a => a.topic === s.topic)).concat(add); }
+    const html = kind === 'cbt' ? quiz.combinedQuiz(course, bank) : quiz.combinedSummary(course, bank);
+    if (ex) { db.prepare('UPDATE pages SET html=? WHERE id=?').run(html, ex.id); return ex.id; }
+    const id = Number(db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,dept,level,course_id,admin_id) VALUES(?,?,?,?,?,0,?,?,?,?)').run(uniqueSlug(slugify(title)), title, html, 1, kind === 'cbt' ? 'cbt' : 'html', dest.dept, dest.level, dest.course_id, null).lastInsertRowid);
+    db.prepare('INSERT OR IGNORE INTO bot_made(page_id) VALUES(?)').run(id); return id;
+  };
   const ids = v => [].concat(v || []).join(',').split(',').map(x => parseInt(x, 10)).filter(Number.isInteger);
 
   app.get('/admin/bot', admin, (req, res) => {
@@ -19,7 +31,7 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
     rows.forEach(r => (groups[r.course || 'No course set'] = groups[r.course || 'No course set'] || []).push(r));
     const done = db.prepare('SELECT COUNT(*) n FROM bot_handled').get().n, made = db.prepare('SELECT COUNT(*) n FROM bot_made').get().n;
     const list = Object.entries(groups).map(([c, rs]) => `<div class="card"><h3 style="margin:0 0 8px">${esc(c)}</h3>${rs.map(r => `<label class="botrow"><input type="checkbox" name="ids" value="${r.id}"><span><b>${esc(r.title)}</b><br><span class="mut">${esc(r.kind.toUpperCase())} · ${r.level ? esc(r.level) + ' level · ' : ''}${kb(r.size)}</span></span></label>`).join('')}</div>`).join('');
-    res.send(layout('Study bot', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Study bot</h1>${msg(req)}
+    res.send(layout('Study bot', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Study bot</h1>${msg(req)}<form class="card" method="post" action="/admin/bot/combine" onsubmit="return confirm('Fold every one-lecture bot page into one CBT and one summary per course? The small pages are removed.')"><b>Tidy up</b><p class="mut" style="margin:6px 0">Joins all the small one-lecture pages the bot made into one CBT and one summary page for each course.</p><button>Combine into one per course</button></form>
 <style>.botrow{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line);cursor:pointer}.botrow:first-of-type{border-top:0}.botrow input{width:22px;height:22px;margin:2px 0 0;flex:none}.botsteps{counter-reset:s;list-style:none;padding:0;margin:0}.botsteps li{counter-increment:s;display:flex;gap:12px;margin:0 0 12px}.botsteps li:before{content:counter(s);flex:none;width:28px;height:28px;border-radius:50%;background:var(--blue);color:#04122b;font-weight:800;display:flex;align-items:center;justify-content:center}</style>
 <div class="card"><ol class="botsteps"><li><span><b>Download a batch</b><br><span class="mut">Pick the uploads below. You get one zip.</span></span></li><li><span><b>Give the zip to Claude</b><br><span class="mut">Attach it in the chat and say "process the batch".</span></span></li><li><span><b>Bring back what Claude makes</b><br><span class="mut">Upload Claude's zip in the box at the bottom. You check everything before it goes live.</span></span></li></ol></div>
 <form method="get" action="/admin/bot/batch" data-noload><div class="card row" style="gap:10px;flex-wrap:wrap"><b>${rows.length} waiting</b><span class="mut">${done} handled · ${made} pages made by the bot</span><span style="flex:1"></span><button type="button" class="ghost" onclick="document.querySelectorAll('.botrow input').forEach(function(c){c.checked=true})">Select all</button><button>Download batch</button></div>${list || '<div class="card mut">Nothing is waiting. New uploads appear here.</div>'}</form>
@@ -79,6 +91,24 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
     res.send(layout('Check the bot\'s work', `<p class="mut"><a href="/admin/bot">&larr; Study bot</a></p><h1>Check the bot's work</h1><p class="mut">${usable} of ${items.length} item(s) are usable. Untick anything you do not want. Only ticked items are published, as a summary page and a practice test marked as written with the bot.</p><form method="post" action="/admin/bot/approve"><input type="hidden" name="tok" value="${tok}">${items.map(card).join('')}<button>Approve ticked items</button></form>`, req.user));
   });
 
+  // Folds the one-lecture pages made earlier into one CBT and one summary page per course, then removes the old ones.
+  app.post('/admin/bot/combine', admin, (req, res) => {
+    const rows = db.prepare("SELECT p.id,p.kind,p.html,p.dept,p.level,p.course_id FROM pages p JOIN bot_made b ON b.page_id=p.id WHERE p.title LIKE '%(bot-assisted)'").all();
+    const groups = new Map(); let gone = 0;
+    for (const r of rows) {
+      const o = quiz.readOld(r.html); if (!o) continue;
+      const k = [r.course_id, r.dept, r.level, o.code].join('|'); if (!groups.has(k)) groups.set(k, { dest: { course_id: r.course_id, dept: r.dept, level: r.level }, course: { code: o.code, title: o.qs ? ((db.prepare('SELECT name FROM courses WHERE id=?').get(r.course_id) || {}).name || '') : o.title, level: r.level }, qs: [], secs: [], ids: [] });
+      const g = groups.get(k); g.ids.push(r.id); if (!o.qs && o.title) g.course.title = o.title;
+      if (o.qs) g.qs.push(...o.qs); else g.secs.push({ topic: o.topic, lines: o.lines });
+    }
+    for (const g of groups.values()) {
+      if (g.qs.length) upsertCourse('cbt', g.dest, g.course, g.qs);
+      if (g.secs.length) upsertCourse('html', g.dest, g.course, g.secs);
+      g.ids.forEach(id => { db.prepare('DELETE FROM pages WHERE id=?').run(id); db.prepare('DELETE FROM bot_made WHERE page_id=?').run(id); gone++; });
+    }
+    res.redirect('/admin/bot?msg=' + encodeURIComponent(gone ? `Done: ${gone} small page(s) folded into ${groups.size} course group(s).` : 'Nothing to combine.'));
+  });
+
   app.post('/admin/bot/approve', admin, (req, res) => {
     const pv = previews.get(String((req.body || {}).tok || ''));
     if (!pv || pv.uid !== req.user.id || pv.exp < Date.now()) return res.redirect('/admin/bot?msg=' + encodeURIComponent('That check expired. Upload the zip again.'));
@@ -92,10 +122,9 @@ CREATE TABLE IF NOT EXISTS bot_made(page_id INTEGER PRIMARY KEY, at TEXT DEFAULT
       if (!dest) { const cid = parseInt(req.body['course_' + i], 10), lv = parseInt(req.body['level_' + i], 10), dp = String(req.body['dept_' + i] || '');
         if (!db.prepare('SELECT 1 FROM courses WHERE id=?').get(cid) || !(lv >= 100 && lv <= 700) || !db.prepare('SELECT 1 FROM departments WHERE name=?').get(dp)) { bad++; return; }
         dest = { dept: dp, level: lv, course_id: cid }; }
-      const base = `${d.course.code} ${d.topic}`.slice(0, 90);
-      const mk = (title, html, kind) => { const id = ins.run(uniqueSlug(slugify(title)), title, html, 1, kind, dest.dept, dest.level, dest.course_id, req.user.id).lastInsertRowid; mark.run(Number(id)); };
-      mk(`${base}: summary (bot-assisted)`, quiz.summaryHtml(d), 'html');
-      if (d.questions.length) mk(`${base}: practice questions (bot-assisted)`, quiz.quizHtml(d), 'cbt');
+      const course = { code: d.course.code, title: d.course.title, level: d.level };
+      upsertCourse('html', dest, course, [{ topic: d.topic, lines: d.summary }]);
+      if (d.questions.length) upsertCourse('cbt', dest, course, d.questions.map(q => ({ q: q.q, o: q.options, a: q.answer, e: q.explain })));
       src.forEach(id => handled.run(id)); n++;
     });
     res.redirect('/admin/bot?msg=' + encodeURIComponent(`${n} item(s) published${bad ? `, ${bad} skipped because no valid course, department and level were chosen` : ''}.`));
