@@ -46,6 +46,15 @@ box.onclick=function(e){var b=e.target.closest('[data-rm]');if(b&&confirm('Remov
 fetch('/api/saved/available',{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){avail=j.items||[];drawPick()}).catch(function(){info.textContent='Could not look for materials. Check your connection.'});
 auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();use()},2000)})()</script>`, req.user));
   });
+  // On a material: shortcuts to the CBT test and the video of the same course. Nothing shows for a kind that does not exist.
+  const relatedBar = (p, user) => {
+    if (!p.course_id || p.kind === 'cbt' || p.kind === 'video') return '';
+    const pick = k => db.prepare("SELECT slug,title,paid FROM pages WHERE course_id=? AND kind=? AND id!=? ORDER BY id DESC LIMIT 40").all(p.course_id, k, p.id).map(x => Object.assign(x, db.prepare('SELECT * FROM pages WHERE slug=?').get(x.slug))).find(x => sortedFor(x, user));
+    const c = pick('cbt'), v = pick('video');
+    if (!c && !v) return '';
+    const b = (h, t, ic) => `<a href="/p/${esc(h)}" style="flex:1;text-align:center;text-decoration:none;font:600 14px system-ui,sans-serif;color:#fff;background:#2a7fff;border-radius:12px;padding:10px 12px">${ic} ${t}</a>`;
+    return `<div style="display:flex;gap:8px;margin:0 0 12px">${c ? b(c.slug, 'Take the CBT test', '&#128221;') : ''}${v ? b(v.slug, 'Watch the video', '&#9654;&#65039;') : ''}</div>`;
+  };
   app.get('/p/:slug', async (req, res) => {
     const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
     if (!p) return res.status(404).send(layout('Not found', '<h2>Page not found</h2>', req.user));
@@ -66,7 +75,10 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     if (p.kind === 'html' || p.kind === 'cbt') {
       // Uploaded pages run in a sealed box: they work normally but cannot reach this site's sign-in or act as the person viewing.
       res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');
-      return res.type('html').send(preparePage(p.html, req.query.embed ? null : '/'));
+      let out = preparePage(p.html, req.query.embed ? null : '/');
+      const rb = req.query.embed ? '' : relatedBar(p, req.user);
+      if (rb) out = /<body[^>]*>/i.test(out) ? out.replace(/<body[^>]*>/i, m => m + '<div style="padding:12px 12px 0">' + rb + '</div>') : '<div style="padding:12px 12px 0">' + rb + '</div>' + out;
+      return res.type('html').send(out);
     }
     if (p.kind === 'video' && !p.video_id && p.file_data) {
       // Uploaded from a phone: played right here with the browser's own player (it fetches pieces as needed, so it starts quickly and can be skipped around).
@@ -79,13 +91,13 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     // reliably work on mobile Chrome/Android, which is why this needed replacing rather than just embedding.
     // doc: converted to HTML right in the browser (Mammoth.js). Both fetch through the same authenticated route
     // everything else here uses, so department/level access control still applies either way.
-    if (p.kind === 'image' && p.file_data) return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${offBarHtml(p)}<img src="/p/${esc(p.slug)}/raw" alt="${esc(p.title)}" style="width:100%;height:auto;border-radius:12px;display:block"></div>`, req.user));
+    if (p.kind === 'image' && p.file_data) return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${relatedBar(p, req.user)}${offBarHtml(p)}<img src="/p/${esc(p.slug)}/raw" alt="${esc(p.title)}" style="width:100%;height:auto;border-radius:12px;display:block"></div>`, req.user));
     const embed = p.kind === 'pdf'
       ? pdfViewerHtml(p.slug)
       : `<div id="docViewer" class="doc-viewer"><p class="mut">Loading document&hellip;</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script>fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return mammoth.convertToHtml({arrayBuffer:buf})}).then(function(result){document.getElementById('docViewer').innerHTML=result.value||'<p class="mut">This document has no readable text to preview.</p>'}).catch(function(){document.getElementById('docViewer').innerHTML='<p class="mut">Could not preview this document here -- try the download link below.</p>'})</script>`;
-    res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${offBarHtml(p)}${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
+    res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${relatedBar(p, req.user)}${offBarHtml(p)}${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
   });
 
   app.get('/p/:slug/raw', (req, res) => {

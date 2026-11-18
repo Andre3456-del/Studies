@@ -29,7 +29,7 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
   function dashboardBody(req, mode = 'home') {
     const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?'), staff = can.pages(u);
     const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester,university,(SELECT name FROM courses WHERE id=pages.course_id) course,(SELECT name FROM users WHERE id=pages.author_id) author FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
-    const want = String(req.query.kind || '');
+    const want = mode === 'materials' ? (['cbt', 'video'].includes(String(req.query.kind || '')) ? String(req.query.kind) : 'materials') : '';
     const KIND = { video: p => p.kind === 'video', cbt: p => p.kind === 'cbt', materials: p => p.kind !== 'video' && p.kind !== 'cbt' };
     if (mode === 'materials' && KIND[want]) rows.splice(0, rows.length, ...rows.filter(KIND[want]));
     const isLocked = p => !!p.paid && !staff && !hasPurchased(u.id, p.id);
@@ -46,7 +46,7 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
     const savedN = db.prepare('SELECT COUNT(*) c FROM news_saves WHERE user_id=?').get(u.id).c;
     const coursesN = new Set(rows.map(p => p.course).filter(Boolean)).size;
     const grid = list => `<div class="pv-grid">${list.map(p => previewTile(p, isLocked(p))).join('')}</div>`;
-    if (mode === 'materials') return `${kindChips(want)}<div class="vtoggle" role="group" aria-label="How to show your courses"><button type="button" data-v="grid" aria-label="Grid">&#9638;</button><button type="button" data-v="list" aria-label="List">&#9776;</button></div>
+    if (mode === 'materials') return `<div class="vtoggle" role="group" aria-label="How to show your courses"><button type="button" data-v="grid" aria-label="Grid">&#9638;</button><button type="button" data-v="list" aria-label="List">&#9776;</button></div>
 <script>(function(){var d=document.documentElement,b=document.querySelectorAll('.vtoggle button');function set(v){d.setAttribute('data-pv',v);try{localStorage.setItem('pvView',v)}catch(e){}b.forEach(function(x){x.classList.toggle('on',x.getAttribute('data-v')===v)})}var v='grid';try{v=localStorage.getItem('pvView')||'grid'}catch(e){}set(v==='list'?'list':'grid');b.forEach(function(x){x.onclick=function(){set(x.getAttribute('data-v'))}})})()</script>
 <span id="lib"></span>${libTools(rows)}<div class="box"><h2>Available to you <span class="count">${mine.length}</span></h2><p class="hint">Free to view, plus anything you have paid for.</p>${mine.length ? grid(mine) : '<p class="mut">Nothing available yet.</p>'}</div>
 ${others.length ? `<details class="folder"><summary><span class="fic">&#128193;</span><b>Not for me</b><span class="count">${others.length}</span></summary><p class="hint">Uploads for other departments or levels. You can see them because you are an admin.</p>${grid(others)}</details>` : ''}
