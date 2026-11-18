@@ -96,7 +96,7 @@ ${helpers.length ? helpers.map(h => `<div class="card row" style="align-items:ce
     if (page.kind === 'video') {
       const vmime = videoMimeOf(req.file);
       if (!vmime) return res.redirect(back('That file is not a video.'));
-      db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=?, video_id=NULL WHERE id=?').run(req.file.buffer, vmime, req.file.originalname, req.params.id);
+      db.prepare('DELETE FROM page_thumbs WHERE page_id=?').run(req.params.id); db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=?, video_id=NULL WHERE id=?').run(req.file.buffer, vmime, req.file.originalname, req.params.id);
     } else if (page.kind === 'pdf' || page.kind === 'doc' || page.kind === 'image') {
       if (page.kind === 'image' && !isImageUpload(req.file)) return res.redirect(back('Choose a JPG or PNG picture.'));
       db.prepare('UPDATE pages SET file_data=?, file_mime=?, file_name=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.file.originalname, req.params.id);

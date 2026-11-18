@@ -2,12 +2,14 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { KIND_META, ROLE_LABEL, SEM, can, db, esc, hasPurchased, inApp, isCentral, layout, sortedFor } = ctx;
+  const thumbs = require('../lib/thumbs'); thumbs.ensure(db);
   const semLabel = p => p.semester ? SEM.semesterName(p.semester) : '';
   function previewTile(p, needsPay) {
     const [icon, label] = KIND_META[p.kind] || KIND_META.html;
     const thumb = p.kind === 'video' && p.video_id
       ? `<img class="pv-img" src="https://i.ytimg.com/vi/${esc(p.video_id)}/hqdefault.jpg" alt="" loading="lazy">`
-      : `<div class="pv-img pv-icon">${icon}</div>`;
+      : p.th ? `<img class="pv-img" src="/thumb/${p.id}" alt="" loading="lazy" style="object-position:top">`
+      : `<div class="pv-img pv-icon"${!needsPay && ['pdf', 'image', 'html', 'cbt'].includes(p.kind) ? ` data-th="${p.id}" data-k="${p.kind}" data-slug="${esc(p.slug)}" data-title="${esc(p.title)}"${p.kind === 'html' && p.snip ? ` data-snip="${esc(String(p.snip).replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 220))}"` : ''}` : ''}>${icon}</div>`;
     const who = String(p.author || '?').trim(), ini = esc(who.charAt(0).toUpperCase() || '?');
     const meta = [p.author ? esc(p.author) : '', p.course ? esc(p.course) : '', p.level ? p.level + ' level' : '', semLabel(p)].filter(Boolean).join(' &middot; ');
     return `<a class="pv" data-course="${esc(p.course || '')}" data-t="${esc(String(p.title).toLowerCase())}" href="/p/${p.slug}"><div class="pv-th">${thumb}<span class="pv-badge">${esc(label)}</span>${needsPay ? '<span class="pv-lock">&#128274; Pay</span>' : ''}</div><div class="pv-body"><span class="avatar pv-av">${ini}</span><div class="pv-tx"><h3>${esc(p.title)}</h3><span class="mut">${meta}</span></div></div></a>`;
@@ -28,7 +30,7 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
   }
   function dashboardBody(req, mode = 'home') {
     const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?'), staff = can.pages(u);
-    const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester,university,(SELECT name FROM courses WHERE id=pages.course_id) course,(SELECT name FROM users WHERE id=pages.author_id) author FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
+    const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester,university,(SELECT 1 FROM page_thumbs WHERE page_id=pages.id) th,CASE WHEN kind=\'html\' THEN substr(html,1,6000) END snip,(SELECT name FROM courses WHERE id=pages.course_id) course,(SELECT name FROM users WHERE id=pages.author_id) author FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
     const want = mode === 'materials' ? (['cbt', 'video'].includes(String(req.query.kind || '')) ? String(req.query.kind) : 'materials') : '';
     const KIND = { video: p => p.kind === 'video', cbt: p => p.kind === 'cbt', materials: p => p.kind !== 'video' && p.kind !== 'cbt' };
     if (mode === 'materials' && KIND[want]) rows.splice(0, rows.length, ...rows.filter(KIND[want]));
@@ -45,7 +47,7 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
     const friendsN = db.prepare("SELECT COUNT(*) c FROM friendships WHERE status='friends' AND (requester_id=? OR addressee_id=?)").get(u.id, u.id).c;
     const savedN = db.prepare('SELECT COUNT(*) c FROM news_saves WHERE user_id=?').get(u.id).c;
     const coursesN = new Set(rows.map(p => p.course).filter(Boolean)).size;
-    const grid = list => `<div class="pv-grid">${list.map(p => previewTile(p, isLocked(p))).join('')}</div>`;
+    const grid = list => `<div class="pv-grid">${list.map(p => previewTile(p, isLocked(p))).join('')}</div>${thumbs.js}`;
     if (mode === 'materials') return `<div class="vtoggle" role="group" aria-label="How to show your courses"><button type="button" data-v="grid" aria-label="Grid">&#9638;</button><button type="button" data-v="list" aria-label="List">&#9776;</button></div>
 <script>(function(){var d=document.documentElement,b=document.querySelectorAll('.vtoggle button');function set(v){d.setAttribute('data-pv',v);try{localStorage.setItem('pvView',v)}catch(e){}b.forEach(function(x){x.classList.toggle('on',x.getAttribute('data-v')===v)})}var v='grid';try{v=localStorage.getItem('pvView')||'grid'}catch(e){}set(v==='list'?'list':'grid');b.forEach(function(x){x.onclick=function(){set(x.getAttribute('data-v'))}})})()</script>
 <span id="lib"></span>${libTools(rows)}<div class="box"><h2>Available to you <span class="count">${mine.length}</span></h2><p class="hint">Free to view, plus anything you have paid for.</p>${mine.length ? grid(mine) : '<p class="mut">Nothing available yet.</p>'}</div>

@@ -132,4 +132,5 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     res.setHeader('Content-Disposition', `${(p.kind === 'pdf' || p.kind === 'image') && safeMime && !req.query.dl ? 'inline' : 'attachment'}; filename="${shFileName(p)}"`);
     res.send(Buffer.from(db.prepare('SELECT file_data FROM pages WHERE id=?').get(p.id).file_data));
   });
+  require('../lib/thumbs').register(app, ctx);
 };
