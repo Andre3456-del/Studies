@@ -93,7 +93,7 @@ module.exports = function register(app, ctx) {
     const target = resolveTarget(req);
     if (!target) return res.status(400).json({ error: 'Invalid message.' });
     if (!req.file || !AUDIO_MIME.test(req.file.mimetype)) return res.status(400).json({ error: 'That is not a voice recording.' });
-    if (req.file.buffer.length > 3 * 1024 * 1024) return res.status(413).json({ error: 'That voice note is too long.' });
+    if (req.file.buffer.length > 6 * 1024 * 1024) return res.status(413).json({ error: 'That voice note is too long.' });
     if (limited('voice:' + req.user.id, 30, 60e3)) return res.status(429).json({ error: 'Slow down a little.' });
     const ms = Math.max(0, Math.min(Number(req.body.ms) || 0, 300000));
     const reply = validateReplyTarget(req, target);
