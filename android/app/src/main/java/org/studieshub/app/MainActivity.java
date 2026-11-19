@@ -333,6 +333,24 @@ public class MainActivity extends Activity {
             @JavascriptInterface public void callOngoing(final String id, final String name, final String text, final double since, final boolean video) {
                 try { ongoingCallId = id; CallService.showOngoing(MainActivity.this, id, name, text, (long) since, video); } catch (Throwable t) { }
             }
+            /** Speaker button in a call: true = loud speaker, false = ear speaker (or earphones / Bluetooth when connected). */
+            @JavascriptInterface public void setSpeaker(final boolean on) {
+                runOnUiThread(new Runnable() { @Override public void run() {
+                    try {
+                        android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+                        am.setMode(android.media.AudioManager.MODE_IN_COMMUNICATION);
+                        if (Build.VERSION.SDK_INT >= 31) {
+                            if (on) {
+                                for (android.media.AudioDeviceInfo d : am.getAvailableCommunicationDevices()) { if (d.getType() == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) { am.setCommunicationDevice(d); break; } }
+                            } else {
+                                am.clearCommunicationDevice();
+                            }
+                        } else {
+                            am.setSpeakerphoneOn(on);
+                        }
+                    } catch (Throwable t) { }
+                } });
+            }
             @JavascriptInterface public void callOngoingEnd(final String id) {
                 try { CallService.endOngoing(MainActivity.this, id); } catch (Throwable t) { }
             }
