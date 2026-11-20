@@ -459,8 +459,8 @@ function emailEveryone(subject, heading, message) {
   const base = process.env.BASE_URL || process.env.APP_URL || 'https://studieshub.org';
   const people = db.prepare('SELECT id,email,name FROM users WHERE verified=1').all();
   for (const u of people) {
-    const first = String(u.name || '').trim().split(/\s+/)[0] || 'there';
-    noticeQueue.push({ to: u.email, subject, text: `Dear ${first},\n\n${message}\n\n${base}`, html: emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">${esc(heading)}</h2><p style="margin:0 0 12px"><b>Dear ${esc(first)},</b></p><p style="margin:0 0 18px">${esc(message)}</p><p><a href="${esc(base)}" style="background:#6d5efc;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:12px;display:inline-block;font-weight:700;font-size:16px">Open Studies Hub</a></p>`, base) });
+    const first = String(u.name || '').trim().split(/\s+/).filter(w => !/^(prof|dr|mr|mrs|ms|engr|rev|pastor|chief|hon|barr|alh|alhaji|mal|sir)\.?$/i.test(w))[0] || 'there'; // 'Dear Prof.,' becomes the real first name
+    noticeQueue.push({ to: u.email, subject, text: `Dear ${first},\n\n${message}\n\n${base}`, html: emailShell(`<h2 style="margin:0 0 18px;font-size:24px;line-height:1.3;color:#1b2430">${esc(heading)}</h2><p style="margin:0 0 12px"><b>Dear ${esc(first)},</b></p><p style="margin:0 0 18px;white-space:pre-wrap">${esc(message)}</p><p><a href="${esc(base)}" style="background:#6d5efc;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:12px;display:inline-block;font-weight:700;font-size:16px">Open Studies Hub</a></p>`, base) });
   }
   notify(people.map(u => u.id), { title: heading, body: message, url: '/', tag: 'site-notice' });
   setImmediate(pumpNotices);

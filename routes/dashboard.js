@@ -70,11 +70,13 @@ ${locked.length ? `<div class="box"><h2>Locked &mdash; pay to view <span class="
   app.get('/dashboard', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/dashboard');
     if (req.user.role === 'uniadmin') return res.redirect('/uni');
+    if (req.user.is_lecturer) return res.redirect('/lecturer'); // a lecturer never sees the student home, not even for a moment
     res.send(layout('Home', dashboardBody(req), req.user));
   });
   app.get('/materials', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/materials');
     if (req.user.role === 'uniadmin') return res.redirect('/uni');
+    if (req.user.is_lecturer) return res.redirect('/lecturer/uploads');
     res.set('Cache-Control', 'private, no-cache').send(layout('Materials', dashboardBody(req, 'materials'), req.user));
   });
 };

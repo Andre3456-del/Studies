@@ -12,10 +12,10 @@ module.exports = function register(app, ctx) {
     res.send(layout('Site notices', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Site notices</h1>${msg}
 <p class="mut">Send a message to everyone by email and phone notification. ${n} verified member${n === 1 ? '' : 's'} will receive it. The Studies Hub logo is added for you.</p>
 <p class="mut">Your email service has a daily sending limit (Resend's free plan is about 100 a day). If you have more members than that, the rest will not be delivered until you upgrade the plan.</p>
-<form method="post" action="/admin/maintenance/start" class="card" onsubmit="return confirm('Send this to all ${n} members?')"><label class="mut">Title</label><input name="title" maxlength="80" required placeholder="What is this about?"><label class="mut">Message</label><textarea name="note" rows="5" maxlength="600" required style="width:100%" placeholder="Write the message people will read"></textarea><button style="margin-top:8px">Send to everyone</button></form>`, req.user));
+<form method="post" action="/admin/maintenance/start" class="card" onsubmit="return confirm('Send this to all ${n} members?')"><label class="mut">Title</label><input name="title" maxlength="80" required placeholder="What is this about?"><label class="mut">Message</label><textarea name="note" rows="8" maxlength="3000" required style="width:100%" placeholder="Write the message people will read"></textarea><button style="margin-top:8px">Send to everyone</button></form>`, req.user));
   });
   app.post('/admin/maintenance/start', central, (req, res) => {
-    const note = String(req.body.note || '').trim().slice(0, 600), title = String(req.body.title || '').trim().slice(0, 80);
+    const note = String(req.body.note || '').replace(/\r\n?/g, '\n').replace(/^\s*\n+|\s+$/g, '').slice(0, 3000), title = String(req.body.title || '').trim().slice(0, 80);
     if (!note || !title) return res.redirect('/admin/maintenance?msg=' + encodeURIComponent('Please write both a title and a message.'));
     const n = emailEveryone(title, title, note);
     console.log(`Audit: ${req.user.email} sent a site notice to ${n} members`);

@@ -51,6 +51,10 @@ public class CallService extends FirebaseMessagingService {
     }
 
     @Override public void onMessageReceived(RemoteMessage m) {
+        try { handle(m); } catch (Throwable t) { /* one bad notification must never close the app */ }
+    }
+
+    private void handle(RemoteMessage m) {
         Map<String, String> d = m.getData();
         String type = d.get("type");
         if (type == null) return;
@@ -178,7 +182,7 @@ public class CallService extends FirebaseMessagingService {
         boolean isChat = chat != null && cid != null && !cid.isEmpty();
         android.graphics.Bitmap pic = null;
         if (isChat && av != null) pic = fetchAvatar("https://studieshub.org" + av);
-        if (pic == null) pic = isChat ? initials(title) : android.graphics.BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher);
+        if (pic == null) pic = isChat ? initials(title) : appIcon();
         b.setLargeIcon(round(pic));
         if (isChat) {
             // Like WhatsApp: the last few messages of this chat stack up in one conversation notification.
@@ -237,6 +241,17 @@ public class CallService extends FirebaseMessagingService {
             if (Build.VERSION.SDK_INT >= 26) sb.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN);
             nm.notify(7, sb.build());
         }
+    }
+
+    /** The app icon as a picture. The icon is an adaptive one (an XML file), which BitmapFactory cannot read, so it is drawn instead. Never null. */
+    private android.graphics.Bitmap appIcon() {
+        try {
+            android.graphics.drawable.Drawable d = getResources().getDrawable(R.mipmap.ic_launcher, getTheme());
+            android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(128, 128, android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas cv = new android.graphics.Canvas(bm);
+            d.setBounds(0, 0, 128, 128); d.draw(cv);
+            return bm;
+        } catch (Throwable t) { return initials("S"); }
     }
 
     private static android.graphics.Bitmap initials(String name) {
