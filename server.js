@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require('express'); require('./lib/safety');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 const bcrypt = require('bcryptjs');
