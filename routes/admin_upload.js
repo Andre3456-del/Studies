@@ -59,4 +59,5 @@ module.exports = function register(app, ctx) {
     res.redirect(back('Saved who this upload is for.'));
   });
   require('./admin_edit')(app, ctx);
+  require('../lib/seller').register(app, ctx); // lecturers selling their own materials
 };

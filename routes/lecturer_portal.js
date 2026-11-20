@@ -1,6 +1,7 @@
 // Lecturer portal (welcome, uploads, edit, courses)
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
+  const SELL = require('../lib/seller')(ctx.db);
   const { LEVELS, OTHER_UNI, announceUpload, applySemester, canLecturerAdmin, db, departmentCheckboxes, deptListOf, esc, institutionList, isImageUpload, layout, notifyLecturerAdmin, profileComplete, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId } = ctx;
   app.get('/lecturer/welcome', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/lecturer/welcome');
@@ -144,6 +145,7 @@ ${semesterField('')}
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
     res.send(layout('Uploaded documents', `<h1>Uploaded documents</h1>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+<a class="card row" href="/lecturer/sell" style="text-decoration:none;color:inherit"><div><b>💰 Sell your materials</b><br><span class="mut" style="font-size:13px">${SELL.active(req.user.id) ? 'Bank account added. Set a price on any upload (tap Edit).' : 'Add your bank account, then put a price on your uploads and get paid.'}</span></div><span>&rsaquo;</span></a>
 ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesList}</div>`, req.user));
   });
   app.post('/lecturer/upload', upload.single('file'), (req, res) => {
@@ -189,6 +191,7 @@ ${p.kind === 'video' ? '<label class="mut">Or use a YouTube link instead</label>
 <label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>
 ${semesterField(p.semester)}
+${SELL.active(req.user.id) ? `<label class="mut">Price in naira (0 = free). Students pay this plus a small system charge; you receive exactly this.</label><input name="price" type="number" min="0" max="100000" step="50" value="${p.paid && p.price_kobo ? Math.round(p.price_kobo / 100) : 0}">` : '<p class="mut">Want to sell this? <a href="/lecturer/sell">Add your bank account</a> first.</p>'}
 <button>Save changes</button></form>`, req.user));
   });
   app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
@@ -209,7 +212,8 @@ ${semesterField(p.semester)}
       db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
     }
     applySemester({ id: p.id }, req.body.semester);
-    res.redirect('/lecturer/uploads?msg=' + encodeURIComponent('Saved.'));
+    const priceErr = req.body.price === undefined ? '' : SELL.setPrice(p.id, req.user.id, req.body.price);
+    res.redirect('/lecturer/uploads?msg=' + encodeURIComponent(priceErr ? 'Saved, but the price was not changed: ' + priceErr : 'Saved.'));
   });
   app.post('/lecturer/pages/:id/delete', (req, res) => {
     if (!req.user || !req.user.is_lecturer) return res.redirect('/login');

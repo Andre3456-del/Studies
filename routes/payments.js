@@ -2,7 +2,7 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver } = ctx;
-  const P = require('../lib/prices')(db);
+  const P = require('../lib/prices')(db), S = require('../lib/seller')(db); // S: lecturer sales (price + system charge, split)
   // Money alerts go to the owner only, never to other admins.
   const ownerIds = () => db.prepare('SELECT id FROM users WHERE lower(email)=lower(?)').all(String(ADMIN_EMAIL || '')).map(r => r.id);
   app.post('/pay/verify', async (req, res) => {
@@ -19,7 +19,7 @@ module.exports = function register(app, ctx) {
     const data = await verifyFlutterwave(transactionId);
     if (!data) return res.status(400).json({ error: 'Payment could not be verified.' });
     if (data.tx_ref && !String(data.tx_ref).startsWith(`cbt_${req.user.id}_${page.id}_`)) return res.status(400).json({ error: 'That payment was made for something else.' }); // a real payment for another item/user can't be reused here
-    const expectedNgn = (page.price_kobo || P.defKobo(page.kind)) / 100;
+    const expectedNgn = S.total(page, P.defKobo(page.kind)) / 100;
     if (data.currency !== 'NGN' || Number(data.amount) < expectedNgn) return res.status(400).json({ error: 'The amount paid does not match the price.' });
     const existing = db.prepare('SELECT id FROM purchases WHERE user_id=? AND page_id=?').get(req.user.id, page.id);
     if (existing) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(String(transactionId), Math.round(data.amount * 100), existing.id);
@@ -42,7 +42,7 @@ module.exports = function register(app, ctx) {
     if (uid && !db.prepare('SELECT 1 FROM users WHERE id=?').get(uid)) return null; // uid 0 is a visitor advertising without an account
     let kobo;
     if (m[1] === 'sponsor') { const sp = db.prepare("SELECT amount_kobo FROM sponsor_posts WHERE id=? AND user_id=? AND status='pending_payment'").get(item, uid); if (!sp) return null; kobo = sp.amount_kobo; }
-    else { const pg = db.prepare('SELECT price_kobo FROM pages WHERE id=? AND paid=1').get(item); if (!pg) return null; kobo = pg.price_kobo || P.defKobo(); }
+    else { const pg = db.prepare('SELECT price_kobo,author_id FROM pages WHERE id=? AND paid=1').get(item); if (!pg) return null; kobo = S.total(pg, P.defKobo()); }
     db.prepare('INSERT OR IGNORE INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, uid, m[1], item, kobo, Date.now());
     return db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(txRef);
   }
@@ -87,6 +87,7 @@ module.exports = function register(app, ctx) {
         const had = db.prepare('SELECT id,status FROM purchases WHERE user_id=? AND page_id=?').get(row.user_id, pg.id);
         if (had) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(tid, Math.round(Number(data.amount) * 100), had.id);
         else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,'approved')").run(row.user_id, pg.id, tid, Math.round(Number(data.amount) * 100));
+        S.onPaid(pg.id, row.tx_ref, row.user_id, Math.round(Number(data.amount) * 100), notify);
         if (!had || had.status !== 'approved') notify([row.user_id], { title: 'Payment confirmed', body: `${pg.title} is now unlocked for you`, url: '/p/' + pg.slug, tag: 'payment' });
       }
       db.prepare("UPDATE flw_payments SET status='paid', transaction_id=? WHERE tx_ref=?").run(tid, row.tx_ref);
@@ -106,7 +107,7 @@ module.exports = function register(app, ctx) {
       const r = await fetch('https://api.flutterwave.com/v3/payments', {
         method: 'POST', headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ tx_ref: txRef, amount: o.kobo / 100, currency: 'NGN', redirect_url: base + '/pay/return',
-          customer: { email: payer.email, name: payer.name },
+          customer: { email: payer.email, name: payer.name }, ...(o.split ? { subaccounts: [{ id: o.split.id, transaction_charge_type: 'flat_subaccount', transaction_charge: o.split.lecturerKobo / 100 }] } : {}),
           customizations: { title: 'Studies Hub', description: o.desc, logo: base + '/icon-192.png?v=2' }, meta: { kind: o.kind, item: o.item, user: payer.id } })
       });
       const j = await r.json();
@@ -124,7 +125,7 @@ module.exports = function register(app, ctx) {
     const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(String(req.body.slug || ''));
     if (!page || !page.paid || !sortedFor(page, req.user)) return res.redirect('/');
     if (hasPurchased(req.user.id, page.id)) return res.redirect('/p/' + page.slug);
-    await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: page.price_kobo || P.defKobo(page.kind), desc: page.title, back: '/p/' + page.slug });
+    await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: S.total(page, P.defKobo(page.kind)), split: S.split(page, P.defKobo(page.kind)), desc: page.title, back: '/p/' + page.slug });
   });
   // Where Flutterwave sends the person back to after paying (or cancelling): a short page that asks Flutterwave, shows a tick or a cross, then goes on.
   const flwPage = (req, inner) => layout('Payment', `<div style="max-width:460px;margin:50px auto;padding:0 16px;text-align:center"><div class="card" style="padding:30px 22px">${inner}</div></div>`, req.user);

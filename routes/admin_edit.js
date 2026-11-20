@@ -40,7 +40,7 @@ module.exports = function register(app, ctx) {
   });
   app.get('/admin/prices', owner, (req, res) => {
     const row = (k, t, d) => `<label class="mut"><b>${t}</b> &middot; ${d}</label><input name="${k}" type="number" min="1" max="10000000" step="1" value="${P[k]()}" required>`;
-    res.send(layout('Prices', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Prices</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+    res.send(layout('Prices', `<p class="mut"><a href="/admin">&larr; Admin</a></p><h1>Prices</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}<a class="card row" href="/admin/seller-fee" style="text-decoration:none;color:inherit"><div><b>System charge on lecturer sales</b><br><span class="mut" style="font-size:13px">What the site keeps when a lecturer sells a material</span></div><span>&rsaquo;</span></a>
 <form class="card" method="post" action="/admin/prices">${row('sponsor', 'Sponsor post', 'naira per month')}${row('cbt', 'CBT test', 'naira to open one')}${row('material', 'Other paid materials', 'naira to open one')}
 <p class="hint">A new price shows everywhere straight away (the advert page, the news page, the payment page). Paid items still at the old standing price move to the new one; an item you gave its own price keeps it.</p><button>Save prices</button></form>`, req.user));
   });
