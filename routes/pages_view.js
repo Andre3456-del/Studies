@@ -72,11 +72,13 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     }
     if (!req.query.embed && req.user && String(req.headers['sec-fetch-dest'] || '') === 'document' && ctx.isWideScreen(req)) return res.send(layout(p.title, `<iframe class="reader" src="/p/${esc(p.slug)}?embed=1" title="${esc(p.title)}" allow="fullscreen"></iframe>`, req.user));
     res.setHeader('Cache-Control', 'private, no-cache');
+    if (p.kind === 'cbt' && !req.query.raw) return res.send(require('../lib/cbt_timer').shell(p, req));
     if (p.kind === 'html' || p.kind === 'cbt') {
       // Uploaded pages run in a sealed box: they work normally but cannot reach this site's sign-in or act as the person viewing.
       res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads');
       let out = preparePage(p.html, req.query.embed ? null : '/');
-      const rb = req.query.embed ? '' : relatedBar(p, req.user);
+      if (p.kind === 'cbt') out = require('../lib/cbt_timer').inject(out, !!req.query.once);
+      const rb = (req.query.embed || p.kind === 'cbt') ? '' : relatedBar(p, req.user);
       if (rb) out = /<body[^>]*>/i.test(out) ? out.replace(/<body[^>]*>/i, m => m + '<div style="padding:12px 12px 0">' + rb + '</div>') : '<div style="padding:12px 12px 0">' + rb + '</div>' + out;
       return res.type('html').send(out);
     }
@@ -133,4 +135,5 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     res.send(Buffer.from(db.prepare('SELECT file_data FROM pages WHERE id=?').get(p.id).file_data));
   });
   require('../lib/thumbs').register(app, ctx);
+  require('../lib/cbt_timer')(app, ctx);
 };
