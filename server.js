@@ -291,8 +291,8 @@ app.use((req, res, next) => (req.path === '/api/backup' ? jsonBackup : jsonSmall
 
 // ---------- optional features (each turns on only when its variables are set) ----------
 const GOOGLE_ON = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
-const AI = process.env.GROQ_API_KEY ? 'groq' : process.env.ANTHROPIC_API_KEY ? 'claude' : null;
-const AI_MODEL = process.env.AI_MODEL || (AI === 'groq' ? 'llama-3.3-70b-versatile' : 'claude-haiku-4-5-20251001');
+const { AI, AI_MODEL } = require('./lib/ai_assistant').provider(); // OpenAI, Groq or Claude, whichever key is set
+// (assistant provider choice lives in lib/ai_assistant.js)
 const PRICE_NGN = Number(process.env.PRICE_NGN || 100);
 // Paid pages are unlocked by a direct bank transfer, confirmed by hand in /admin -- not a payment gateway.
 const BANK_NAME = process.env.BANK_NAME || 'OPay';
