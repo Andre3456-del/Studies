@@ -1715,7 +1715,7 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  table{font-size:15px}td,th{padding:10px 8px}
 }
 html.embed{--side:0px!important}
-.embed .drawer,.embed .pane,.embed .top,.embed .tabbar,.embed .scrim,.embed #drawerArrows,.embed .site-foot,.embed .pushbar{display:none!important}
+.embed .lnav,.embed .drawer,.embed .pane,.embed .top,.embed .tabbar,.embed .scrim,.embed #drawerArrows,.embed .site-foot,.embed .pushbar{display:none!important}
 .embed body{padding:0!important}.embed main{max-width:none}
 .vtoggle{display:flex;gap:6px;margin:6px 0 4px}.vtoggle button{flex:1;min-height:44px;border-radius:12px;background:var(--panel);color:var(--mut);border:1px solid var(--line);font-weight:600;box-shadow:none}.vtoggle button.on{color:var(--blue);border-color:var(--blue);background:rgba(56,176,248,.14)}
 html[data-pv="list"] .pv-grid{grid-template-columns:1fr;gap:6px}
