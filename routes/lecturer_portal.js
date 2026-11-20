@@ -2,6 +2,7 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const SELL = require('../lib/seller')(ctx.db);
+  require('../lib/cbt_builder')(app, ctx); // lecturers type their own CBT questions
   const { LEVELS, OTHER_UNI, announceUpload, applySemester, canLecturerAdmin, db, departmentCheckboxes, deptListOf, esc, institutionList, isImageUpload, layout, notifyLecturerAdmin, profileComplete, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId } = ctx;
   app.get('/lecturer/welcome', (req, res) => {
     if (!req.user) return res.redirect('/login?next=/lecturer/welcome');
@@ -77,6 +78,7 @@ ${semesterField('')}
     const pagesList = myPages.map(p => {
       const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html;
       return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+${p.kind === 'cbt' ? `<details style="min-width:120px"><summary class="link">CBT options</summary><div style="display:grid;gap:4px;padding:6px 0"><a href="/admin/pages/${p.id}/results">Results</a><a href="/cbt/${p.id}/settings">Settings</a>${p.cbt_qs ? `<a href="/cbt/${p.id}/questions">Edit questions</a>` : ''}</div></details>` : ''}
 <div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
     const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
@@ -145,6 +147,7 @@ ${semesterField('')}
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
     res.send(layout('Uploaded documents', `<h1>Uploaded documents</h1>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
+<a class="card row" href="/lecturer/cbt/new" style="text-decoration:none;color:inherit"><div><b>📝 Create a CBT test</b><br><span class="mut" style="font-size:13px">Type your questions, shuffle them, set practice or test</span></div><span>&rsaquo;</span></a>
 <a class="card row" href="/lecturer/sell" style="text-decoration:none;color:inherit"><div><b>💰 Sell your materials</b><br><span class="mut" style="font-size:13px">${SELL.active(req.user.id) ? 'Bank account added. Set a price on any upload (tap Edit).' : 'Add your bank account, then put a price on your uploads and get paid.'}</span></div><span>&rsaquo;</span></a>
 ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesList}</div>`, req.user));
   });

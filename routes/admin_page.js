@@ -142,7 +142,7 @@ ${cp ? `<script>if('serviceWorker' in navigator){navigator.serviceWorker.addEven
         const deptList = deptListOf(p);
         const forWho = `${deptList.length ? esc(deptList.join(', ')) : 'All departments'} &middot; ${p.level ? p.level + ' level' : 'All levels'}`;
         return `<div class="card"><div class="row"><a href="/p/${p.slug}" target="_blank">${pIcon} ${esc(p.title)}</a><span class="mut">/p/${p.slug} &middot; ${pLabel} &middot; ${status}</span></div>
-<p class="mut" style="margin:6px 0 0">For: ${forWho} &middot; <a href="/admin/pages/${p.id}/sort">Change</a></p>
+<p class="mut" style="margin:6px 0 0">For: ${forWho} &middot; <a href="/admin/pages/${p.id}/sort">Change</a></p>${p.kind === 'cbt' ? `<details><summary class="link">CBT options</summary><p class="mut" style="margin:6px 0"><a href="/admin/pages/${p.id}/results">Results</a> &middot; <a href="/cbt/${p.id}/settings">Settings</a>${p.cbt_qs ? ` &middot; <a href="/cbt/${p.id}/questions">Edit questions</a>` : ''}</p></details>` : ''}
 <div class="row" style="margin-top:10px">
 <a href="/admin/pages/${p.id}/edit" class="link" style="align-self:center">Edit</a>
 <form method="post" action="/admin/pages/${p.id}/toggle"><button class="link">${p.members_only ? '🔒 Members only — make open' : 'Open — make members only'}</button></form>

@@ -2401,7 +2401,7 @@ app.get('/api/saved/available', (req, res) => {
 require('./routes/backup')(app, { db, esc, inApp, layout });
 // A downloaded material carries the name it has on Studies Hub (for example GET 212), with the original file's ending (.pdf and so on).
 // ---------- Saved pages, opening a page, and the raw page file (now in routes/pages_view.js) ----------
-require('./routes/pages_view')(app, { canViewPage, db, esc, inApp, isCentral, layout, offBarHtml, paywallBody, pdfViewerHtml, preparePage, sortedFor, videoMimeOf, get FLW_WINDOW() { return FLW_WINDOW; }, get flwSettle() { return flwSettle; }, get isWideScreen() { return isWideScreen; } });
+require('./routes/pages_view')(app, { canViewPage, db, deliver, emailShell, esc, inApp, isCentral, layout, offBarHtml, paywallBody, pdfViewerHtml, preparePage, sortedFor, videoMimeOf, get FLW_WINDOW() { return FLW_WINDOW; }, get flwSettle() { return flwSettle; }, get isWideScreen() { return isWideScreen; } });
 
 // ---------- Payments (Flutterwave) and sponsor posts (now in routes/payments.js) ----------
 const { FLW_WINDOW, flwCheckout, flwSettle } = require('./routes/payments')(app, { ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver, get back() { return back; } });
