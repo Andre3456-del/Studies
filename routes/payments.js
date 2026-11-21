@@ -80,6 +80,7 @@ module.exports = function register(app, ctx) {
         if (sp.status !== 'approved') {
           db.prepare("UPDATE sponsor_posts SET status='approved', reference=?, expires_at=datetime('now','+' || ? || ' days') WHERE id=?").run(tid, sp.duration_days, sp.id);
           notify([sp.user_id], { title: 'Your sponsor post is live', body: `"${sp.title}" is now showing in News for ${sp.duration_days} days.`, url: sponsorUrl(sp.id), tag: 'sponsor' });
+          require('../lib/receipts')(db).issue({ txRef: row.tx_ref, userId: row.user_id, title: 'Sponsor post: ' + sp.title, amountKobo: Math.round(Number(data.amount) * 100), method: data.payment_type, flwId: tid, paidAt: Date.now(), guest: { name: sp.guest_name, email: sp.guest_email } }, S.mail);
           if (!sp.user_id && sp.guest_email) Promise.resolve().then(() => deliver(sp.guest_email, 'Your Studies Hub advert is live', `Your advert "${sp.title}" is now live on Studies Hub for ${sp.duration_days} days.`, `<p>Your advert "${esc(sp.title)}" is now live on Studies Hub for ${sp.duration_days} days.</p>`)).catch(() => {});
         }
       } else {
@@ -212,6 +213,7 @@ go()})()</script>`));
       db.prepare("UPDATE sponsor_posts SET status='approved', reference=?, expires_at=datetime('now','+' || ? || ' days') WHERE id=?").run(String(transactionId), s.duration_days, s.id);
     } catch { return res.status(400).json({ error: 'That transaction has already been used.' }); }
     notify([s.user_id], { title: 'Your sponsor post is live', body: `"${s.title}" is now showing in News for ${s.duration_days} days.`, url: '/sponsor/' + s.id, tag: 'sponsor' });
+    require('../lib/receipts')(db).issue({ txRef: String(data.tx_ref || 'sponsor_' + s.id + '_manual_' + transactionId), userId: s.user_id, title: 'Sponsor post: ' + s.title, amountKobo: Math.round(Number(data.amount) * 100), method: data.payment_type, flwId: transactionId, paidAt: Date.now() }, S.mail);
     res.json({ ok: true });
   });
   app.get('/sponsor-image/:id', (req, res) => {
