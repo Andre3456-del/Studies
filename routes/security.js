@@ -15,7 +15,7 @@ module.exports = function register(app, ctx) {
 <form class="card" id="pwForm"><h2 style="margin-top:0">Change password</h2>
 <p class="mut">${needPw ? 'You stay logged in. The new password must be different from the old one.' : 'You signed up with Google, so you have no password yet. Set one here if you want one.'}</p>
 ${needPw ? '<input type="password" id="pwOld" placeholder="Current password" autocomplete="current-password" required style="margin-bottom:8px">' : ''}
-<input type="password" id="pwNew" placeholder="New password (8+ characters)" autocomplete="new-password" required minlength="8" style="margin-bottom:8px">
+<input type="password" id="pwNew" placeholder="New password" autocomplete="new-password" required minlength="8" style="margin-bottom:8px">
 <input type="password" id="pwNew2" placeholder="New password again" autocomplete="new-password" required minlength="8" style="margin-bottom:10px">
 <button>Change password</button>
 <p style="text-align:center;margin:14px 0 0"><a href="/forgot" style="color:#5bc8ff;font-weight:600">Forgot password?</a></p></form>

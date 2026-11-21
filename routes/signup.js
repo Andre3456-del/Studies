@@ -51,7 +51,7 @@ module.exports = function register(app, ctx) {
 <form method="post" class="card">
 <input name="name" placeholder="Your name" required maxlength="80">
 <input name="email" type="email" placeholder="Email address" required>
-<input name="password" type="password" placeholder="Password (8+ characters)" required>
+<input name="password" type="password" placeholder="Password" required>
 ${AGREE_BOX}
 <button disabled>Create lecturer account</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continue with Google</a>' : ''}
@@ -62,7 +62,7 @@ ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google?as=lecturer">Continu
     const email = String(req.body.email || '').trim().toLowerCase();
     const pw = String(req.body.password || '');
     const bad = m => res.status(400).send(layout('Lecturer sign up', `<div class="auth"><h1>Lecturer sign up</h1><p class="err">${esc(m)}</p>
-<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password (8+ characters)" required>${AGREE_BOX}<button disabled>Create lecturer account</button></form></div>`));
+<form method="post" class="card"><input name="name" placeholder="Your name" required maxlength="80" value="${esc(name)}"><input name="email" type="email" placeholder="Email address" required value="${esc(email)}"><input name="password" type="password" placeholder="Password" required>${AGREE_BOX}<button disabled>Create lecturer account</button></form></div>`));
     if (!req.body.agree) return bad('Please tick the box to accept the Terms & Conditions and Privacy Policy.');
     if (!name || !/^\S+@\S+\.\S+$/.test(email)) return bad('Enter your name and a valid email.');
     if (pw.length < 8) return bad('Password must be at least 8 characters.');

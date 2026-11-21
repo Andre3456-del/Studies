@@ -2030,7 +2030,7 @@ ${drawerNav}
 </nav>
 <div id="drawerArrows" class="drawer-arrows"><button type="button" id="drawerUp" aria-label="Scroll the menu up" title="Scroll up">&#9650;</button><button type="button" id="drawerDown" aria-label="Scroll the menu down" title="Scroll down">&#9660;</button></div>
 ${user && !opts.hideTop ? '<aside id="pane" class="pane"><div class="pane-head" id="paneHead"></div><div class="pane-body" id="paneBody"></div></aside>' : ''}<header class="top"${opts.hideTop ? ' hidden' : ''}><button id="drawerOpen" class="menu-btn" aria-label="Open menu">&#9776;${badge > 0 ? `<span class="mbadge">${badgeText(badge)}</span>` : ''}</button><a class="brand" href="${user ? '/dashboard' : '/'}">${esc(topTitle(title))}</a><span style="width:40px"></span></header>
-<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/about">About</a><a href="/guides">Study guides</a><a href="/contact">Contact</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && AI && !opts.noAI ? CHAT_HTML : ''}
+<main>${user && !opts.noPushBar ? '<div id="pushBar" class="pushbar" hidden><span>Turn on notifications to get incoming calls (even when the site is closed), new messages, open the correct conversation quickly, and see friend requests and new uploads.</span><button id="pushYes" type="button">Turn on</button><button id="pushNo" type="button" class="ghost">Not now</button></div>' : ''}${body}</main>${opts.footer ? `<footer class="site-foot"><span>&copy; ${new Date().getFullYear()} Studies Hub</span><span class="site-foot-links"><a href="/about">About</a><a href="/guides">Study guides</a><a href="/contact">Contact</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms &amp; Conditions</a></span></footer>` : ''}${user && !opts.noAI ? (AI ? CHAT_HTML : '<a href="/help" class="ai-fab" style="text-decoration:none;background:var(--accent,#6c5ce7);color:#fff">Help</a>') : ''}
 <script>(function(){if(innerWidth<1024||window.top!==window.self||document.documentElement.getAttribute('data-dev')==='phone')return;
 document.querySelectorAll('.drawer-item').forEach(function(a){a.title=a.textContent.trim()});
 var pane=document.getElementById('pane'),main=document.querySelector('main');if(!pane||!main)return;
@@ -2209,7 +2209,7 @@ const authForm = (kind, err = '', next = '') => {
 <form method="post" class="card">${next ? `<input type="hidden" name="next" value="${esc(next)}">` : ''}
 ${login ? '' : '<input name="name" placeholder="Your name" required maxlength="80">'}
 <input name="email" type="email" placeholder="Email address" required>
-<input name="password" type="password" placeholder="Password${login ? '' : ' (8+ characters)'}" required>
+<input name="password" type="password" placeholder="Password" required>
 ${login ? '' : require('./lib/agree_box')}
 <button${login ? '' : ' disabled'}>${login ? 'Log in' : 'Create account'}</button></form>
 ${GOOGLE_ON ? '<a class="btn ghost gbtn" href="/auth/google">Continue with Google</a>' : ''}
@@ -2224,7 +2224,7 @@ const forgotForm = (err = '') => layout('Forgot password', `<div class="auth"><h
 const resetForm = (email = '', err = '') => layout('Enter your code', `<div class="auth"><h1>Enter your code</h1><p class="mut">If that email is registered, a 6-digit code is on its way. It expires in 10 minutes.</p>${err ? `<p class="err">${esc(err)}</p>` : ''}
 <form method="post" class="card"><input name="email" type="email" placeholder="Email address" value="${esc(email)}" required>
 <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="6-digit code" required>
-<input name="password" type="password" placeholder="New password (8+ characters)" minlength="8" required><button>Set new password</button></form>
+<input name="password" type="password" placeholder="New password" minlength="8" required><button>Set new password</button></form>
 <p class="mut"><a href="/forgot">Send a new code</a></p></div>`, null);
 
 const notice = (title, msg, extra = '') => layout(title, `<div class="auth"><h1>${esc(title)}</h1><p class="mut">${esc(msg)}</p>${extra}</div>`, null);
@@ -2443,7 +2443,7 @@ require('./routes/admin_page')(app, { FLW_WINDOW, KIND_META, LEVELS, PRICE_KOBO,
 
 // Reads the "who is this for?" choices: a department (or all) and a level (or all, or detected from the course code).
 // ---------- Admin: upload a page or file, and reorder pages (now in routes/admin_upload.js) ----------
-require('./routes/admin_upload')(app, { isCentral, LEVELS, NOT_YOURS, PRICE_KOBO, announceUpload, applySemester, back, can, db, departmentCheckboxes, deptListOf, esc, isImageUpload, layout, ownsAdminPage, pagesAdmin, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId });
+require('./routes/admin_upload')(app, { AI, deliver, emailShell, notify, isCentral, LEVELS, NOT_YOURS, PRICE_KOBO, announceUpload, applySemester, back, can, db, departmentCheckboxes, deptListOf, esc, isImageUpload, layout, ownsAdminPage, pagesAdmin, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId });
 // Positions and departments (full admin).
 // Whether `verifier` (already verified, with delegated verification power) may act on `claimant`'s pending claim.
 // A president (or class rep) verifying someone within their own scope -- open to anyone with that delegated

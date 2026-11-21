@@ -23,7 +23,7 @@ ${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university
 </select>
 <input name="university_other" id="uniOther" placeholder="Type your institution's name" maxlength="120" value="${!uniKnown ? esc(u.university || '') : ''}" style="${u.university && !uniKnown ? '' : 'display:none'}">
 <script>(function(){var s=document.getElementById('uniSelect'),o=document.getElementById('uniOther');function sync(){var other=s.value==='Other (type it in below)';o.style.display=other?'':'none';o.required=other}s.addEventListener('change',sync);sync()})()</script>
-<input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number (optional)" maxlength="60">
+<input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number" maxlength="60">
 <label class="mut">Which course(s) do you teach? (pick any that already exist -- you can pick more than one)</label>
 <div style="max-height:180px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0">${courses.map(c => `<label class="row" style="justify-content:flex-start;gap:8px;margin:4px 0;cursor:pointer"><input type="checkbox" name="course_id" value="${c.id}" style="width:auto"${picked.includes(c.id) ? ' checked' : ''}>${esc(c.name)}</label>`).join('') || '<p class="mut" style="margin:0">No courses listed yet -- add yours below.</p>'}</div>
 <input name="new_course" placeholder="Course not listed? Type its name" maxlength="120">
@@ -70,7 +70,7 @@ ${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
-<div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
+<div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
@@ -105,7 +105,7 @@ ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
-<div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
+<div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
@@ -135,7 +135,7 @@ ${semesterField('')}
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
-<div id="lvideoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=... (or choose a video from your phone above)"></div>
+<div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}

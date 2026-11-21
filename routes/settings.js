@@ -45,7 +45,7 @@ module.exports = function register(app, ctx) {
       return res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
 <form method="post" action="/settings/profile" class="card">
 <input name="name" value="${esc(u.name || '')}" placeholder="Your name" required maxlength="80">
-<input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number (optional)" maxlength="60">
+<input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number" maxlength="60">
 <p class="mut" style="margin:4px 0">Institution: <b>${esc(u.university || '')}</b> (set once, verified -- contact a full admin to change it)</p>
 <button>Save</button></form>`, req.user));
     }

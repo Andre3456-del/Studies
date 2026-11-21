@@ -45,7 +45,7 @@ ${err ? `<p class="err">${esc(err)}</p>` : ''}
 ${guest ? `<input name="guest_name" placeholder="Your name or business name" required maxlength="80" value="${esc(v.guest_name || '')}"><input name="guest_email" type="email" placeholder="Your email" required maxlength="120" value="${esc(v.guest_email || '')}">` : ''}
 <input name="title" placeholder="What are you advertising?" required maxlength="140" value="${esc(v.title || '')}">
 ${area('body', v.body, 'Describe it')}
-<input name="contact" placeholder="How should people reach you? (phone, WhatsApp, link, @username)" maxlength="140" value="${esc(v.contact || '')}">
+<input name="contact" placeholder="How should people reach you?" maxlength="140" value="${esc(v.contact || '')}">
 <label class="mut">Picture, video or audio (optional)</label><input type="file" name="media" accept="image/*,video/*,audio/*" style="padding:9px 0"><p class="mut" style="margin:0 0 6px;font-size:13px">${SIZE_NOTE}</p>
 <label class="mut">Start date</label><input type="date" name="start_date" id="sponsorStart" required value="${esc(v.start_date || '')}">
 <label class="mut">End date</label><input type="date" name="end_date" id="sponsorEnd" required value="${esc(v.end_date || '')}">

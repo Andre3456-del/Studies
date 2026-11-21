@@ -61,4 +61,5 @@ module.exports = function register(app, ctx) {
   require('./admin_edit')(app, ctx);
   require('../lib/seller').register(app, ctx); // lecturers selling their own materials
   require('../lib/receipts').register(app, ctx); // payment receipts
+  require('../lib/help_desk').register(app, ctx); // manual help desk while AI is off
 };
