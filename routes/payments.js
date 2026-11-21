@@ -87,6 +87,7 @@ module.exports = function register(app, ctx) {
         const had = db.prepare('SELECT id,status FROM purchases WHERE user_id=? AND page_id=?').get(row.user_id, pg.id);
         if (had) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(tid, Math.round(Number(data.amount) * 100), had.id);
         else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,'approved')").run(row.user_id, pg.id, tid, Math.round(Number(data.amount) * 100));
+        S.logVerified(row.tx_ref, data);
         S.onPaid(pg.id, row.tx_ref, row.user_id, Math.round(Number(data.amount) * 100), notify);
         if (!had || had.status !== 'approved') notify([row.user_id], { title: 'Payment confirmed', body: `${pg.title} is now unlocked for you`, url: '/p/' + pg.slug, tag: 'payment' });
       }
@@ -114,6 +115,7 @@ module.exports = function register(app, ctx) {
       if (j && j.status === 'success' && j.data && j.data.link) {
         db.prepare('INSERT INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, payer.id, o.kind, o.item, o.kobo, Date.now());
         notify(ownerIds(), { title: 'Payment started via Flutterwave', body: `${payer.name} is paying ₦${(o.kobo / 100).toLocaleString()} for ${o.desc}`, url: '/admin?tab=payments', tag: 'flw' });
+        if (o.split) { const pg = db.prepare('SELECT id,author_id FROM pages WHERE id=?').get(o.item); if (pg) S.logSent(txRef, pg, o.split, o.kobo, { amount: o.kobo / 100, subaccounts: [{ id: o.split.id, transaction_charge_type: 'flat_subaccount', transaction_charge: o.split.lecturerKobo / 100 }] }); }
         return res.redirect(j.data.link);
       }
       console.error('Flutterwave did not give a payment link:', JSON.stringify(j).slice(0, 300));
