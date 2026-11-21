@@ -42,7 +42,7 @@ module.exports = function register(app, ctx) {
 <p class="mut">₦${P.sponsor().toLocaleString()} per month.</p>
 ${err ? `<p class="err">${esc(err)}</p>` : ''}
 <form class="card" method="post" action="/sponsor" enctype="multipart/form-data">
-${guest ? `<input name="guest_name" placeholder="Your name or business name" required maxlength="80" value="${esc(v.guest_name || '')}"><input name="guest_email" type="email" placeholder="Your email (we send your private link here)" required maxlength="120" value="${esc(v.guest_email || '')}">` : ''}
+${guest ? `<input name="guest_name" placeholder="Your name or business name" required maxlength="80" value="${esc(v.guest_name || '')}"><input name="guest_email" type="email" placeholder="Your email (your receipt and private link are sent here)" required maxlength="120" value="${esc(v.guest_email || '')}">` : ''}
 <input name="title" placeholder="What are you advertising?" required maxlength="140" value="${esc(v.title || '')}">
 ${area('body', v.body, 'Describe it')}
 <input name="contact" placeholder="How should people reach you? (phone, WhatsApp, link, @username)" maxlength="140" value="${esc(v.contact || '')}">
