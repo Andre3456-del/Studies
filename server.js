@@ -2404,7 +2404,7 @@ require('./routes/backup')(app, { db, esc, inApp, layout });
 require('./routes/pages_view')(app, { canViewPage, db, deliver, emailShell, esc, inApp, isCentral, layout, offBarHtml, paywallBody, pdfViewerHtml, preparePage, sortedFor, videoMimeOf, get FLW_WINDOW() { return FLW_WINDOW; }, get flwSettle() { return flwSettle; }, get isWideScreen() { return isWideScreen; } });
 
 // ---------- Payments (Flutterwave) and sponsor posts (now in routes/payments.js) ----------
-const { FLW_WINDOW, flwCheckout, flwSettle } = require('./routes/payments')(app, { ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver, get back() { return back; } });
+const { FLW_WINDOW, flwCheckout, flwSettle } = require('./routes/payments')(app, { ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver, emailShell, get back() { return back; } });
 require('./routes/sponsor')(app, { ADMIN_EMAIL, FLW_ON, FLW_WINDOW, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, deliver, esc, flwCheckout, flwSettle, fullAdminIds, layout, limited, notify, get back() { return back; } });
 
 // ---------- Sign-up pages (students and lecturers) and the lecturer portal (now in routes/signup.js) ----------

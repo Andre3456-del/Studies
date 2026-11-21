@@ -1,10 +1,11 @@
 // Payments (Flutterwave) and sponsor posts
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
-  const { ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver } = ctx;
+  const { emailShell, ADMIN_EMAIL, FLW_ON, FLW_SECRET_KEY, PRICE_KOBO, SPONSOR_PRICE_NGN, admin, baseUrl, crypto, db, esc, fullAdminIds, hasPurchased, jsForScript, jsonSmall, layout, notify, sortedFor, upload, verifyFlutterwave, deliver } = ctx;
   const P = require('../lib/prices')(db), S = require('../lib/seller')(db); // S: lecturer sales (price + system charge, split)
   // Money alerts go to the owner only, never to other admins.
   const ownerIds = () => db.prepare('SELECT id FROM users WHERE lower(email)=lower(?)').all(String(ADMIN_EMAIL || '')).map(r => r.id);
+  S.setMail({ deliver, emailShell, esc, get owners() { return ownerIds(); } }); // lets the lecturer-sale emails and the payout check send mail
   app.post('/pay/verify', async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Log in first.' });
     const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.body.slug);
@@ -88,7 +89,7 @@ module.exports = function register(app, ctx) {
         if (had) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(tid, Math.round(Number(data.amount) * 100), had.id);
         else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,'approved')").run(row.user_id, pg.id, tid, Math.round(Number(data.amount) * 100));
         S.logVerified(row.tx_ref, data);
-        S.onPaid(pg.id, row.tx_ref, row.user_id, Math.round(Number(data.amount) * 100), notify);
+        S.onPaid(pg.id, row.tx_ref, row.user_id, Math.round(Number(data.amount) * 100), notify, data);
         if (!had || had.status !== 'approved') notify([row.user_id], { title: 'Payment confirmed', body: `${pg.title} is now unlocked for you`, url: '/p/' + pg.slug, tag: 'payment' });
       }
       db.prepare("UPDATE flw_payments SET status='paid', transaction_id=? WHERE tx_ref=?").run(tid, row.tx_ref);
