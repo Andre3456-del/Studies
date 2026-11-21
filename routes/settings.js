@@ -13,6 +13,7 @@ module.exports = function register(app, ctx) {
     ['/settings/devices', '💻', 'Linked devices', 'Log in on a laptop by scanning a code'],
     ['/settings/security', '🔒', 'Security', 'App lock and change your password'],
     ['/settings/account', '👤', 'Account', 'Email and deleting your account'],
+    ['/receipts', '🧾', 'Receipts', 'Your payment receipts, to view and print'],
     ['/saved', '📥', 'Saved offline', 'Materials kept on this phone, open without internet'],
     ['/settings/backup', '☁️', 'Backup', 'Keep your saved materials and app settings safe in your account'],
     ['/app', '📲', 'Download the app', 'Get Studies Hub as an Android app'],
