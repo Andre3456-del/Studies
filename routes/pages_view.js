@@ -136,6 +136,7 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     res.send(Buffer.from(db.prepare('SELECT file_data FROM pages WHERE id=?').get(p.id).file_data));
   });
   require('../lib/thumbs').register(app, ctx);
+  require('../lib/account_mail').init(ctx); // emails about a person's own account
   require('../lib/cbt_test')(app, ctx); // new CBT tests (registered first, so its results and submit routes win)
   require('../lib/cbt_timer')(app, ctx);
 };

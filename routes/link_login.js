@@ -66,7 +66,7 @@ tick()})()</script>`, null);
     if (!row.approved || !row.user_id) return res.json({ state: 'wait' });
     const claimed = db.prepare('UPDATE device_links SET done=1 WHERE token=? AND done=0').run(row.token);
     if (!claimed.changes) return res.json({ state: 'expired' });
-    const key = startSession(res, row.user_id);
+    const key = startSession(res, row.user_id); require('../lib/account_mail').loginOk(row.user_id, req);
     db.prepare('INSERT OR REPLACE INTO linked_devices(sid,user_id,label,created) VALUES(?,?,?,?)').run(key, row.user_id, row.label || 'Computer', Date.now());
     res.json({ state: 'ok' });
   });
@@ -138,7 +138,7 @@ window.addEventListener('pagehide',end)})()</script>`, req.user));
     if (!u.verified) return res.status(403).send(notice('Verify your email', 'Your email is not verified yet. Check your inbox for the link, or request a new one.', resendForm(u.email)));
     if (isLaptop(req) && u.role !== 'admin') return res.status(403).send(linkPage(req, next, 'Laptops log in by linking with your phone. Scan the code below.'));
     fails.delete('acct:' + who);
-    startSession(res, u.id);
+    startSession(res, u.id); require('../lib/account_mail').loginOk(u.id, req);
     res.redirect(next || '/');
   });
 
@@ -146,7 +146,7 @@ window.addEventListener('pagehide',end)})()</script>`, req.user));
     const token = String(req.query.token || '');
     const u = token && db.prepare('SELECT id FROM users WHERE verify_hash=? AND verify_expires>?').get(sha(token), Date.now());
     if (!u) return res.status(400).send(notice('Link invalid or expired', 'Request a new verification email below.', resendForm()));
-    db.prepare('UPDATE users SET verified=1, verify_hash=NULL, verify_expires=NULL WHERE id=?').run(u.id);
+    db.prepare('UPDATE users SET verified=1, verify_hash=NULL, verify_expires=NULL WHERE id=?').run(u.id); require('../lib/account_mail').created(u.id);
     res.send(notice('Email verified', 'Your account is active.', '<p><a href="/login">Log in</a></p>'));
   });
 

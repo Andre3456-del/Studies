@@ -53,6 +53,7 @@ ${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university
     allCourseIds.forEach(cid => ins.run(req.user.id, cid));
     const courseNames = db.prepare(`SELECT name FROM courses WHERE id IN (${allCourseIds.map(() => '?').join(',')})`).all(...allCourseIds).map(c => c.name).join(', ');
     notifyLecturerAdmin('Lecturer to verify', `${name} (${university}) -- ${courseNames}`, university);
+    if (!(ctx.db.prepare('SELECT welcomed FROM users WHERE id=?').get(req.user.id) || {}).welcomed) { ctx.db.prepare('UPDATE users SET welcomed=1 WHERE id=?').run(req.user.id); require('../lib/account_mail').welcome(req.user.id); }
     res.redirect('/lecturer');
   });
   app.get('/lecturer', (req, res) => {

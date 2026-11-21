@@ -39,7 +39,7 @@ module.exports = function register(app, ctx) {
         db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
       }
       if (isLaptop(req) && u.role !== 'admin') return res.redirect('/login');
-      startSession(res, u.id);
+      startSession(res, u.id); require('../lib/account_mail').loginOk(u.id, req);
       res.redirect('/');
     } catch (e) {
       console.error('Google sign-in failed:', e.message);
@@ -71,7 +71,7 @@ module.exports = function register(app, ctx) {
         db.prepare('UPDATE users SET verified=1, hash=?, gsignup=1 WHERE id=?').run(rnd(), u.id);
         db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
       }
-      startSession(res, u.id);
+      startSession(res, u.id); require('../lib/account_mail').loginOk(u.id, req);
       res.json({ ok: true, url: req.body.lecturer ? '/lecturer' : '/' });
     } catch (e) {
       console.error('App Google sign-in failed:', e.message);

@@ -1,7 +1,7 @@
 // Settings > Account: the email on the account, and the person's own "delete my account" button.
 module.exports = function register(app, ctx) {
   const { bcrypt, db, esc, layout, purgeUser } = ctx;
-  const row = id => db.prepare('SELECT id,email,hash,gsignup,role FROM users WHERE id=?').get(id) || {};
+  const row = id => db.prepare('SELECT id,name,email,hash,gsignup,role FROM users WHERE id=?').get(id) || {};
   const page = (req, msg) => {
     const u = row(req.user.id), needPw = !u.gsignup;
     return layout('Account', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Account</h1>
@@ -17,13 +17,16 @@ ${needPw ? '<input type="password" name="password" placeholder="Your password" a
     if (!req.user) return res.redirect('/login?next=/settings/account');
     res.set('Cache-Control', 'no-store').send(page(req));
   });
-  app.post('/settings/account/delete', (req, res) => {
+  app.post('/settings/account/delete', async (req, res) => {
     if (!req.user) return res.sendStatus(401);
     const u = row(req.user.id), b = req.body || {};
     if (u.role === 'admin') return res.status(403).send(page(req, 'The main admin account cannot be deleted here.'));
     if (String(b.confirm || '').trim().toUpperCase() !== 'DELETE') return res.status(400).send(page(req, 'Type the word DELETE to confirm.'));
     if (!u.gsignup && !(u.hash && bcrypt.compareSync(String(b.password || ''), u.hash))) return res.status(400).send(page(req, 'That password is not right.'));
+    const AM = require('../lib/account_mail');
+    await Promise.race([AM.deleting(u), new Promise(r => setTimeout(r, 8000))]); // the "we are deleting your account" email goes out first
     try { purgeUser(u.id); } catch (e) { return res.status(500).send(page(req, 'Something went wrong. Please try again.')); }
+    AM.deleted({ email: u.email, name: u.name }); // and the "it is done" email once it is gone
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     res.send(layout('Account deleted', '<h1>Your account has been deleted</h1><p class="mut">All your data was removed. You are welcome back any time.</p><p><a class="btn" href="/">Back to the home page</a></p>', null));
   });

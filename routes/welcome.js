@@ -117,6 +117,7 @@ i.addEventListener('input',function(){clearTimeout(t);var v=i.value;t=setTimeout
     const err = saveProfile(req.user, d);
     if (err) return fail(err);
     if (req.file) db.prepare('UPDATE users SET avatar_data=?, avatar_mime=? WHERE id=?').run(req.file.buffer, req.file.mimetype, req.user.id);
+    if (!(db.prepare('SELECT welcomed FROM users WHERE id=?').get(req.user.id) || {}).welcomed) { db.prepare('UPDATE users SET welcomed=1 WHERE id=?').run(req.user.id); require('../lib/account_mail').welcome(req.user.id); }
     res.redirect('/dashboard?welcome=1');
   });
   return { UNAME_JS, lockedOf, positionTaken, profileFields, readProfile, saveProfile };

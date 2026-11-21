@@ -2414,7 +2414,7 @@ require('./routes/signup')(app, { GOOGLE_ON, authForm, bcrypt, checkEmailPage, d
 const { canLinkOthers, deviceOf, isLaptop, isWideScreen, linkPage } = require('./routes/link_login')(app, { DUMMY_HASH, authForm, baseUrl, bcrypt, canLecturerAdmin, crypto, db, esc, fails, layout, noteFail, notice, resendForm, safeNext, sendSafely, sha, sidKey, startSession, tooMany });
 
 // ---------- Forgot password: 6-digit email code (now in routes/forgot.js) ----------
-require('./routes/forgot')(app, { bcrypt, crypto, db, forgotForm, limited, notice, resetForm, sendResetCode, weakPw });
+require('./routes/forgot')(app, { bcrypt, crypto, db, esc, forgotForm, layout, limited, notice, resetForm, sendResetCode, sidKey, weakPw });
 
 // ---------- Continue with Google (now in routes/google.js) ----------
 const { APP_GOOGLE_IDS } = require('./routes/google')(app, { GOOGLE_ON, SECURE, baseUrl, bcrypt, crypto, db, fs, insertUser, isLaptop, limited, notice, path, startSession });

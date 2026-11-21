@@ -47,7 +47,7 @@ show()})()</script>`, req.user));
     if (pw.length > 200) return res.json({ error: 'That password is too long.' });
     if (weakPw(pw, u.email)) return res.json({ error: 'That password is too easy to guess. Please pick something less common.' });
     if (bcrypt.compareSync(pw, u.hash)) return res.json({ error: 'Pick a different password from the old one.' });
-    db.prepare('UPDATE users SET hash=?, gsignup=0 WHERE id=?').run(bcrypt.hashSync(pw, 12), req.user.id);
+    db.prepare('UPDATE users SET hash=?, gsignup=0 WHERE id=?').run(bcrypt.hashSync(pw, 12), req.user.id); require('../lib/account_mail').passwordChanged(req.user.id);
     if (req.sid) db.prepare('DELETE FROM sessions WHERE user_id=? AND id<>?').run(req.user.id, sidKey(req.sid)); // other devices must log in again
     res.json({ ok: true });
   });
