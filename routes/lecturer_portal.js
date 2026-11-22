@@ -69,13 +69,13 @@ ${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
-<div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
+<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
-<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.style.display=im?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
       const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html;
       return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
@@ -104,13 +104,13 @@ ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
-<div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
+<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
-<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.style.display=im?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
       const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html;
       return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
@@ -134,13 +134,13 @@ ${semesterField('')}
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
-<div id="lnameField" style="display:none"><input name="title" placeholder="Name of the image" maxlength="140"></div>
+<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
-<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.style.display=im?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
+<script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
       const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html;
       return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
@@ -167,7 +167,7 @@ ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesLi
     if (kind === 'video' && !vid && !vmime) return res.redirect(ctx.back('That file is not a video.'));
     if (kind === 'image' && !isImageUpload(req.file)) return res.redirect(ctx.back('Choose a JPG or PNG picture.'));
     const base = req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'Video';
-    const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base);
+    const slug = uniqueSlug(slugify(title || base)), aud = readAudience(req.body, title || base);
     if (kind === 'video') {
       if (vid) db.prepare('INSERT INTO pages(slug,title,html,kind,video_id,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', vid, aud.dept, aud.level, req.user.id, courseId);
       else db.prepare('INSERT INTO pages(slug,title,html,kind,file_data,file_mime,file_name,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id, courseId);
