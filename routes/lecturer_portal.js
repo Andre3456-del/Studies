@@ -88,7 +88,7 @@ ${p.kind === 'cbt' ? `<details style="min-width:120px"><summary class="link">CBT
     res.send(layout('Home', `<style>.lhx{background:linear-gradient(135deg,var(--accent,#6d5efc),#22c1c3);color:#fff;border-radius:20px;padding:22px 20px;margin:4px 0 16px}.lhx h1{margin:0 0 4px;font-size:24px;color:#fff}.lhx p{margin:0;opacity:.9}.lst{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}.lst div{background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:14px 8px;text-align:center}.lst b{display:block;font-size:24px}.lst span{font-size:12px;opacity:.7}.lqa{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}.lqa a{display:block;text-decoration:none;color:inherit;background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:16px 14px;font-weight:600}.lqa a small{display:block;font-weight:400;opacity:.7;margin-top:4px}.lcc{display:block;text-decoration:none;color:inherit;background:var(--card,rgba(127,127,127,.12));border-radius:16px;padding:16px;margin-bottom:10px}.lcc b{display:block}.lcc span{font-size:13px;opacity:.7}</style><div class="lhx"><h1>${greet}, ${first} 👋</h1><p>${esc(req.user.university)}</p></div>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <div class="lst"><div><b>${myCourses.length}</b><span>Courses</span></div><div><b>${myPages.length}</b><span>Uploads</span></div><div><b>${myPages.filter(p => p.kind === 'video').length}</b><span>Videos</span></div></div>
-<div class="lqa"><a href="/lecturer/uploads#upload">⬆️ Upload a document<small>Share with your students</small></a><a href="/lecturer/course">📚 My courses<small>See what others posted</small></a></div>
+<div class="lqa"><a href="/lecturer/uploads">⬆️ Uploads<small>Documents and videos</small></a><a href="/lecturer/cbt">📝 CBT<small>Tests and results</small></a><a href="/lecturer/sold">💰 Sold materials<small>Buyers and bank account</small></a><a href="/lecturer/course">📚 Courses<small>Everyone's uploads</small></a></div>
 <h3>Recently uploaded</h3>${recent}`, req.user));
   });
   app.get('/lecturer/course', (req, res) => {
@@ -148,7 +148,7 @@ ${semesterField('')}
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
     res.send(layout('Uploaded documents', `<h1>Uploaded documents</h1>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-<a class="card row" href="/lecturer/cbt/new" style="text-decoration:none;color:inherit"><div><b>📝 Create a CBT test</b><br><span class="mut" style="font-size:13px">Type your questions, shuffle them, set practice or test</span></div><span>&rsaquo;</span></a>
+<a class="card row" href="/lecturer/cbt" style="text-decoration:none;color:inherit"><div><b>📝 Create a CBT test</b><br><span class="mut" style="font-size:13px">Type your questions, shuffle them, set practice or test</span></div><span>&rsaquo;</span></a>
 <a class="card row" href="/lecturer/sell" style="text-decoration:none;color:inherit"><div><b>💰 Sell your materials</b><br><span class="mut" style="font-size:13px">${SELL.active(req.user.id) ? 'Bank account added. Set a price on any upload (tap Edit).' : 'Add your bank account, then put a price on your uploads and get paid.'}</span></div><span>&rsaquo;</span></a>
 ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesList}</div>`, req.user));
   });
@@ -237,13 +237,11 @@ ${SELL.active(req.user.id) ? `<label class="mut">Price in naira (0 = free). Stud
     const owns = req.user.is_lecturer && req.user.lecturer_status === 'approved' && db.prepare('SELECT 1 FROM lecturer_courses WHERE lecturer_id=? AND course_id=?').get(req.user.id, course.id);
     if (!owns) return res.status(404).send(layout('Not found', `<p><a href="${req.user.is_lecturer ? '/lecturer' : '/dashboard'}">Back</a></p>`, req.user));
     const rows = db.prepare(`SELECT p.*, u.name AS author_name, u.university AS author_university FROM pages p JOIN users u ON u.id=p.author_id WHERE p.course_id=? ORDER BY u.university, u.name, p.id DESC`).all(course.id);
-    const byUni = {};
-    rows.forEach(r => { (byUni[r.author_university] = byUni[r.author_university] || {})[r.author_name] = (byUni[r.author_university][r.author_name] || []).concat(r); });
-    const html = Object.keys(byUni).sort().map(uni => `<details class="card"><summary style="cursor:pointer;font-weight:600">${esc(uni)}</summary>
-${Object.keys(byUni[uni]).sort().map(name => `<details style="margin:8px 0 0 10px"><summary style="cursor:pointer">${esc(name)}</summary>
-${byUni[uni][name].map(p => { const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html; return `<p style="margin:6px 0 6px 14px"><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a> <span class="mut">${label}</span></p>`; }).join('')}
-</details>`).join('')}
-</details>`).join('') || '<p class="mut">No uploads for this course yet.</p>';
+    const by = {};
+    rows.forEach(r => { (by[r.author_id] = by[r.author_id] || { name: r.author_name, uni: r.author_university, list: [] }).list.push(r); });
+    const html = Object.keys(by).sort((a, b) => (Number(b) === req.user.id) - (Number(a) === req.user.id) || by[a].name.localeCompare(by[b].name)).map(id => { const g = by[id]; return `<details class="card"><summary style="cursor:pointer"><b>📁 ${esc(g.name)}${Number(id) === req.user.id ? ' (you)' : ''}</b> <span class="mut">${g.list.length}</span><br><span class="mut" style="font-size:12px">${esc(g.uni || '')}</span></summary>
+${g.list.map(p => { const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html; return `<p style="margin:8px 0 0 14px"><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a> <span class="mut">${label}</span></p>`; }).join('')}
+</details>`; }).join('') || '<p class="mut">No uploads for this course yet.</p>';
     res.send(layout(course.name, `<p class="mut"><a href="/lecturer">&larr; Back</a></p><h1>${esc(course.name)}</h1>${html}`, req.user));
   });
 };

@@ -129,6 +129,7 @@ module.exports = function register(app, ctx) {
     const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(String(req.body.slug || ''));
     if (!page || !page.paid || !sortedFor(page, req.user)) return res.redirect('/');
     if (hasPurchased(req.user.id, page.id)) return res.redirect('/p/' + page.slug);
+    if (page.author_id && !require('../lib/lecturer_sales').saveBuyer(db, req.user, page, req.body.reg_no)) return res.redirect('/p/' + page.slug);
     await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: S.total(page, P.defKobo(page.kind)), split: S.split(page, P.defKobo(page.kind)), desc: page.title, back: '/p/' + page.slug });
   });
   // Where Flutterwave sends the person back to after paying (or cancelling): a short page that asks Flutterwave, shows a tick or a cross, then goes on.
