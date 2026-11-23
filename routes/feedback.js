@@ -17,7 +17,7 @@ module.exports = function register(app, ctx) {
     const u = db.prepare('SELECT id,name,university,department,level,is_lecturer,role FROM users WHERE id=?').get(req.user.id);
     const who = [u.role === 'uniadmin' ? 'University admin' : u.is_lecturer ? 'Lecturer' : 'Student', u.university, u.department, u.dept_option, u.level ? u.level + ' level' : ''].filter(Boolean).join(' · ');
     db.prepare('INSERT INTO feedback(user_id,name,who,rating,liked,suggest,other) VALUES(?,?,?,?,?,?,?)').run(u.id, u.name, who, rating, liked, suggest, other);
-    notify(fullAdminIds(), { title: 'New feedback' + (rating ? ' ' + '★'.repeat(rating) : ''), body: `${u.name}: ${(liked || suggest || other || 'rated the site').slice(0, 90)}`, url: '/chat/feedback', tag: 'feedback' });
+    notify(fullAdminIds().filter(id => isCentral(db.prepare('SELECT email FROM users WHERE id=?').get(id))), { title: 'New feedback' + (rating ? ' ' + '★'.repeat(rating) : ''), body: `${u.name}: ${(liked || suggest || other || 'rated the site').slice(0, 90)}`, url: '/chat/feedback', tag: 'feedback' });
     res.json({ ok: true });
   });
   app.get('/chat/feedback', (req, res) => {
