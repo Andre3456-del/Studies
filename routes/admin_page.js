@@ -123,7 +123,7 @@ ${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</opti
 ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."><p class="hint" style="margin:4px 0 0">Paste a YouTube link here, <b>or</b> choose a video from your phone above. Either one works.</p></div>` : ''}
 <label><input type="checkbox" class="shsw" name="members_only" value="1"> Members only (login required)</label><br>
 <label class="hint" style="display:block;margin-top:8px">Who is this for?</label>
-<details><summary>Which departments? (leave all unchecked for every department)</summary>${departmentCheckboxes([])}</details>
+<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
 <select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${P.cbt()})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
 ${semesterField('')}

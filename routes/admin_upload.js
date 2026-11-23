@@ -45,7 +45,7 @@ module.exports = function register(app, ctx) {
     if (!p) return res.redirect(back('Page not found.'));
     if (!ownsAdminPage(req.user, p)) return res.redirect(back(NOT_YOURS));
     res.send(layout('Who is this for?', `<p class="mut"><a href="/admin?tab=pages">&larr; Admin</a></p><h1 style="font-size:26px">${esc(p.title)}</h1>
-<form class="card" method="post" action="/admin/pages/${p.id}/sort"><label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
+<form class="card" method="post" action="/admin/pages/${p.id}/sort"><details><summary>Departments</summary>${departmentCheckboxes(deptListOf(p))}</details>
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>${semesterField(p.semester)}<button>Save</button></form>`, req.user));
   });
   app.post('/admin/pages/:id/sort', pagesAdmin, (req, res) => {

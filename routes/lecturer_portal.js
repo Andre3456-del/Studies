@@ -71,7 +71,7 @@ ${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
-<label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
+<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
@@ -106,7 +106,7 @@ ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
-<label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
+<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
@@ -136,7 +136,7 @@ ${semesterField('')}
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
-<label class="mut">Which departments is this for? (leave all unchecked for every department)</label>${departmentCheckboxes([])}
+<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
 ${semesterField('')}
 <button>Publish -- goes live immediately</button></form>
@@ -148,8 +148,6 @@ ${semesterField('')}
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
     res.send(layout('Uploaded documents', `<h1>Uploaded documents</h1>
 ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-<a class="card row" href="/lecturer/cbt" style="text-decoration:none;color:inherit"><div><b>📝 Create a CBT test</b><br><span class="mut" style="font-size:13px">Type your questions, shuffle them, set practice or test</span></div><span>&rsaquo;</span></a>
-<a class="card row" href="/lecturer/sell" style="text-decoration:none;color:inherit"><div><b>💰 Sell your materials</b><br><span class="mut" style="font-size:13px">${SELL.active(req.user.id) ? 'Bank account added. Set a price on any upload (tap Edit).' : 'Add your bank account, then put a price on your uploads and get paid.'}</span></div><span>&rsaquo;</span></a>
 ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesList}</div>`, req.user));
   });
   app.post('/lecturer/upload', upload.single('file'), (req, res) => {
@@ -192,10 +190,10 @@ ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesLi
 <label class="mut">Replace the file (optional -- leave blank to keep the current one)</label>
 <input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : p.kind === 'video' ? 'video/*' : p.kind === 'image' ? 'image/png,image/jpeg' : '.html,.htm'}">
 ${p.kind === 'video' ? '<label class="mut">Or use a YouTube link instead</label><input name="video_url" placeholder="https://youtube.com/watch?v=...">' : ''}
-<label class="mut">Which departments? (leave all unchecked for every department)</label>${departmentCheckboxes(deptListOf(p))}
+<details><summary>Departments</summary>${departmentCheckboxes(deptListOf(p))}</details>
 <label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}"${Number(p.level) === l ? ' selected' : ''}>${l} level only</option>`).join('')}</select>
 ${semesterField(p.semester)}
-${SELL.active(req.user.id) ? `<label class="mut">Price in naira (0 = free). Students pay this plus a small system charge; you receive exactly this.</label><input name="price" type="number" min="0" max="100000" step="50" value="${p.paid && p.price_kobo ? Math.round(p.price_kobo / 100) : 0}">` : '<p class="mut">Want to sell this? <a href="/lecturer/sell">Add your bank account</a> first.</p>'}
+${SELL.active(req.user.id) ? `<label class="mut">Price in naira</label><input name="price" type="number" min="0" max="100000" step="50" value="${p.paid && p.price_kobo ? Math.round(p.price_kobo / 100) : 0}">` : '<p class="mut">Want to sell this? <a href="/lecturer/sell">Add your bank account</a> first.</p>'}
 <button>Save changes</button></form>`, req.user));
   });
   app.post('/lecturer/pages/:id/edit', upload.single('file'), (req, res) => {
