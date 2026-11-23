@@ -15,7 +15,7 @@ module.exports = function register(app, ctx) {
       if (!vid && !req.file) return res.redirect(back('Paste a YouTube link, or choose a video from your phone.'));
       const vmime = !vid && videoMimeOf(req.file);
       if (!vid && !vmime) return res.redirect(back('That file is not a video.'));
-      const slug = uniqueSlug(slugify(title || (req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'video'))), aud = readAudience(req.body, title);
+      const slug = uniqueSlug(slugify(title || (req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'video'))), aud = readAudience(req.body, title); require('../lib/upload_prefs').save(db, req.user, req.body);
       if (vid) db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,video_id,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
         .run(slug, title || 'Video', '', membersOnly, 'video', paid, P.defKobo('video'), vid, aud.dept, aud.level, req.user.id);
       else db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -26,7 +26,7 @@ module.exports = function register(app, ctx) {
     }
     if (!req.file) return res.redirect(back('Choose a file first.'));
     const base = req.file.originalname.replace(/\.[a-z0-9]+$/i, '');
-    const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base);
+    const slug = uniqueSlug(slugify(base)), aud = readAudience(req.body, title || base); require('../lib/upload_prefs').save(db, req.user, req.body);
     if (kind === 'image' && !isImageUpload(req.file)) return res.redirect(back('Choose a JPG or PNG picture.'));
     if (kind === 'pdf' || kind === 'doc' || kind === 'image') {
       db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')

@@ -1,6 +1,7 @@
 // Lecturer portal (welcome, uploads, edit, courses)
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
+  const UP = require('../lib/upload_prefs');
   const SELL = require('../lib/seller')(ctx.db);
   require('../lib/cbt_builder')(app, ctx); // lecturers type their own CBT questions
   const { LEVELS, OTHER_UNI, announceUpload, applySemester, canLecturerAdmin, db, departmentCheckboxes, deptListOf, esc, institutionList, isImageUpload, layout, notifyLecturerAdmin, profileComplete, readAudience, semesterField, slugify, uniqueSlug, upload, videoMimeOf, youtubeId } = ctx;
@@ -71,9 +72,9 @@ ${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
-<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
-<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
-${semesterField('')}
+<details><summary>Departments</summary>${departmentCheckboxes(UP.get(db, req.user).dept)}</details>
+<label class="mut">Level</label><select name="level">${UP.levels(db, req.user, LEVELS, false)}</select>
+${semesterField(UP.get(db, req.user).semester)}
 <button>Publish -- goes live immediately</button></form>
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
@@ -106,9 +107,9 @@ ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
-<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
-<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
-${semesterField('')}
+<details><summary>Departments</summary>${departmentCheckboxes(UP.get(db, req.user).dept)}</details>
+<label class="mut">Level</label><select name="level">${UP.levels(db, req.user, LEVELS, false)}</select>
+${semesterField(UP.get(db, req.user).semester)}
 <button>Publish -- goes live immediately</button></form>
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
@@ -136,9 +137,9 @@ ${semesterField('')}
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
 <div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
-<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
-<label class="mut">Level</label><select name="level"><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
-${semesterField('')}
+<details><summary>Departments</summary>${departmentCheckboxes(UP.get(db, req.user).dept)}</details>
+<label class="mut">Level</label><select name="level">${UP.levels(db, req.user, LEVELS, false)}</select>
+${semesterField(UP.get(db, req.user).semester)}
 <button>Publish -- goes live immediately</button></form>
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
@@ -165,7 +166,7 @@ ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesLi
     if (kind === 'video' && !vid && !vmime) return res.redirect(ctx.back('That file is not a video.'));
     if (kind === 'image' && !isImageUpload(req.file)) return res.redirect(ctx.back('Choose a JPG or PNG picture.'));
     const base = req.file ? req.file.originalname.replace(/\.[a-z0-9]+$/i, '') : 'Video';
-    const slug = uniqueSlug(slugify(title || base)), aud = readAudience(req.body, title || base);
+    const slug = uniqueSlug(slugify(title || base)), aud = readAudience(req.body, title || base); UP.save(db, req.user, req.body);
     if (kind === 'video') {
       if (vid) db.prepare('INSERT INTO pages(slug,title,html,kind,video_id,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', vid, aud.dept, aud.level, req.user.id, courseId);
       else db.prepare('INSERT INTO pages(slug,title,html,kind,file_data,file_mime,file_name,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(slug, title || base, '', 'video', req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id, courseId);

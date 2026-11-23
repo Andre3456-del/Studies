@@ -1,6 +1,7 @@
 // The Admin page
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
+  const UP = require('../lib/upload_prefs');
   const { FLW_WINDOW, KIND_META, LEVELS, PRICE_KOBO, PRICE_NGN, ROLES, ROLE_LABEL, SCOPE_RANK, adminish, atLink, can, canPromote, db, departmentCheckboxes, deptListOf, esc, facultyOf, isCentral, layout, mayManageNews, optionsMap, presenceDot, semesterField } = ctx;
   const P = require('../lib/prices')(db);
   app.get('/admin', adminish, (req, res) => {
@@ -121,12 +122,12 @@ ${ck ? `<select name="kind" id="kindSelect"><option value="html">HTML page</opti
       : '<input type="hidden" name="kind" value="html"><p class="mut" style="margin:4px 0">Your role can upload plain HTML pages. PDFs, Word documents, videos and CBT pages need a Files admin or a full admin.</p>'}
 <div id="fileField"><input type="file" name="file" accept=".html,.htm,text/html"></div>
 ${ck ? `<div id="videoField" style="display:none"><input name="video_url" placeholder="https://youtube.com/watch?v=..."><p class="hint" style="margin:4px 0 0">Paste a YouTube link here, <b>or</b> choose a video from your phone above. Either one works.</p></div>` : ''}
-<label><input type="checkbox" class="shsw" name="members_only" value="1"> Members only (login required)</label><br>
+<label><input type="checkbox" class="shsw" name="members_only" value="1"${UP.get(db, req.user).members_only ? ' checked' : ''}> Members only (login required)</label><br>
 <label class="hint" style="display:block;margin-top:8px">Who is this for?</label>
-<details><summary>Departments</summary>${departmentCheckboxes([])}</details>
-<select name="level"><option value="auto">Level: detect from the course code in the title (GST 121 = 100 level)</option><option value="all">All levels</option>${LEVELS.map(l => `<option value="${l}">${l} level only</option>`).join('')}</select>
+<details><summary>Departments</summary>${departmentCheckboxes(UP.get(db, req.user).dept)}</details>
+<select name="level">${UP.levels(db, req.user, LEVELS, true)}</select>
 ${cf ? `<div id="payField" style="display:none"><label><input type="radio" name="visibility" value="normal" checked> Free to view</label> <label style="margin-left:14px"><input type="radio" name="visibility" value="paid"> Payment to view (₦${P.cbt()})</label><p class="hint">Only CBT uploads can be pay-to-view.</p></div>` : ''}
-${semesterField('')}
+${semesterField(UP.get(db, req.user).semester)}
 <button>Upload</button></form>
 ${ck ? `<script>(function(){var k=document.getElementById('kindSelect'),f=document.getElementById('fileField'),v=document.getElementById('videoField'),fi=f.querySelector('input'),pf=document.getElementById('payField');function sync(){var isVideo=k.value==='video',isImg=k.value==='image';if(pf)pf.style.display=k.value==='cbt'?'':'none';v.style.display=isVideo?'':'none';fi.required=!isVideo;fi.accept=isVideo?'video/*':isImg?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>
 <script>if('launchQueue' in window){window.launchQueue.setConsumer(function(lp){if(!lp.files||!lp.files.length)return;lp.files[0].getFile().then(function(file){var dt=new DataTransfer();dt.items.add(file);var fi=document.querySelector('#fileField input[type=file]');fi.files=dt.files;var n=file.name.toLowerCase();var ks=document.getElementById('kindSelect');ks.value=n.indexOf('.pdf')>-1?'pdf':(n.indexOf('.doc')>-1?'doc':'html');ks.dispatchEvent(new Event('change'));document.getElementById('upload').scrollIntoView({behavior:'smooth'})})})}</script>` : ''}
