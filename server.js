@@ -528,7 +528,7 @@ function linkify(text) {
 }
 // A @username that opens that member's profile.
 const atLink = username => `<a href="/@${esc(String(username).toLowerCase())}" class="autolink mention">@${esc(username)}</a>`;
-const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page';
+const slugify = () => require('./lib/slugs').code(); // page addresses are random codes, not the material's name
 const safeNext = n => (typeof n === 'string' && /^\/(?!\/)/.test(n) ? n : '');
 function uniqueSlug(base) {
   let s = base, i = 2;

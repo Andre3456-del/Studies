@@ -56,7 +56,8 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     return `<div style="display:flex;gap:8px;margin:0 0 12px">${c ? b(c.slug, 'Take the CBT test', '&#128221;') : ''}${v ? b(v.slug, 'Watch the video', '&#9654;&#65039;') : ''}</div>`;
   };
   app.get('/p/:slug', async (req, res) => {
-    const p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
+    let p = db.prepare('SELECT * FROM pages WHERE slug=?').get(req.params.slug);
+    if (!p) { const to = require('../lib/slugs').moved(db, req.params.slug); if (to) return res.redirect(301, req.originalUrl.replace('/p/' + req.params.slug, '/p/' + to)); }
     if (!p) return res.status(404).send(layout('Not found', '<h2>Page not found</h2>', req.user));
     if (!sortedFor(p, req.user)) {
       if (!req.user) return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
@@ -106,7 +107,8 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
   app.get('/p/:slug/raw', (req, res) => {
     // The file itself is read separately, so a video can be sent in small pieces without loading the whole thing each time.
     const cols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name).filter(c => c !== 'file_data' && c !== 'html');
-    const p = db.prepare(`SELECT ${cols.join(',')}, length(file_data) AS file_len FROM pages WHERE slug=?`).get(req.params.slug);
+    let p = db.prepare(`SELECT ${cols.join(',')}, length(file_data) AS file_len FROM pages WHERE slug=?`).get(req.params.slug);
+    if (!p) { const to = require('../lib/slugs').moved(db, req.params.slug); if (to) return res.redirect(301, req.originalUrl.replace('/p/' + req.params.slug, '/p/' + to)); }
     if (!p || !p.file_len || !sortedFor(p, req.user)) return res.status(404).send('Not found');
     if (!canViewPage(p, req.user)) return res.status(p.members_only && !p.paid ? 401 : 402).send('Not available');
     res.setHeader('X-Content-Type-Options', 'nosniff');
