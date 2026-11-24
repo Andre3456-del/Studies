@@ -64,17 +64,25 @@ i.addEventListener('input',function(){clearTimeout(t);var v=i.value;t=setTimeout
   }
   // Saves the profile. A position needs school authorities' approval (a full admin approves their own); until then no title shows.
   const normPos = v => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  // No two people at one university may hold (or be waiting to hold) exactly the same position name.
-  function positionTaken(university, position, exceptId) {
-    const p = normPos(position);
+  // No two people may hold the same position in the same department and level (a department-wide or school-wide one also blocks
+  // the same name anywhere in that department or university). The same name in another department or level is fine.
+  function positionTaken(university, position, exceptId, department, level, scope) {
+    const p = normPos(position), R = { own: 1, department: 2, faculty: 3, school: 4 };
     if (!p || !university) return false;
-    return db.prepare("SELECT position FROM users WHERE university=? AND position IS NOT NULL AND position_status IN ('approved','pending') AND id!=?").all(university, exceptId || 0).some(r => normPos(r.position) === p);
+    const mine = R[scope] || 1;
+    return db.prepare("SELECT position,department,level,position_scope AS sc FROM users WHERE university=? AND position IS NOT NULL AND position_status IN ('approved','pending') AND id!=?").all(university, exceptId || 0).some(r => {
+      if (normPos(r.position) !== p) return false;
+      const theirs = R[r.sc] || 1, wide = Math.max(mine, theirs);
+      if (wide >= 4) return true;
+      if (wide >= 3) return true;
+      return r.department === (department || null) && (wide >= 2 || Number(r.level) === Number(level));
+    });
   }
   // The controllers (central and full admin) of one university: they receive that university's position claims.
   const uniControllerIds = inst => inst ? db.prepare("SELECT id FROM users WHERE lp_inst=? AND virtual=0 AND role IN ('uniadmin','user')").all(inst).map(r => r.id) : [];
   function saveProfile(user, d) {
     const cur = db.prepare('SELECT username,university,department,level,dept_option FROM users WHERE id=?').get(user.id) || {};
-    if (d.position && (d.position || null) !== (user.position || null) && !can.full(user) && positionTaken(cur.university || d.university, d.position, user.id)) return 'Someone at your university already holds or has claimed that exact position. Write it a little differently (for example add your department).';
+    if (d.position && (d.position || null) !== (user.position || null) && !can.full(user) && positionTaken(cur.university || d.university, d.position, user.id, cur.department || d.department, cur.level || d.level)) return 'Someone in your department and level already holds or has claimed that position.';
     try { // a value that is already saved is never overwritten here, whatever the caller passed
       db.prepare('UPDATE users SET name=?, username=?, university=?, department=?, level=?, dept_option=? WHERE id=?').run(d.name, cur.username || d.username, cur.university || d.university, cur.department || d.department, cur.level || d.level, cur.dept_option || d.dept_option || null, user.id);
     } catch { return 'That username is already taken.'; }
