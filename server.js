@@ -75,7 +75,7 @@ for (const [c, def] of [['gsignup', 'INTEGER NOT NULL DEFAULT 0'], ['can_promote
 const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
 for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'html'"], ['paid', 'INTEGER NOT NULL DEFAULT 0'], ['price_kobo', 'INTEGER'], ['file_data', 'BLOB'], ['file_mime', 'TEXT'], ['file_name', 'TEXT'], ['admin_id', 'INTEGER'], ['video_id', 'TEXT'], ['dept', 'TEXT'], ['level', 'INTEGER'], ['author_id', 'INTEGER'], ['course_id', 'INTEGER']])
   if (!pageCols.includes(c)) db.exec(`ALTER TABLE pages ADD COLUMN ${c} ${def}`);
-if (!pageCols.includes('university')) db.exec('ALTER TABLE pages ADD COLUMN university TEXT');
+if (!pageCols.includes('university')) db.exec('ALTER TABLE pages ADD COLUMN university TEXT'); if (!pageCols.includes('code')) db.exec('ALTER TABLE pages ADD COLUMN code TEXT');
 db.exec('CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 db.exec('CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL, body_enc BLOB NOT NULL, iv BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
 db.exec('CREATE INDEX IF NOT EXISTS messages_pair ON messages(sender_id, recipient_id)');
@@ -775,7 +775,7 @@ SEM.ensureSchema(db);
 SEM.addSemesterColumn(db, 'pages', 'title');
 // Reads the semester from the course code in each new upload's title (GST 121 -> second semester); no code = shows in both.
 function stampSemesters() {
-  const rows = db.prepare("SELECT id,title FROM pages WHERE semester IS NULL AND title GLOB '*[0-9][0-9][0-9]*'").all(), set = db.prepare('UPDATE pages SET semester=? WHERE id=?');
+  const rows = db.prepare("SELECT id, COALESCE(NULLIF(code,''), title) AS title FROM pages WHERE semester IS NULL AND COALESCE(NULLIF(code,''), title) GLOB '*[0-9][0-9][0-9]*'").all(), set = db.prepare('UPDATE pages SET semester=? WHERE id=?');
   for (const r of rows) { const sm = SEM.parseCourseCode(r.title).semester; if (sm) set.run(sm, r.id); }
 }
 registerCalling(app, { db, crypto, notify, logCall: (callerId, calleeId, kind, state, secs) => {
@@ -808,8 +808,8 @@ function broadcastNews(newsId, exceptId) {
 }
 function announceUpload(page) {
   stampSemesters();
-  const rowSem = page.slug ? db.prepare('SELECT semester FROM pages WHERE slug=?').get(page.slug) : null;
-  if (!SEM.visibleInSemester(rowSem && rowSem.semester != null ? rowSem.semester : SEM.parseCourseCode(page.title).semester, SEM.getCurrent(db))) return; // not this semester's material: no alert
+  const rowSem = page.slug ? db.prepare('SELECT semester, code FROM pages WHERE slug=?').get(page.slug) : null;
+  if (!SEM.visibleInSemester(rowSem && rowSem.semester != null ? rowSem.semester : SEM.parseCourseCode((rowSem && rowSem.code) || page.title).semester, SEM.getCurrent(db))) return; // not this semester's material: no alert
   const ids = audienceFor(page);
   const where = [deptListOf(page).join(', '), page.level ? page.level + ' level' : ''].filter(Boolean).join(' · ');
   notify(ids, { title: page.paid ? 'New CBT (pay to view)' : 'New upload', body: `${page.title}${where ? ' — ' + where : ''}`, url: '/p/' + page.slug, tag: 'upload' });
@@ -842,8 +842,9 @@ function semesterField(selected) {
   const cur = SEM.semesterName(SEM.getCurrent(db)), sel = Number(selected);
   return `<label class="mut">Semester</label><select name="semester"><option value="auto">Detect from the course code (it is ${esc(cur)} now)</option><option value="1"${sel === 1 ? ' selected' : ''}>First semester</option><option value="2"${sel === 2 ? ' selected' : ''}>Second semester</option></select>`;
 }
-function applySemester(where, choice) { // where: {slug} or {id}
+function applySemester(where, choice, code) { // where: {slug} or {id}; code = the course code typed on the form (kept as the sub name)
   const col = where.slug != null ? 'slug' : 'id', val = where.slug != null ? where.slug : where.id, c = String(choice || 'auto');
+  if (code != null) db.prepare(`UPDATE pages SET code=? WHERE ${col}=?`).run(String(code).trim().slice(0, 30) || null, val);
   if (c === '1' || c === '2') db.prepare(`UPDATE pages SET semester=? WHERE ${col}=?`).run(Number(c), val);
   else { db.prepare(`UPDATE pages SET semester=NULL WHERE ${col}=?`).run(val); stampSemesters(); }
 }

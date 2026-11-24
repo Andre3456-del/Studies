@@ -12,7 +12,7 @@ module.exports = function register(app, ctx) {
       : `<div class="pv-img pv-icon"${!needsPay && ['pdf', 'image', 'html', 'cbt'].includes(p.kind) ? ` data-th="${p.id}" data-k="${p.kind}" data-slug="${esc(p.slug)}" data-title="${esc(p.title)}"${p.kind === 'html' && p.snip ? ` data-snip="${esc(String(p.snip).replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 220))}"` : ''}` : ''}>${icon}</div>`;
     const who = String(p.author || '?').trim(), ini = esc(who.charAt(0).toUpperCase() || '?');
     const meta = [p.author ? esc(p.author) : '', p.course ? esc(p.course) : '', p.level ? p.level + ' level' : '', semLabel(p)].filter(Boolean).join(' &middot; ');
-    return `<a class="pv" data-course="${esc(p.course || '')}" data-t="${esc(String(p.title).toLowerCase())}" href="/p/${p.slug}"><div class="pv-th">${thumb}<span class="pv-badge">${esc(label)}</span>${needsPay ? '<span class="pv-lock">&#128274; Pay</span>' : ''}</div><div class="pv-body"><span class="avatar pv-av">${ini}</span><div class="pv-tx"><h3>${esc(p.title)}</h3><span class="mut">${meta}</span></div></div></a>`;
+    return `<a class="pv" data-course="${esc(p.course || '')}" data-t="${esc(String(p.title).toLowerCase())}" href="/p/${p.slug}"><div class="pv-th">${thumb}<span class="pv-badge">${esc(label)}</span>${needsPay ? '<span class="pv-lock">&#128274; Pay</span>' : ''}</div><div class="pv-body"><span class="avatar pv-av">${ini}</span><div class="pv-tx"><h3>${esc(p.title)}</h3>${require('../lib/names').sub(p, esc)}<span class="mut">${meta}</span></div></div></a>`;
   }
   // Course chips (YouTube style) and a search icon above the library
   function libTools(rows) {
@@ -30,7 +30,7 @@ var s=document.getElementById('libSearch'),sb=document.getElementById('libSearch
   }
   function dashboardBody(req, mode = 'home') {
     const u = req.user, initial = esc((u.name || '?').trim().charAt(0).toUpperCase() || '?'), staff = can.pages(u);
-    const rows = db.prepare('SELECT id,slug,title,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester,university,(SELECT 1 FROM page_thumbs WHERE page_id=pages.id) th,CASE WHEN kind=\'html\' THEN substr(html,1,6000) END snip,(SELECT name FROM courses WHERE id=pages.course_id) course,(SELECT name FROM users WHERE id=pages.author_id) author FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
+    const rows = db.prepare('SELECT id,slug,title,code,members_only,kind,paid,price_kobo,video_id,dept,level,author_id,course_id,semester,university,(SELECT 1 FROM page_thumbs WHERE page_id=pages.id) th,CASE WHEN kind=\'html\' THEN substr(html,1,6000) END snip,(SELECT name FROM courses WHERE id=pages.course_id) course,(SELECT name FROM users WHERE id=pages.author_id) author FROM pages ORDER BY id DESC LIMIT 300').all().filter(p => sortedFor(p, u));
     const want = mode === 'materials' ? (['cbt', 'video'].includes(String(req.query.kind || '')) ? String(req.query.kind) : 'materials') : '';
     const KIND = { video: p => p.kind === 'video', cbt: p => p.kind === 'cbt', materials: p => p.kind !== 'video' && p.kind !== 'cbt' };
     if (mode === 'materials' && KIND[want]) rows.splice(0, rows.length, ...rows.filter(KIND[want]));

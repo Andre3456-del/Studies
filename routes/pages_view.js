@@ -86,22 +86,22 @@ auto();wifi();use();drawSaved();setInterval(function(){drawSaved();drawPick();us
     }
     if (p.kind === 'video' && !p.video_id && p.file_data) {
       // Uploaded from a phone: played right here with the browser's own player (it fetches pieces as needed, so it starts quickly and can be skipped around).
-      return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${offBarHtml(p)}<video controls playsinline preload="metadata" style="width:100%;max-height:78vh;border-radius:12px;background:#000" src="/p/${esc(p.slug)}/raw"></video><p class="mut" style="margin:10px 0 0">If it does not start, <a href="/p/${esc(p.slug)}/raw?dl=1">download it</a> and play it on your phone.</p></div>`, req.user));
+      return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${require('../lib/names').sub(p, esc)}${offBarHtml(p)}<video controls playsinline preload="metadata" style="width:100%;max-height:78vh;border-radius:12px;background:#000" src="/p/${esc(p.slug)}/raw"></video><p class="mut" style="margin:10px 0 0">If it does not start, <a href="/p/${esc(p.slug)}/raw?dl=1">download it</a> and play it on your phone.</p></div>`, req.user));
     }
     if (p.kind === 'video') {
-      return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1><div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
+      return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${require('../lib/names').sub(p, esc)}<div style="position:relative;padding-top:56.25%;border-radius:12px;overflow:hidden"><iframe src="https://www.youtube.com/embed/${esc(p.video_id)}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div></div>`, req.user));
     }
     // pdf: rendered page-by-page onto <canvas> with PDF.js -- the browser's native <embed> PDF viewer does not
     // reliably work on mobile Chrome/Android, which is why this needed replacing rather than just embedding.
     // doc: converted to HTML right in the browser (Mammoth.js). Both fetch through the same authenticated route
     // everything else here uses, so department/level access control still applies either way.
-    if (p.kind === 'image' && p.file_data) return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${relatedBar(p, req.user)}${offBarHtml(p)}<img src="/p/${esc(p.slug)}/raw" alt="${esc(p.title)}" style="width:100%;height:auto;border-radius:12px;display:block"></div>`, req.user));
+    if (p.kind === 'image' && p.file_data) return res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${require('../lib/names').sub(p, esc)}${relatedBar(p, req.user)}${offBarHtml(p)}<img src="/p/${esc(p.slug)}/raw" alt="${esc(p.title)}" style="width:100%;height:auto;border-radius:12px;display:block"></div>`, req.user));
     const embed = p.kind === 'pdf'
       ? pdfViewerHtml(p.slug)
       : `<div id="docViewer" class="doc-viewer"><p class="mut">Loading document&hellip;</p></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script>fetch('/p/${p.slug}/raw').then(function(r){return r.arrayBuffer()}).then(function(buf){return mammoth.convertToHtml({arrayBuffer:buf})}).then(function(result){document.getElementById('docViewer').innerHTML=result.value||'<p class="mut">This document has no readable text to preview.</p>'}).catch(function(){document.getElementById('docViewer').innerHTML='<p class="mut">Could not preview this document here -- try the download link below.</p>'})</script>`;
-    res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${relatedBar(p, req.user)}${offBarHtml(p)}${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
+    res.send(layout(p.title, `<div class="card"><h1 style="margin-top:0">${esc(p.title)}</h1>${require('../lib/names').sub(p, esc)}${relatedBar(p, req.user)}${offBarHtml(p)}${embed}<p style="margin-top:14px"><a class="btn ghost" href="/p/${p.slug}/raw">Download ${p.kind === 'pdf' ? 'PDF' : 'document'}</a></p></div>`, req.user));
   });
 
   app.get('/p/:slug/raw', (req, res) => {

@@ -1,7 +1,7 @@
 // Changing an upload after it is posted (its name, its file, and whether it is paid and for how much),
 // and the owner's page for the standing prices. Only the owner can touch money.
 module.exports = function register(app, ctx) {
-  const { NOT_YOURS, back, can, db, esc, isCentral, layout, ownsAdminPage, pagesAdmin, youtubeId } = ctx;
+  const { NOT_YOURS, applySemester, back, can, db, esc, isCentral, layout, ownsAdminPage, pagesAdmin, youtubeId } = ctx;
   const P = require('../lib/prices')(db);
   const owner = (req, res, next) => (req.user && isCentral(req.user)) ? next() : res.sendStatus(403);
   const find = (req, res) => {
@@ -21,13 +21,14 @@ module.exports = function register(app, ctx) {
       ? `<form method="post" action="/admin/pages/${p.id}/video" class="card"><label class="mut">Change the YouTube link</label><input name="video_url" placeholder="https://youtube.com/watch?v=..."><button>Update link</button></form>`
       : `<form method="post" action="/admin/pages/${p.id}/replace" enctype="multipart/form-data" class="card"><label class="mut">Change the file</label><input type="file" name="file" required><button>Replace file</button></form>`;
     res.send(layout('Edit', `<p class="mut"><a href="/admin?tab=pages">&larr; Admin</a></p><h1 style="font-size:26px">Edit upload</h1>${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
-<form class="card" method="post" action="/admin/pages/${p.id}/edit"><label class="mut">Name</label><input name="title" value="${esc(p.title)}" required maxlength="140">${money}${cbt}<button>Save</button></form>${swap}`, req.user));
+<form class="card" method="post" action="/admin/pages/${p.id}/edit"><label class="mut">Name</label><input name="title" value="${esc(p.title)}" required maxlength="140"><input name="code" value="${esc(p.code || '')}" placeholder="Course code" maxlength="30">${money}${cbt}<button>Save</button></form>${swap}`, req.user));
   });
   app.post('/admin/pages/:id/edit', pagesAdmin, (req, res) => {
     const p = find(req, res); if (!p) return;
     const title = String(req.body.title || '').trim().slice(0, 140);
     if (!title) return res.redirect('/admin/pages/' + p.id + '/edit?msg=' + encodeURIComponent('Give it a name.'));
     db.prepare('UPDATE pages SET title=? WHERE id=?').run(title, p.id);
+    if (req.body.code !== undefined && String(req.body.code).trim() !== String(p.code || '')) applySemester({ id: p.id }, 'auto', req.body.code);
     if (p.kind === 'cbt' && req.body.cbt_once !== undefined) db.prepare('UPDATE pages SET cbt_minutes=?, cbt_once=? WHERE id=?').run(Math.max(0, Math.min(600, Math.round(Number(req.body.cbt_minutes)) || 0)), req.body.cbt_once === '1' ? 1 : 0, p.id);
     if (isCentral(req.user) && (req.body.paid === '0' || req.body.paid === '1')) {
       const ngn = Math.round(Number(req.body.price));

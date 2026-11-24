@@ -70,7 +70,7 @@ ${instList.concat([OTHER_UNI]).map(n => `<option value="${esc(n)}"${u.university
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
-<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
+<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div><input name="code" placeholder="Course code" maxlength="30">
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <details><summary>Departments</summary>${departmentCheckboxes(UP.get(db, req.user).dept)}</details>
 <label class="mut">Level</label><select name="level">${UP.levels(db, req.user, LEVELS, false)}</select>
@@ -79,7 +79,7 @@ ${semesterField(UP.get(db, req.user).semester)}
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
       const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html;
-      return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+      return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${p.code ? esc(p.code) + ' &middot; ' : ''}${esc(p.course_name || '')} &middot; ${label}</span></div>
 ${p.kind === 'cbt' ? `<details style="min-width:120px"><summary class="link">CBT options</summary><div style="display:grid;gap:4px;padding:6px 0"><a href="/admin/pages/${p.id}/results">Results</a><a href="/cbt/${p.id}/settings">Settings</a>${p.cbt_qs ? `<a href="/cbt/${p.id}/questions">Edit questions</a>` : ''}</div></details>` : ''}
 <div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
@@ -105,7 +105,7 @@ ${req.query.msg ? `<p class="mut">${esc(req.query.msg)}</p>` : ''}
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
-<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
+<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div><input name="code" placeholder="Course code" maxlength="30">
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <details><summary>Departments</summary>${departmentCheckboxes(UP.get(db, req.user).dept)}</details>
 <label class="mut">Level</label><select name="level">${UP.levels(db, req.user, LEVELS, false)}</select>
@@ -114,7 +114,7 @@ ${semesterField(UP.get(db, req.user).semester)}
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
       const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html;
-      return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+      return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${p.code ? esc(p.code) + ' &middot; ' : ''}${esc(p.course_name || '')} &middot; ${label}</span></div>
 <div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
     const counts = {};
@@ -135,7 +135,7 @@ ${semesterField(UP.get(db, req.user).semester)}
 <select name="course_id" required><option value="">Which course is this for?</option>${myCourses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
 <select name="kind" id="lkindSelect"><option value="pdf">PDF document</option><option value="doc">Word document</option><option value="html">HTML page</option><option value="video">Video (YouTube link or from your phone)</option><option value="image">Image (JPG or PNG)</option></select>
 <div id="lfileField"><input type="file" name="file" accept=".pdf" required></div>
-<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div>
+<div id="lnameField"><input name="title" placeholder="Name" maxlength="140"></div><input name="code" placeholder="Course code" maxlength="30">
 <div id="lvideoField" style="display:none"><input name="video_url" placeholder="YouTube link"></div>
 <details><summary>Departments</summary>${departmentCheckboxes(UP.get(db, req.user).dept)}</details>
 <label class="mut">Level</label><select name="level">${UP.levels(db, req.user, LEVELS, false)}</select>
@@ -144,7 +144,7 @@ ${semesterField(UP.get(db, req.user).semester)}
 <script>(function(){var k=document.getElementById('lkindSelect'),fi=document.querySelector('#lfileField input');var lv=document.getElementById('lvideoField'),nm=document.getElementById('lnameField');function sync(){var v=k.value==='video',im=k.value==='image';lv.style.display=v?'':'none';nm.querySelector('input').required=im;fi.required=!v;fi.accept=v?'video/*':im?'image/png,image/jpeg,.png,.jpg,.jpeg':k.value==='pdf'?'.pdf':k.value==='doc'?'.doc,.docx':'.html,.htm,text/html'}k.addEventListener('change',sync);sync()})()</script>`;
     const pagesList = myPages.map(p => {
       const [icon, label] = ctx.KIND_META[p.kind] || ctx.KIND_META.html;
-      return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${esc(p.course_name || '')} &middot; ${label}</span></div>
+      return `<div class="card row"><div><a href="/p/${p.slug}">${icon} ${esc(p.title)}</a><br><span class="mut">${p.code ? esc(p.code) + ' &middot; ' : ''}${esc(p.course_name || '')} &middot; ${label}</span></div>
 <div class="row" style="gap:6px"><a href="/lecturer/pages/${p.id}/edit" class="link">Edit</a><form method="post" action="/lecturer/pages/${p.id}/delete" onsubmit="return confirm('Delete this upload?')"><button class="link">Delete</button></form></div></div>`;
     }).join('') || '<p class="mut">Nothing uploaded yet.</p>';
     res.send(layout('Uploaded documents', `<h1>Uploaded documents</h1>
@@ -177,7 +177,7 @@ ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesLi
       db.prepare('INSERT INTO pages(slug,title,html,kind,dept,level,author_id,course_id) VALUES(?,?,?,?,?,?,?,?)')
         .run(slug, title || base, req.file.buffer.toString('utf8'), kind, aud.dept, aud.level, req.user.id, courseId);
     }
-    applySemester({ slug }, req.body.semester);
+    applySemester({ slug }, req.body.semester, req.body.code);
     announceUpload({ title: title || base, slug, paid: 0, ...aud });
     res.redirect('/lecturer/uploads?msg=' + encodeURIComponent(`Published at /p/${slug}`));
   });
@@ -187,7 +187,7 @@ ${uploadForm}<h3>Your uploads (${myPages.length})</h3><div id="upList">${pagesLi
     if (!p) return res.status(404).send(layout('Not found', '<p><a href="/lecturer/uploads">Back</a></p>', req.user));
     res.send(layout('Edit upload', `<p class="mut"><a href="/lecturer/uploads">&larr; Back</a></p><h1 style="font-size:24px">${esc(p.title)}</h1>
 <form class="card" method="post" action="/lecturer/pages/${p.id}/edit" enctype="multipart/form-data">
-<input name="title" value="${esc(p.title)}" required maxlength="140">
+<input name="title" value="${esc(p.title)}" required maxlength="140"><input name="code" value="${esc(p.code || '')}" placeholder="Course code" maxlength="30">
 <label class="mut">Replace the file (optional -- leave blank to keep the current one)</label>
 <input type="file" name="file" accept="${p.kind === 'pdf' ? '.pdf' : p.kind === 'doc' ? '.doc,.docx' : p.kind === 'video' ? 'video/*' : p.kind === 'image' ? 'image/png,image/jpeg' : '.html,.htm'}">
 ${p.kind === 'video' ? '<label class="mut">Or use a YouTube link instead</label><input name="video_url" placeholder="https://youtube.com/watch?v=...">' : ''}
@@ -214,7 +214,7 @@ ${SELL.active(req.user.id) ? `<label class="mut">Price in naira</label><input na
     } else {
       db.prepare('UPDATE pages SET title=?, dept=?, level=? WHERE id=?').run(title, aud.dept, aud.level, p.id);
     }
-    applySemester({ id: p.id }, req.body.semester);
+    applySemester({ id: p.id }, req.body.semester, req.body.code);
     const priceErr = req.body.price === undefined ? '' : SELL.setPrice(p.id, req.user.id, req.body.price);
     res.redirect('/lecturer/uploads?msg=' + encodeURIComponent(priceErr ? 'Saved, but the price was not changed: ' + priceErr : 'Saved.'));
   });

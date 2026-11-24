@@ -20,7 +20,7 @@ module.exports = function register(app, ctx) {
         .run(slug, title || 'Video', '', membersOnly, 'video', paid, P.defKobo('video'), vid, aud.dept, aud.level, req.user.id);
       else db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,file_data,file_mime,file_name,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(slug, title || req.file.originalname.replace(/\.[a-z0-9]+$/i, ''), '', membersOnly, 'video', paid, P.defKobo('video'), req.file.buffer, vmime, req.file.originalname, aud.dept, aud.level, req.user.id);
-      applySemester({ slug }, req.body.semester);
+      applySemester({ slug }, req.body.semester, req.body.code);
       announceUpload({ title: title || 'Video', slug, paid, ...aud });
       return res.redirect(back(`Published at /p/${slug}`));
     }
@@ -35,7 +35,7 @@ module.exports = function register(app, ctx) {
       db.prepare('INSERT INTO pages(slug,title,html,members_only,kind,paid,price_kobo,dept,level,admin_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
         .run(slug, title || base, req.file.buffer.toString('utf8'), membersOnly, kind, paid, P.defKobo(kind), aud.dept, aud.level, req.user.id);
     }
-    applySemester({ slug }, req.body.semester);
+    applySemester({ slug }, req.body.semester, req.body.code);
     announceUpload({ title: title || base, slug, paid, ...aud });
     res.redirect(back(`Published at /p/${slug}`));
   });
