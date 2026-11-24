@@ -61,6 +61,7 @@ module.exports = function register(app, ctx) {
   require('./admin_edit')(app, ctx);
   require('../lib/seller').register(app, ctx); // lecturers selling their own materials
   require('../lib/receipts').register(app, ctx); // payment receipts
+  require('../lib/mail_chain').init(db); // email services take over from each other
   require('../lib/slugs').init(db); // random page addresses
   require('../lib/lecturer_sales').register(app, ctx); // sold materials, clean deletes
   require('../lib/help_desk').register(app, ctx); // manual help desk while AI is off

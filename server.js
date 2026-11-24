@@ -587,30 +587,13 @@ function emailShell(inner, base) {
   return `<div style="background:#eef1f7;padding:28px 12px;${F}"><div style="max-width:560px;margin:0 auto"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:18px;overflow:hidden;color:#1b2430"><tr><td style="height:6px;background:#6d5efc;font-size:0;line-height:0">&nbsp;</td></tr><tr><td style="padding:30px 32px 6px"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:12px"><img src="${base}/logo.png?v=2" width="52" height="52" alt="Studies Hub" style="display:block;border-radius:12px;border:0"></td><td style="${F};font-size:20px;font-weight:700;color:#1b2430">Studies Hub</td></tr></table></td></tr><tr><td style="padding:18px 32px 34px;${F};font-size:16px;line-height:1.75;color:#2a3442">${inner}</td></tr></table><p style="text-align:center;color:#8a94a3;${F};font-size:12px;line-height:1.6;margin:18px 12px 0">You are getting this email because you have a Studies Hub account.<br>Studies Hub &middot; Study smarter, together</p></div></div>`;
 }
 async function deliver(to, subject, text, html) {
-  const from = process.env.MAIL_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
-  if (GOOGLE_ON && process.env.GOOGLE_REFRESH_TOKEN) {
-    await gmailSend(to, subject, text, html);
-  } else if (process.env.RESEND_API_KEY) {
-    const r = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: [to], subject, text, html })
-    });
-    if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
-  } else if (process.env.BREVO_API_KEY) {
-    const m = /^(.*)<(.+)>\s*$/.exec(from || '');
-    const name = m && m[1].trim();
-    const sender = m ? { email: m[2].trim(), ...(name ? { name } : {}) } : { email: from };
-    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sender, to: [{ email: to }], subject, textContent: text, htmlContent: html })
-    });
-    if (!r.ok) throw new Error(`Brevo ${r.status}: ${await r.text()}`);
-  } else if (mailer) {
-    await mailer.sendMail({ from, to, subject, text, html });
-  } else return false;
-  return true;
+  const from = process.env.MAIL_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER, P = [], bad = async (n, r) => { if (!r.ok) throw new Error(`${n} ${r.status}: ${await r.text()}`); };
+  if (GOOGLE_ON && process.env.GOOGLE_REFRESH_TOKEN) P.push(['google', () => gmailSend(to, subject, text, html)]);
+  if (process.env.RESEND_API_KEY) P.push(['resend', async () => bad('Resend', await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to: [to], subject, text, html }) }))]);
+  if (process.env.BREVO_API_KEY) P.push(['brevo', async () => { const m = /^(.*)<(.+)>\s*$/.exec(from || ''), name = m && m[1].trim(), sender = m ? { email: m[2].trim(), ...(name ? { name } : {}) } : { email: from };
+    await bad('Brevo', await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ sender, to: [{ email: to }], subject, textContent: text, htmlContent: html }) })); }]);
+  if (mailer) P.push(['smtp', () => mailer.sendMail({ from, to, subject, text, html })]);
+  return require('./lib/mail_chain').run(P); // first one that works; the next takes over when one is full or down
 }
 
 async function sendVerification(req, user) {
