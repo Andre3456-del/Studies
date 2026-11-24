@@ -2363,7 +2363,7 @@ app.get('/api/username/check', (req, res) => {
 
 // Only on the website (a phone or tablet browser). Never inside the Android app, and not on laptops.
 // ---------- Settings pages (profile, picture, active status, appearance, notifications) (now in routes/settings.js) ----------
-require('./routes/settings')(app, { UNAME_JS, canLecturerAdmin, canPromote, db, esc, inApp, layout, lockedOf, profileFields, readProfile, saveProfile, upload, get canLinkOthers() { return canLinkOthers; }, get deviceOf() { return deviceOf; } });
+require('./routes/settings')(app, { deliver, emailShell, UNAME_JS, canLecturerAdmin, canPromote, db, esc, inApp, layout, lockedOf, profileFields, readProfile, saveProfile, upload, get canLinkOthers() { return canLinkOthers; }, get deviceOf() { return deviceOf; } });
 
 // ---------- Security: app lock (phone app) and change password (now in routes/security.js) ----------
 require('./routes/security')(app, { bcrypt, db, layout, limited, sidKey, weakPw }); require('./routes/account')(app, { bcrypt, db, esc, layout, purgeUser }); require('./routes/notifications')(app, { db, esc, chatBadge, friendIds, canSeeNewsItem, layout }); require('./routes/typing')(app, { db, isGroupMember }); require('./routes/bot_batch')(app, { db, esc, layout, admin, upload, slugify, uniqueSlug });

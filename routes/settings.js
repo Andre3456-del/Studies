@@ -2,6 +2,9 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { UNAME_JS, canLecturerAdmin, canPromote, db, esc, inApp, layout, lockedOf, profileFields, readProfile, saveProfile, upload } = ctx;
+  const PL = require('../lib/profile_lock'); PL.register(app, ctx);
+  const doneOf = u => { const k = lockedOf(u); return k.username && k.university && k.department && k.level; };
+  const tellOld = (u, what) => ctx.deliver(u.email, 'Your Studies Hub details were changed', 'Your ' + what + ' on Studies Hub was just changed. If this was not you, change your password now.', ctx.emailShell('<h2 style="margin:0 0 18px;font-size:24px;color:#1b2430">Your details were changed</h2><p>Your ' + esc(what) + ' was just changed. If this was not you, change your password now.</p>')).catch(() => {});
   require('./chat_theme')(app, ctx);
   const wantsApp = req => !inApp(req) && ctx.deviceOf(req) !== 'laptop';
   const SETTINGS_PAGES = [
@@ -42,26 +45,52 @@ module.exports = function register(app, ctx) {
     const avatarForm = `<div class="card row" style="align-items:center;gap:16px">${avatarPreview}<form method="post" action="/settings/avatar" enctype="multipart/form-data" style="flex:1;min-width:180px"><input type="file" name="file" accept="image/png,image/jpeg,image/webp" required><button class="ghost">Upload picture</button></form></div>`;
     const msg = req.query.msg ? `<p class="${req.query.err ? 'err' : 'mut'}">${esc(req.query.msg)}</p>` : '';
     if (u.is_lecturer) {
+      const open = PL.unlocked(db, u.id);
+      return res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}` + (open
+        ? `<form method="post" action="/settings/profile" class="card"><label class="mut">Your name</label><input name="name" value="${esc(u.name || '')}" required maxlength="80">
+<label class="mut">Staff/registration number</label><input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" maxlength="60">
+<label class="mut">Institution</label><input name="university" value="${esc(u.university || '')}" maxlength="120">
+<p class="mut" style="margin:4px 0">Your name must match the name on your bank account.</p><button>Save</button></form>`
+        : `<div class="card">${PL.rows(esc, [['Name', u.name], ['Staff/registration number', u.lecturer_reg_no], ['Institution', u.university]])}${PL.button}</div>`), req.user));
+    }
+    if (doneOf(u) && !PL.unlocked(db, u.id)) {
+      const lk = [['Name', u.name], ['Username', u.username && '@' + u.username], ['University', u.university], ['Department', u.department], ['Course', u.dept_option], ['Level', u.level && u.level + ' level']];
       return res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
-<form method="post" action="/settings/profile" class="card">
-<input name="name" value="${esc(u.name || '')}" placeholder="Your name" required maxlength="80">
-<input name="reg_no" value="${esc(u.lecturer_reg_no || '')}" placeholder="Staff/registration number" maxlength="60">
-<p class="mut" style="margin:4px 0">Institution: <b>${esc(u.university || '')}</b> (set once, verified -- contact a full admin to change it)</p>
-<button>Save</button></form>`, req.user));
+<div class="card">${PL.rows(esc, lk)}${PL.button}</div>
+<form method="post" action="/settings/profile" class="card"><label class="mut">Position held in school (optional)</label><input name="position" value="${esc(u.position || '')}" maxlength="60" placeholder="e.g. Director of Socials"><p class="mut" style="margin:6px 0">${u.position_status === 'pending' ? 'Waiting for verification.' : u.position_status === 'approved' ? '&#10003; Verified' : ''}</p><button>Save</button></form>`, req.user));
     }
     const posNote = u.position_status === 'pending' ? '<p class="pill pending">Position waiting for verification</p>' : u.position_status === 'approved' ? '<p class="pill">&#10003; Position verified</p>' : u.position_status === 'rejected' ? '<p class="err">Your position could not be verified.</p>' : '';
     res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
-<form method="post" action="/settings/profile" class="card">${profileFields(u, u.role === 'user', lockedOf(u))}${posNote}<button>Save</button></form>
+<form method="post" action="/settings/profile" class="card">${profileFields(u, u.role === 'user', doneOf(u) ? { edit: true } : lockedOf(u))}${posNote}<button>Save</button></form>
 <script>${UNAME_JS}</script>`, req.user));
   });
   app.post('/settings/profile', (req, res) => {
     if (!req.user) return res.sendStatus(401);
     const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+    const open = PL.unlocked(db, u.id), need = m => res.redirect('/settings/profile?err=1&msg=' + encodeURIComponent(m));
     if (u.is_lecturer) {
+      if (!open) return need('Verify with a code first to change your details.');
       const name = String(req.body.name || '').trim().slice(0, 80);
       const regNo = String(req.body.reg_no || '').trim().slice(0, 60) || null;
-      if (!name) return res.redirect('/settings/profile?err=1&msg=' + encodeURIComponent('Enter your name.'));
-      db.prepare('UPDATE users SET name=?, lecturer_reg_no=? WHERE id=?').run(name, regNo, u.id);
+      const uni = String(req.body.university || '').trim().slice(0, 120) || u.university;
+      if (!name) return need('Enter your name.');
+      db.prepare('UPDATE users SET name=?, lecturer_reg_no=?, university=? WHERE id=?').run(name, regNo, uni, u.id);
+      PL.relock(db, u.id);
+      if (name !== u.name || regNo !== u.lecturer_reg_no || uni !== u.university) tellOld(u, 'name or registration details');
+      let note = 'Saved.';
+      try { const a = db.prepare('SELECT account_name FROM seller_accounts WHERE user_id=?').get(u.id); if (a && a.account_name && !require('../lib/seller').namesMatch(a.account_name, name)) note = 'Saved. Your bank account name no longer matches your name, so add an account in your name on the Sell page.'; } catch {}
+      return res.redirect('/settings/profile?msg=' + encodeURIComponent(note));
+    }
+    if (doneOf(u) && !open) req.body.name = u.name;
+    if (doneOf(u) && open) {
+      const { d, problem } = readProfile({ ...u, username: null, university: null, department: null, level: null, dept_option: null }, req.body);
+      if (problem) return need(problem);
+      try { db.prepare('UPDATE users SET name=?, username=?, university=?, department=?, level=?, dept_option=? WHERE id=?').run(d.name, d.username, d.university, d.department, d.level, d.dept_option || null, u.id); }
+      catch { return need('That username is already taken.'); }
+      const err = saveProfile(db.prepare('SELECT * FROM users WHERE id=?').get(u.id), d);
+      PL.relock(db, u.id);
+      if (err) return need(err);
+      tellOld(u, 'name or school details');
       return res.redirect('/settings/profile?msg=' + encodeURIComponent('Saved.'));
     }
     const { d, problem } = readProfile(u, req.body);

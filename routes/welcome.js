@@ -27,12 +27,12 @@ D.addEventListener('change',function(){lv();ov()});
 })()</script>`;
     return `<label class="mut">Your name</label><input name="name" value="${esc(v.name || '')}" maxlength="80" required>
 ${lk.username ? lockedRow('Username', '@' + v.username) : `<label class="mut">Username</label><input name="username" id="unameInput" value="${esc(v.username || '')}" maxlength="21" placeholder="@yourname" autocapitalize="none" autocomplete="off" required>
-<p class="hint" id="unameHint">3 to 20 characters: letters, numbers, dots or underscores. Nobody else can have the same one, and friends will find you with it. <b>You cannot change it later.</b></p>`}
+<p class="hint" id="unameHint">3 to 20 characters: letters, numbers, dots or underscores. Nobody else can have the same one, and friends will find you with it. ${lk.edit ? '' : '<b>You cannot change it later.</b>'}</p>`}
 ${lk.department ? lockedRow('Faculty', curFac || '-') + lockedRow('Department / course of study', v.department) : `<label class="mut">Faculty</label><select name="faculty" id="facSel"${student ? ' required' : ''}>${facOpts}</select>
 <label class="mut">Department / course of study</label><select name="department" id="deptSel"${student ? ' required' : ''}>${depOpts}</select>`}
 ${optRow}
 ${lk.level ? lockedRow('Level', v.level + ' level' + (v.graduated ? ' - Graduate' : '')) : `<label class="mut">Level</label><select name="level" id="lvlSel"${student ? ' required' : ''}>${levelOptions(v.level, v.department ? 'Choose your level...' : 'Choose your department first...', v.department)}</select>`}
-<p class="hint">${lockedBlock ? 'These are fixed once you have signed up. Your level moves up only when the school admin promotes students; if something is wrong, ask an admin.' : 'Your department and level decide which uploads you see. <b>You cannot change them later</b>, so choose carefully.'}</p>
+<p class="hint">${lk.edit ? 'Changing these changes which uploads you see.' : lockedBlock ? 'These are fixed once you have signed up. Your level moves up only when the school admin promotes students; if something is wrong, ask an admin.' : 'Your department and level decide which uploads you see. <b>You cannot change them later</b>, so choose carefully.'}</p>
 ${lk.university ? lockedRow('University', v.university) : `<label class="mut">University</label><input name="university" value="${esc(v.university || 'University of Uyo')}" maxlength="120"${student ? ' required' : ''}>`}
 <label class="mut">Position held in school (optional)</label><input name="position" value="${esc(v.position || '')}" maxlength="60" placeholder="e.g. Director of Socials">
 <p class="hint">If you add one, school authorities check it first. Once verified it shows beside your name.</p>${lk.department && lk.option ? '' : script}`;
