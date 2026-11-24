@@ -2,7 +2,7 @@
 // Moved out of server.js unchanged. Everything it needs from the rest of the site is handed in below.
 module.exports = function register(app, ctx) {
   const { UNAME_JS, canLecturerAdmin, canPromote, db, esc, inApp, layout, lockedOf, profileFields, readProfile, saveProfile, upload } = ctx;
-  const PL = require('../lib/profile_lock'); PL.register(app, ctx);
+  const PL = require('../lib/profile_lock'); PL.register(app, ctx); const PH = require('../lib/position_handover'); PH.register(app, ctx);
   const doneOf = u => { const k = lockedOf(u); return k.username && k.university && k.department && k.level; };
   const tellOld = (u, what) => ctx.deliver(u.email, 'Your Studies Hub details were changed', 'Your ' + what + ' on Studies Hub was just changed. If this was not you, change your password now.', ctx.emailShell('<h2 style="margin:0 0 18px;font-size:24px;color:#1b2430">Your details were changed</h2><p>Your ' + esc(what) + ' was just changed. If this was not you, change your password now.</p>')).catch(() => {});
   require('./chat_theme')(app, ctx);
@@ -57,7 +57,7 @@ module.exports = function register(app, ctx) {
       const lk = [['Name', u.name], ['Username', u.username && '@' + u.username], ['University', u.university], ['Department', u.department], ['Course', u.dept_option], ['Level', u.level && u.level + ' level']];
       return res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
 <div class="card">${PL.rows(esc, lk)}${PL.button}</div>
-<form method="post" action="/settings/profile" class="card"><label class="mut">Position held in school (optional)</label><input name="position" value="${esc(u.position || '')}" maxlength="60" placeholder="e.g. Director of Socials"><p class="mut" style="margin:6px 0">${u.position_status === 'pending' ? 'Waiting for verification.' : u.position_status === 'approved' ? '&#10003; Verified' : ''}</p><button>Save</button></form>`, req.user));
+<form method="post" action="/settings/profile" class="card"><label class="mut">Position held in school (optional)</label><input name="position" value="${esc(u.position || '')}" maxlength="60" placeholder="e.g. Director of Socials"><p class="mut" style="margin:6px 0">${u.position_status === 'pending' ? 'Waiting for verification.' : u.position_status === 'approved' ? '&#10003; Verified' : ''}</p><button>Save</button></form>${PH.card(u, esc)}`, req.user));
     }
     const posNote = u.position_status === 'pending' ? '<p class="pill pending">Position waiting for verification</p>' : u.position_status === 'approved' ? '<p class="pill">&#10003; Position verified</p>' : u.position_status === 'rejected' ? '<p class="err">Your position could not be verified.</p>' : '';
     res.send(layout('Profile', `<p class="mut"><a href="/settings">&larr; Settings</a></p><h1>Profile</h1>${msg}${avatarForm}
