@@ -63,7 +63,7 @@ i.addEventListener('input',function(){clearTimeout(t);var v=i.value;t=setTimeout
     return { d, problem };
   }
   // Saves the profile. A position needs school authorities' approval (a full admin approves their own); until then no title shows.
-  const normPos = v => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const normPos = v => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\b(representatives?|reps)\b/g, 'rep').replace(/^the /, '').replace(/\s+/g, ' ').trim(); // "Class Representative", "class-rep" and "Class Reps" all count as the same position
   // No two people may hold the same position in the same department and level (a department-wide or school-wide one also blocks
   // the same name anywhere in that department or university). The same name in another department or level is fine.
   function positionTaken(university, position, exceptId, department, level, scope) {
