@@ -933,7 +933,7 @@ const profileComplete = u => u.role === 'uniadmin' ? !!u.username && !!u.name : 
 let adminTab = '';
 const TAB_OF = p => /^\/admin\/(payments|sponsors)/.test(p) ? 'payments' : /^\/admin\/(upload|pages)/.test(p) ? 'pages' : /^\/admin\/lecturers/.test(p) ? 'lecturers' : /^\/(admin\/positions|positions|admin\/departments)/.test(p) ? 'positions' : /^\/admin\/news/.test(p) ? 'news' : /^\/admin\/users/.test(p) ? 'users' : '';
 app.use((req, res, next) => { adminTab = TAB_OF(req.path); next(); });
-const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/about', '/how-it-works', '/lecturers', '/contact', '/guides', '/sitemap.xml', '/robots.txt', '/pay/return', '/health', '/sw.js', '/offline.html', '/app', '/app/version', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
+const GATE_OPEN = ['/welcome', '/lecturer/welcome', '/logout', '/privacy', '/terms', '/about', '/how-it-works', '/lecturers', '/contact', '/guides', '/sitemap.xml', '/robots.txt', '/BingSiteAuth.xml', '/pay/return', '/health', '/sw.js', '/offline.html', '/app', '/app/version', '/StudiesHub.apk', '/.well-known/assetlinks.json', '/manifest.webmanifest', '/logo.png', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 app.use((req, res, next) => {
   if (req.user && req.method === 'GET' && !profileComplete(req.user) && !GATE_OPEN.includes(req.path) && !req.path.startsWith('/api/') && !req.path.startsWith('/avatar/')) return res.redirect(req.user.is_lecturer ? '/lecturer/welcome' : '/welcome');
   next();
