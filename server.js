@@ -1507,7 +1507,7 @@ body.msg-selecting .chat-head{display:none}
 .rp-thumb.st{object-fit:contain;padding:4px}
 .sticker-msg .reply-preview{align-self:stretch;background:var(--panel);border:1px solid var(--line);border-left:4px solid #a78bfa}
 .reply-bar{margin-top:8px;border-radius:10px;overflow:hidden;background:var(--panel);border:1px solid var(--line);border-left:4px solid #a78bfa;align-items:center;gap:8px}
-.reply-bar:not([hidden]){display:flex}
+.reply-bar:not([hidden]){display:flex;position:fixed;left:8px;right:8px;bottom:var(--cbh,64px);max-width:984px;margin:0 auto;z-index:6;box-shadow:0 -2px 10px rgba(0,0,0,.18)}body.replying .thread{padding-bottom:150px}.reply-preview[data-reply-to]{cursor:pointer}.bubble.flash{animation:flashbg 1.6s ease-out}@keyframes flashbg{0%,40%{box-shadow:0 0 0 3px #a78bfa,0 0 24px #a78bfa88}100%{box-shadow:none}}
 .reply-bar button{margin:0 8px 0 0}
 .bubble time{display:block;text-align:right;font-size:11px;opacity:.65;margin-top:3px}
 .chat-bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--line);max-width:1000px;margin:0 auto}
@@ -1692,7 +1692,7 @@ body.has-tabbar .ai-box{bottom:calc(132px + env(safe-area-inset-bottom,0px));mar
  .dash-top{gap:20px}
  .hero{padding:64px 0 36px}.hero h1{font-size:clamp(40px,4.4vw,60px)}.lead{max-width:680px;font-size:20px}
  .auth{max-width:460px;margin:48px auto}
- .chat-bar,.chat-panel{left:var(--side);right:0;max-width:1100px}
+ .chat-bar,.chat-panel{left:var(--side);right:0;max-width:1100px}.reply-bar:not([hidden]){left:calc(var(--side) + 8px);right:8px;max-width:1084px}
  .ai-fab{right:28px;bottom:24px}.ai-box{right:28px}
  .to-btm{right:28px}
  .sheet{left:var(--side)}
