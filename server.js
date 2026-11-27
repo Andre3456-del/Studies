@@ -87,7 +87,7 @@ for (const [c, def] of [['kind', "TEXT NOT NULL DEFAULT 'text'"], ['media_enc', 
 db.exec('CREATE TABLE IF NOT EXISTS stickers(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)');
 db.exec('CREATE INDEX IF NOT EXISTS stickers_user ON stickers(user_id)');
 const purchaseCols = db.prepare('PRAGMA table_info(purchases)').all().map(c => c.name);
-for (const [c, def] of [['status', "TEXT NOT NULL DEFAULT 'pending'"]])
+for (const [c, def] of [['status', "TEXT NOT NULL DEFAULT 'pending'"], ['needs_code', 'INTEGER NOT NULL DEFAULT 0']])
   if (!purchaseCols.includes(c)) db.exec(`ALTER TABLE purchases ADD COLUMN ${c} ${def}`);
 db.exec("CREATE TABLE IF NOT EXISTS news(id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, image_url TEXT, author_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP)");
 const newsCols = db.prepare('PRAGMA table_info(news)').all().map(c => c.name);

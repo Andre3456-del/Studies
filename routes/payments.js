@@ -32,6 +32,7 @@ module.exports = function register(app, ctx) {
   // to the site, Flutterwave's own message to /flw/webhook, and a background check of anything still waiting. Every one of them asks
   // Flutterwave directly whether the money really arrived and for how much, so a forged request cannot unlock anything.
   db.exec(`CREATE TABLE IF NOT EXISTS flw_payments(tx_ref TEXT PRIMARY KEY, user_id INTEGER NOT NULL, kind TEXT NOT NULL, item_id INTEGER NOT NULL, amount_kobo INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', transaction_id TEXT, created_at INTEGER NOT NULL)`);
+  const PC = require('../lib/pay_codes'); PC.init(db);
   const FLW_HASH = process.env.FLUTTERWAVE_SECRET_HASH || '';
   const FLW_WINDOW = 15 * 60 * 1000; // each payment attempt lasts 15 minutes; after that, if Flutterwave has not confirmed it, it is cleared
   // A real payment that arrives after its record was cleared (a slow bank, say) must still unlock what was paid for.
@@ -87,8 +88,8 @@ module.exports = function register(app, ctx) {
         const pg = db.prepare('SELECT id,title,slug FROM pages WHERE id=?').get(row.item_id);
         if (!pg) return { ok: false, row };
         const had = db.prepare('SELECT id,status FROM purchases WHERE user_id=? AND page_id=?').get(row.user_id, pg.id);
-        if (had) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=? WHERE id=?").run(tid, Math.round(Number(data.amount) * 100), had.id);
-        else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status) VALUES(?,?,?,?,'approved')").run(row.user_id, pg.id, tid, Math.round(Number(data.amount) * 100));
+        if (had) db.prepare("UPDATE purchases SET status='approved', reference=?, amount=?, needs_code=CASE WHEN status='approved' THEN needs_code ELSE 1 END WHERE id=?").run(tid, Math.round(Number(data.amount) * 100), had.id);
+        else db.prepare("INSERT INTO purchases(user_id,page_id,reference,amount,status,needs_code) VALUES(?,?,?,?,'approved',1)").run(row.user_id, pg.id, tid, Math.round(Number(data.amount) * 100));
         S.logVerified(row.tx_ref, data);
         S.onPaid(pg.id, row.tx_ref, row.user_id, Math.round(Number(data.amount) * 100), notify, data);
         if (!had || had.status !== 'approved') notify([row.user_id], { title: 'Payment confirmed', body: `${pg.title} is now unlocked for you`, url: '/p/' + pg.slug, tag: 'payment' });
@@ -115,7 +116,7 @@ module.exports = function register(app, ctx) {
       });
       const j = await r.json();
       if (j && j.status === 'success' && j.data && j.data.link) {
-        db.prepare('INSERT INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, payer.id, o.kind, o.item, o.kobo, Date.now());
+        db.prepare('INSERT INTO flw_payments(tx_ref,user_id,kind,item_id,amount_kobo,created_at) VALUES(?,?,?,?,?,?)').run(txRef, payer.id, o.kind, o.item, o.kobo, Date.now()); PC.assign(db, txRef);
         notify(ownerIds(), { title: 'Payment started via Flutterwave', body: `${payer.name} is paying ₦${(o.kobo / 100).toLocaleString()} for ${o.desc}`, url: '/admin?tab=payments', tag: 'flw' });
         if (o.split) { const pg = db.prepare('SELECT id,author_id FROM pages WHERE id=?').get(o.item); if (pg) S.logSent(txRef, pg, o.split, o.kobo, { amount: o.kobo / 100, subaccounts: [{ id: o.split.id, transaction_charge_type: 'flat_subaccount', transaction_charge: o.split.lecturerKobo / 100 }] }); }
         return res.redirect(j.data.link);
@@ -129,11 +130,12 @@ module.exports = function register(app, ctx) {
     const page = db.prepare('SELECT * FROM pages WHERE slug=?').get(String(req.body.slug || ''));
     if (!page || !page.paid || !sortedFor(page, req.user)) return res.redirect('/');
     if (hasPurchased(req.user.id, page.id)) return res.redirect('/p/' + page.slug);
+    if (db.prepare("SELECT 1 FROM purchases WHERE user_id=? AND page_id=? AND status='approved' AND needs_code=1").get(req.user.id, page.id)) return res.redirect('/p/' + page.slug); // already paid: it only needs its code
     if (page.author_id && !require('../lib/lecturer_sales').saveBuyer(db, req.user, page, req.body.reg_no)) return res.redirect('/p/' + page.slug);
     await flwCheckout(req, res, { kind: 'cbt', item: page.id, kobo: S.total(page, P.defKobo(page.kind)), split: S.split(page, P.defKobo(page.kind)), desc: page.title, back: '/p/' + page.slug });
   });
   // Where Flutterwave sends the person back to after paying (or cancelling): a short page that asks Flutterwave, shows a tick or a cross, then goes on.
-  const flwPage = (req, inner) => layout('Payment', `<div style="max-width:460px;margin:50px auto;padding:0 16px;text-align:center"><div class="card" style="padding:30px 22px">${inner}</div></div>`, req.user);
+  const flwPage = (req, inner) => layout('Payment', `<div style="max-width:460px;margin:50px auto;padding:0 16px;text-align:center"><div class="card" style="padding:30px 22px">${inner}<p class="mut" style="margin:16px 0 0;font-size:13px"><a href="/pay/code">Verify with a payment code</a></p></div></div>`, req.user);
   app.get('/pay/return', (req, res) => {
     const txRef = String(req.query.tx_ref || ''); let row = db.prepare('SELECT * FROM flw_payments WHERE tx_ref=?').get(txRef);
     if (!row) { // cleared after its 15 minutes: build the address from the reference; a payment Flutterwave confirms still unlocks
@@ -146,9 +148,9 @@ module.exports = function register(app, ctx) {
       db.prepare("UPDATE flw_payments SET status='cancelled' WHERE tx_ref=? AND status='pending'").run(txRef);
       return res.send(flwPage(req, `<div style="font-size:54px;color:#ef4444;line-height:1">&#10007;</div><h2 style="margin:12px 0 6px">Verification failed</h2><p class="mut" style="margin:0 0 18px">The payment was not completed.</p><a class="btn" href="${esc(url)}">Back</a>`));
     }
-    res.send(flwPage(req, `<div id="fS"><div style="width:44px;height:44px;margin:0 auto 14px;border:4px solid rgba(255,255,255,.2);border-top-color:#5bc8ff;border-radius:50%;animation:fsp 1s linear infinite"></div><style>@keyframes fsp{to{transform:rotate(360deg)}}</style><h2 style="margin:0 0 6px">Verifying your payment</h2><p class="mut" style="margin:0">Checking with Flutterwave&hellip;</p></div>
-<script>(function(){var n=0,box=document.getElementById('fS'),u=${jsForScript(url)},q=${jsForScript('tx_ref=' + encodeURIComponent(txRef) + '&transaction_id=' + encodeURIComponent(String(req.query.transaction_id || '')))};
-function ok(){box.innerHTML='<div style="font-size:54px;color:#22c55e;line-height:1">&#10003;</div><h2 style="margin:12px 0 6px">Verification successful</h2><p class="mut" style="margin:0 0 18px">Your payment has been confirmed.</p><a class="btn" href="'+u+'?paid=ok">Continue</a>';setTimeout(function(){location.replace(u+'?paid=ok')},2500)}
+    res.send(flwPage(req, PC.line(db.prepare('SELECT code FROM flw_payments WHERE tx_ref=?').get(txRef), esc) + `<div id="fS"><div style="width:44px;height:44px;margin:0 auto 14px;border:4px solid rgba(255,255,255,.2);border-top-color:#5bc8ff;border-radius:50%;animation:fsp 1s linear infinite"></div><style>@keyframes fsp{to{transform:rotate(360deg)}}</style><h2 style="margin:0 0 6px">Verifying your payment</h2><p class="mut" style="margin:0">Checking with Flutterwave&hellip;</p></div>
+<script>(function(){var n=0,box=document.getElementById('fS'),au=${row.kind === 'sponsor'},u=${jsForScript(url)},q=${jsForScript('tx_ref=' + encodeURIComponent(txRef) + '&transaction_id=' + encodeURIComponent(String(req.query.transaction_id || '')))};
+function ok(){box.innerHTML='<div style="font-size:54px;color:#22c55e;line-height:1">&#10003;</div><h2 style="margin:12px 0 6px">Verification successful</h2><p class="mut" style="margin:0 0 18px">Your payment has been confirmed.</p><a class="btn" href="'+u+'?paid=ok">'+(au?'Continue':'Enter my code')+'</a>';if(au)setTimeout(function(){location.replace(u+'?paid=ok')},2500)}
 function bad(){box.innerHTML='<div style="font-size:54px;color:#ef4444;line-height:1">&#10007;</div><h2 style="margin:12px 0 6px">Verification failed</h2><p class="mut" style="margin:0 0 18px">Flutterwave has not confirmed this payment. If money left your account, it will be confirmed by itself within a few minutes.</p><a class="btn" href="'+u+'?paid=1">Back</a>'}
 function go(){n++;fetch('/pay/check?'+q,{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){if(j&&j.ok)ok();else if(n<6)setTimeout(go,2500);else bad()}).catch(function(){if(n<6)setTimeout(go,2500);else bad()})}
 go()})()</script>`));
@@ -240,5 +242,6 @@ go()})()</script>`));
     if (s) notify([s.user_id], { title: 'Sponsor post not approved', body: `"${s.title}" could not be approved.`, url: '/sponsor/' + req.params.id, tag: 'sponsor' });
     res.redirect(ctx.back('Sponsor post rejected.'));
   });
+  PC.register(app, { db, esc, layout, flwSettle, flwItemUrl, FLW_WINDOW });
   return { FLW_WINDOW, flwCheckout, flwSettle };
 };
