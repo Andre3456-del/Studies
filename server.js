@@ -1790,7 +1790,7 @@ function deviceCss(css) {
   return out + '\n/* phones keep the phone view at any width */\n' + forced
     + '\n';
 }
-const CSS_FINAL = deviceCss(CSS) + require('./lib/ui_theme').css;
+const CSS_FINAL = require('./lib/ui_theme').withAuto(deviceCss(CSS) + require('./lib/ui_theme').css);
 
 
 const canLecturerAdmin = u => !!u && (isCentral(u) || (!!u.lp_inst && u.uni_role !== 'full'));
@@ -1997,7 +1997,7 @@ function show(el){hide();tip=document.createElement('div');tip.className='tabtip
 document.getElementById('tabMenu').onclick=function(){var o=document.getElementById('drawerOpen');if(o)o.click()}})()</script>` : '';
   const themeAttr = user && user.theme === 'light' ? ' data-theme="light"' : user && user.theme === 'dark' ? '' : ' data-auto="1"'; // dark only when chosen; otherwise follow the device
   const descriptionMeta = opts.description ? `<meta name="description" content="${esc(opts.description)}">` : '';
-  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>if(/StudiesHubApp/.test(navigator.userAgent))document.documentElement.setAttribute("data-inapp","1");try{var d0=document.documentElement;if(d0.hasAttribute("data-auto")&&!d0.hasAttribute("data-theme")){d0.setAttribute("data-theme",matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}}catch(e){}try{var tv0=localStorage.getItem("sh_tv");addEventListener("pageshow",function(e){try{if(e.persisted&&localStorage.getItem("sh_tv")!==tv0)location.reload()}catch(x){}});addEventListener("storage",function(e){if(e.key==="sh_tv")location.reload()})}catch(e){}</script><style>[data-inapp] a[href="/app"]{display:none!important}html:not([data-inapp]) a[href="/saved"]{display:none!important}</style><script>(function(){var d=document.documentElement,ua=navigator.userAgent||"",ud=navigator.userAgentData,tp=navigator.maxTouchPoints||0,sm=Math.min(screen.width,screen.height),os="Unknown",dev;
+  return `<!doctype html><html lang="en"${themeAttr}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>if(/StudiesHubApp/.test(navigator.userAgent))document.documentElement.setAttribute("data-inapp","1");try{var tv0=localStorage.getItem("sh_tv");addEventListener("pageshow",function(e){try{if(e.persisted&&localStorage.getItem("sh_tv")!==tv0)location.reload()}catch(x){}});addEventListener("storage",function(e){if(e.key==="sh_tv")location.reload()})}catch(e){}</script><style>[data-inapp] a[href="/app"]{display:none!important}html:not([data-inapp]) a[href="/saved"]{display:none!important}</style><script>(function(){var d=document.documentElement,ua=navigator.userAgent||"",ud=navigator.userAgentData,tp=navigator.maxTouchPoints||0,sm=Math.min(screen.width,screen.height),os="Unknown",dev;
 if(/iPhone|iPod/.test(ua))os="iOS";else if(/iPad/.test(ua)||(/Macintosh/.test(ua)&&tp>1))os="iPadOS";else if(/Android/.test(ua)||(ud&&ud.platform==="Android"))os="Android";else if(/CrOS/.test(ua))os="ChromeOS";else if(/Windows/.test(ua))os="Windows";else if(/Mac OS X|Macintosh/.test(ua))os="macOS";else if(/Linux|X11/.test(ua))os="Linux";
 var mob=/Mobi|iPhone|iPod/.test(ua)||(ud&&ud.mobile===true);
 if(os==="iOS")dev="phone";else if(os==="iPadOS")dev="tablet";else if(os==="Android")dev=(mob||sm<600)?"phone":"tablet";else if(tp>0&&sm<600)dev="phone";else if(tp>0&&sm<1100&&os==="Linux")dev="tablet";else dev="laptop";
